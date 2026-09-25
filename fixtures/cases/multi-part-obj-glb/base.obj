@@ -1,0 +1,44 @@
+# polymerge fixture: multi-part-obj-glb (base)
+v 1 -1 0
+v 1 1 0
+v 1 1 1
+v 1 -1 1
+v -1 -1 0
+v -1 1 1
+v -1 1 0
+v -1 -1 1
+v -0.5 -0.5 1.5
+v 0 -0.5 1.5
+v 0 0 1.5
+v -0.5 0 1.5
+v 0.5 -0.5 1.5
+v 0.5 0 1.5
+v 0 0.5 1.5
+v -0.5 0.5 1.5
+v 0.5 0.5 1.5
+o body
+usemtl red
+f 1 2 3
+f 1 3 4
+f 5 6 7
+f 5 8 6
+f 7 6 3
+f 7 3 2
+usemtl blue
+f 5 4 8
+f 5 1 4
+f 8 4 3
+f 8 3 6
+f 5 2 1
+f 5 7 2
+o lid
+g lid_top
+usemtl red
+f 9 10 11
+f 9 11 12
+f 10 13 14
+f 10 14 11
+f 12 11 15
+f 12 15 16
+f 11 14 17
+f 11 17 15

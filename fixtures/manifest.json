@@ -1,0 +1,389 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "id": "identical-cube",
+      "title": "Identical unit cube (binary STL ↔ binary STL)",
+      "description": "The same unit cube [0,1]³ (8 corners, 6 faces × 2 triangles) written twice as binary STL with the same triangle order; only the 80-byte header text differs. Welding (exact float32, first-appearance order) gives 8 vertices / 12 faces on both sides with identical indices, so the index correspondence is the identity and every vertex and face is Unchanged. Expected: Tier 1.",
+      "base": "cases/identical-cube/base.stl",
+      "target": "cases/identical-cube/target.stl",
+      "expect": {
+        "acceptableTiers": [1],
+        "vertices": { "unchanged": 8, "moved": 0, "added": 0, "removed": 0 },
+        "faces": { "unchanged": 12, "modified": 0, "added": 0, "removed": 0 },
+        "baseMesh": { "vertexCount": 8, "faceCount": 12 },
+        "targetMesh": { "vertexCount": 8, "faceCount": 12 },
+        "mustMatch": [[0, 0], [1, 1], [2, 2], [3, 3], [4, 4], [5, 5], [6, 6], [7, 7]]
+      }
+    },
+    {
+      "id": "cube-moved-corner",
+      "title": "Unit cube with one corner raised (ASCII STL ↔ binary STL)",
+      "description": "Base: unit cube [0,1]³ as ASCII STL. Target: the same triangles in the same order as binary STL, with corner (1,0,1) moved +0.5 in z to (1,0,1.5). Same face order ⇒ same welded indices (the moved position coincides with no other vertex), so Tier 1 matches by index: 7 vertices Unchanged, 1 Moved (displacement 0.5). Each cube side is a quad split along its c00–c11 diagonal; the corner is c01 of the +x quad (1 triangle), c11 of the −y quad (both triangles) and c10 of the +z quad (1 triangle), so exactly 4 triangles are Modified and the other 8 are Unchanged. mustMatch is the identity on all 8 vertices.",
+      "base": "cases/cube-moved-corner/base.stl",
+      "target": "cases/cube-moved-corner/target.stl",
+      "expect": {
+        "acceptableTiers": [1],
+        "vertices": { "unchanged": 7, "moved": 1, "added": 0, "removed": 0 },
+        "faces": { "unchanged": 8, "modified": 4, "added": 0, "removed": 0 },
+        "baseMesh": { "vertexCount": 8, "faceCount": 12 },
+        "targetMesh": { "vertexCount": 8, "faceCount": 12 },
+        "mustMatch": [[0, 0], [1, 1], [2, 2], [3, 3], [4, 4], [5, 5], [6, 6], [7, 7]]
+      }
+    },
+    {
+      "id": "grid-bump",
+      "title": "10×10 grid with a raised 3×3 block (OBJ ↔ OBJ)",
+      "description": "A flat 10×10-quad grid (spacing 1, 121 vertices, 200 triangles; every quad split along its (i,j)–(i+1,j+1) diagonal), written as OBJ with identical face order on both sides. In the target the interior 3×3 block of vertices i,j ∈ {4,5,6} is raised by +0.5 z. Same face order ⇒ same welded indices ⇒ Tier 1: 9 Moved, 112 Unchanged. Modified faces = triangles touching the block: the 16 quads with i,j ∈ 3..6 give 12 quads with ≥ 2 raised corners (both triangles, 24), the corner quads (3,3) and (6,6) whose raised corner lies on the split diagonal (2 each) and (6,3), (3,6) whose raised corner does not (1 each): 30 Modified, 170 Unchanged.",
+      "base": "cases/grid-bump/base.obj",
+      "target": "cases/grid-bump/target.obj",
+      "expect": {
+        "acceptableTiers": [1],
+        "vertices": { "unchanged": 112, "moved": 9, "added": 0, "removed": 0 },
+        "faces": { "unchanged": 170, "modified": 30, "added": 0, "removed": 0 },
+        "baseMesh": { "vertexCount": 121, "faceCount": 200 },
+        "targetMesh": { "vertexCount": 121, "faceCount": 200 },
+        "mustMatch": [
+          [0, 0], [1, 1], [2, 2], [3, 3], [4, 4], [5, 5], [6, 6], [7, 7], [8, 8], [9, 9], [10, 10],
+          [11, 11], [12, 12], [13, 13], [14, 14], [15, 15], [16, 16], [17, 17], [18, 18], [19, 19],
+          [20, 20], [21, 21], [22, 22], [23, 23], [24, 24], [25, 25], [26, 26], [27, 27], [28, 28],
+          [29, 29], [30, 30], [31, 31], [32, 32], [33, 33], [34, 34], [35, 35], [36, 36], [37, 37],
+          [38, 38], [39, 39], [40, 40], [41, 41], [42, 42], [43, 43], [44, 44], [45, 45], [46, 46],
+          [47, 47], [48, 48], [49, 49], [50, 50], [51, 51], [52, 52], [53, 53], [54, 54], [55, 55],
+          [56, 56], [57, 57], [58, 58], [59, 59], [60, 60], [61, 61], [62, 62], [63, 63], [64, 64],
+          [65, 65], [66, 66], [67, 67], [68, 68], [69, 69], [70, 70], [71, 71], [72, 72], [73, 73],
+          [74, 74], [75, 75], [76, 76], [77, 77], [78, 78], [79, 79], [80, 80], [81, 81], [82, 82],
+          [83, 83], [84, 84], [85, 85], [86, 86], [87, 87], [88, 88], [89, 89], [90, 90], [91, 91],
+          [92, 92], [93, 93], [94, 94], [95, 95], [96, 96], [97, 97], [98, 98], [99, 99], [100, 100],
+          [101, 101], [102, 102], [103, 103], [104, 104], [105, 105], [106, 106], [107, 107],
+          [108, 108], [109, 109], [110, 110], [111, 111], [112, 112], [113, 113], [114, 114],
+          [115, 115], [116, 116], [117, 117], [118, 118], [119, 119], [120, 120]
+        ]
+      }
+    },
+    {
+      "id": "cross-format-identical",
+      "title": "Same solid as binary STL and OBJ",
+      "description": "The asymmetric L-bracket solid (12 unit cells: 4×2×1 plate with a notch, 1×2×2 upright, one tab; integer coordinates, closed genus-0 surface, 46 vertices / 88 triangles, V = 2 + F/2) written as binary STL (triangle soup) and as indexed OBJ with the same triangle and corner order. Welding the STL soup by exact float32 equality recovers exactly the OBJ vertex set in the same first-appearance order, so both normalise to the identical IMesh and Tier 1 must report everything Unchanged.",
+      "base": "cases/cross-format-identical/base.stl",
+      "target": "cases/cross-format-identical/target.obj",
+      "expect": {
+        "acceptableTiers": [1],
+        "vertices": { "unchanged": 46, "moved": 0, "added": 0, "removed": 0 },
+        "faces": { "unchanged": 88, "modified": 0, "added": 0, "removed": 0 },
+        "baseMesh": { "vertexCount": 46, "faceCount": 88 },
+        "targetMesh": { "vertexCount": 46, "faceCount": 88 },
+        "mustMatch": [
+          [0, 0], [1, 1], [2, 2], [3, 3], [4, 4], [5, 5], [6, 6], [7, 7], [8, 8], [9, 9], [10, 10],
+          [11, 11], [12, 12], [13, 13], [14, 14], [15, 15], [16, 16], [17, 17], [18, 18], [19, 19],
+          [20, 20], [21, 21], [22, 22], [23, 23], [24, 24], [25, 25], [26, 26], [27, 27], [28, 28],
+          [29, 29], [30, 30], [31, 31], [32, 32], [33, 33], [34, 34], [35, 35], [36, 36], [37, 37],
+          [38, 38], [39, 39], [40, 40], [41, 41], [42, 42], [43, 43], [44, 44], [45, 45]
+        ]
+      }
+    },
+    {
+      "id": "cross-format-identical-obj-glb",
+      "title": "16-segment cylinder as OBJ and as GLB with a shuffled vertex buffer",
+      "description": "A closed 16-gon prism (r = 1.5, z ∈ [0, 2.5], 34 vertices, 64 triangles; ring coordinates are float32-rounded cos/sin values, i.e. NOT dyadic) as OBJ, and as GLB whose POSITION buffer is stored in a deterministic shuffled order (indices remapped) but with the same triangle and corner order. OBJ text is written with round-trip-exact float32 digits, so both files carry bit-identical float32 positions; the welded vertex order depends only on the triangle stream, not on buffer order, so both normalise to the same IMesh. Expected: Tier 1, all Unchanged.",
+      "base": "cases/cross-format-identical-obj-glb/base.obj",
+      "target": "cases/cross-format-identical-obj-glb/target.glb",
+      "expect": {
+        "acceptableTiers": [1],
+        "vertices": { "unchanged": 34, "moved": 0, "added": 0, "removed": 0 },
+        "faces": { "unchanged": 64, "modified": 0, "added": 0, "removed": 0 },
+        "baseMesh": { "vertexCount": 34, "faceCount": 64 },
+        "targetMesh": { "vertexCount": 34, "faceCount": 64 },
+        "mustMatch": [
+          [0, 0], [1, 1], [2, 2], [3, 3], [4, 4], [5, 5], [6, 6], [7, 7], [8, 8], [9, 9], [10, 10],
+          [11, 11], [12, 12], [13, 13], [14, 14], [15, 15], [16, 16], [17, 17], [18, 18], [19, 19],
+          [20, 20], [21, 21], [22, 22], [23, 23], [24, 24], [25, 25], [26, 26], [27, 27], [28, 28],
+          [29, 29], [30, 30], [31, 31], [32, 32], [33, 33]
+        ]
+      }
+    },
+    {
+      "id": "gltf-embedded-vs-glb",
+      "title": "Same glTF as .gltf (base64 data: URI) and as .glb",
+      "description": "One node (translation (0.5, −0.25, 1), rotation 180° about y, uniform scale 2) with a 12-segment closed prism (26 vertices, 48 triangles), serialised once as JSON .gltf with the binary buffer embedded as a base64 data:application/octet-stream URI and once as a binary .glb container. The glTF JSON is identical apart from the buffer uri, so after baking the node transform both normalise to the same IMesh. Expected: Tier 1, all Unchanged. (Exercises the .gltf data-URI path, which GLTFLoader cannot fetch under Node.)",
+      "base": "cases/gltf-embedded-vs-glb/base.gltf",
+      "target": "cases/gltf-embedded-vs-glb/target.glb",
+      "expect": {
+        "acceptableTiers": [1],
+        "vertices": { "unchanged": 26, "moved": 0, "added": 0, "removed": 0 },
+        "faces": { "unchanged": 48, "modified": 0, "added": 0, "removed": 0 },
+        "baseMesh": { "vertexCount": 26, "faceCount": 48 },
+        "targetMesh": { "vertexCount": 26, "faceCount": 48 },
+        "mustMatch": [
+          [0, 0], [1, 1], [2, 2], [3, 3], [4, 4], [5, 5], [6, 6], [7, 7], [8, 8], [9, 9], [10, 10],
+          [11, 11], [12, 12], [13, 13], [14, 14], [15, 15], [16, 16], [17, 17], [18, 18], [19, 19],
+          [20, 20], [21, 21], [22, 22], [23, 23], [24, 24], [25, 25]
+        ]
+      }
+    },
+    {
+      "id": "glb-vertex-ids",
+      "title": "GLB ↔ GLB matched through the _VERTEX_ID attribute",
+      "description": "A 5×5-quad height-field grid (36 vertices, 50 triangles, z ∈ {0, 0.25, 0.5}) whose primitive carries a custom _VERTEX_ID SCALAR FLOAT attribute (unique integers 7001 + 3·k in a shuffled assignment). In the target the triangle order is shuffled, each triangle's corners are cyclically rotated (winding kept), the vertex buffer is stored in a different shuffled order with every id carried along with its vertex, and vertex (2,3) is moved +0.25 z. The welded index orders therefore disagree (only 1 of 36 base indices keep their index), so only the ids give the correspondence: Tier 1 in ID mode. Moved: 1; Modified faces: the 6 triangles around interior vertex (2,3); mustMatch lists all 36 pairs, each computed by pushing the ids through each file's welding order.",
+      "base": "cases/glb-vertex-ids/base.glb",
+      "target": "cases/glb-vertex-ids/target.glb",
+      "expect": {
+        "acceptableTiers": [1],
+        "vertices": { "unchanged": 35, "moved": 1, "added": 0, "removed": 0 },
+        "faces": { "unchanged": 44, "modified": 6, "added": 0, "removed": 0 },
+        "baseMesh": { "vertexCount": 36, "faceCount": 50 },
+        "targetMesh": { "vertexCount": 36, "faceCount": 50 },
+        "mustMatch": [
+          [0, 26], [1, 1], [2, 0], [3, 25], [4, 30], [5, 2], [6, 29], [7, 9], [8, 31], [9, 14],
+          [10, 34], [11, 18], [12, 21], [13, 20], [14, 16], [15, 10], [16, 15], [17, 19], [18, 22],
+          [19, 6], [20, 24], [21, 17], [22, 12], [23, 13], [24, 7], [25, 8], [26, 28], [27, 33],
+          [28, 4], [29, 11], [30, 23], [31, 35], [32, 27], [33, 32], [34, 3], [35, 5]
+        ]
+      }
+    },
+    {
+      "id": "gltf-multi-node",
+      "title": "Two instanced cube nodes; node B translated +1 x (GLB ↔ GLB)",
+      "description": "One cube mesh (edge 0.75, centred on its origin, 8 vertices / 12 triangles) instanced by two scene nodes: A at translation (−1.5, 0, 0) and B at (1.5, 0.25, −0.5). In the target only node B's translation changes, to (2.5, 0.25, −0.5); the vertex data is byte-identical. After baking world transforms (traversal order A then B) both files weld to 16 vertices / 24 triangles with identical indices (the cubes never touch, before or after). Tier 1: A's 8 vertices Unchanged, B's 8 Moved by exactly 1.0; A's 12 faces Unchanged, B's 12 Modified. A parser that ignores node transforms would see the two cubes on top of each other (and weld them) — this case catches it.",
+      "base": "cases/gltf-multi-node/base.glb",
+      "target": "cases/gltf-multi-node/target.glb",
+      "expect": {
+        "acceptableTiers": [1],
+        "vertices": { "unchanged": 8, "moved": 8, "added": 0, "removed": 0 },
+        "faces": { "unchanged": 12, "modified": 12, "added": 0, "removed": 0 },
+        "baseMesh": { "vertexCount": 16, "faceCount": 24 },
+        "targetMesh": { "vertexCount": 16, "faceCount": 24 },
+        "mustMatch": [
+          [0, 0], [1, 1], [2, 2], [3, 3], [4, 4], [5, 5], [6, 6], [7, 7], [8, 8], [9, 9], [10, 10],
+          [11, 11], [12, 12], [13, 13], [14, 14], [15, 15]
+        ]
+      }
+    },
+    {
+      "id": "degenerate-triangles",
+      "title": "Cube vs the same cube plus two degenerate triangles (binary STL ↔ ASCII STL)",
+      "description": "Base: cube [−1,1]³ as binary STL (12 triangles). Target: the same 12 triangles in the same order as ASCII STL, with two zero-area triangles inserted — (a,a,b) after the 4th facet and (c,c,c) at the end, where a, b, c are corners of the first facet (so they introduce no new vertex and cannot perturb the first-appearance order). The loader delivers 14 triangles; normalisation step 5 drops the 2 whose welded corners are not distinct, leaving 8 vertices / 12 faces identical to the base. Expected: Tier 1, all Unchanged.",
+      "base": "cases/degenerate-triangles/base.stl",
+      "target": "cases/degenerate-triangles/target.stl",
+      "expect": {
+        "acceptableTiers": [1],
+        "vertices": { "unchanged": 8, "moved": 0, "added": 0, "removed": 0 },
+        "faces": { "unchanged": 12, "modified": 0, "added": 0, "removed": 0 },
+        "baseMesh": { "vertexCount": 8, "faceCount": 12 },
+        "targetMesh": { "vertexCount": 8, "faceCount": 12 },
+        "mustMatch": [[0, 0], [1, 1], [2, 2], [3, 3], [4, 4], [5, 5], [6, 6], [7, 7]]
+      }
+    },
+    {
+      "id": "gltf-node-hierarchy",
+      "title": "OBJ in world space vs GLB with a nested, rotated and scaled node hierarchy",
+      "description": "Base: the L-bracket solid (46 vertices, 88 triangles) in world coordinates as OBJ. Target: the same triangles in the same order in a GLB whose mesh sits under a child node (translation (0.5, 0, −0.25)) of a parent node (translation (1, 2, 3), rotation 180° about z, uniform scale 2); the stored local coordinates are the inverse image of the world coordinates and the vertex buffer is shuffled. Every factor is dyadic (the 180° quaternion gives an exact ±1/0 matrix), so baking parent·child world matrices reproduces the OBJ coordinates bit for bit. Expected: Tier 1, all Unchanged. A parser that skips parent transforms or composes them in the wrong order moves every vertex.",
+      "base": "cases/gltf-node-hierarchy/base.obj",
+      "target": "cases/gltf-node-hierarchy/target.glb",
+      "expect": {
+        "acceptableTiers": [1],
+        "vertices": { "unchanged": 46, "moved": 0, "added": 0, "removed": 0 },
+        "faces": { "unchanged": 88, "modified": 0, "added": 0, "removed": 0 },
+        "baseMesh": { "vertexCount": 46, "faceCount": 88 },
+        "targetMesh": { "vertexCount": 46, "faceCount": 88 },
+        "mustMatch": [
+          [0, 0], [1, 1], [2, 2], [3, 3], [4, 4], [5, 5], [6, 6], [7, 7], [8, 8], [9, 9], [10, 10],
+          [11, 11], [12, 12], [13, 13], [14, 14], [15, 15], [16, 16], [17, 17], [18, 18], [19, 19],
+          [20, 20], [21, 21], [22, 22], [23, 23], [24, 24], [25, 25], [26, 26], [27, 27], [28, 28],
+          [29, 29], [30, 30], [31, 31], [32, 32], [33, 33], [34, 34], [35, 35], [36, 36], [37, 37],
+          [38, 38], [39, 39], [40, 40], [41, 41], [42, 42], [43, 43], [44, 44], [45, 45]
+        ]
+      }
+    },
+    {
+      "id": "multi-part-obj-glb",
+      "title": "Multi-object OBJ (o/g/usemtl) vs multi-node, multi-primitive GLB",
+      "description": "A box body (8 vertices, 12 triangles) plus a separate 2×2-quad lid plate (9 vertices, 8 triangles) floating at z = 1.5. Base OBJ: \"o body\" with two usemtl sections (red: triangles 0–5, blue: 6–11), then \"o lid\" / \"g lid_top\" (usemtl red). Target GLB: node \"body\" whose mesh has two primitives (red, blue — each with its own vertex buffer, so shared corners must be welded across primitives) and node \"lid\" translated by (0, 0, 1.5). Traversal order (body prim 0, body prim 1, lid) equals the OBJ face order, so both normalise to 17 vertices / 20 faces with identical indices. Expected: Tier 1, all Unchanged.",
+      "base": "cases/multi-part-obj-glb/base.obj",
+      "target": "cases/multi-part-obj-glb/target.glb",
+      "expect": {
+        "acceptableTiers": [1],
+        "vertices": { "unchanged": 17, "moved": 0, "added": 0, "removed": 0 },
+        "faces": { "unchanged": 20, "modified": 0, "added": 0, "removed": 0 },
+        "baseMesh": { "vertexCount": 17, "faceCount": 20 },
+        "targetMesh": { "vertexCount": 17, "faceCount": 20 },
+        "mustMatch": [
+          [0, 0], [1, 1], [2, 2], [3, 3], [4, 4], [5, 5], [6, 6], [7, 7], [8, 8], [9, 9], [10, 10],
+          [11, 11], [12, 12], [13, 13], [14, 14], [15, 15], [16, 16]
+        ]
+      }
+    },
+    {
+      "id": "added-geometry",
+      "title": "Grid plus an attached open box appended at the end (binary STL ↔ binary STL)",
+      "description": "Base: flat 8×8-quad grid (81 vertices, 128 triangles) as binary STL. Target: the same 128 triangles in the same order, followed by an open box (4 walls × 2 triangles + a 2-triangle lid = 10 triangles) standing on the 2×2-quad footprint (3,3)–(5,5): its 4 bottom corners are existing grid vertices (they weld onto them), its 4 top corners at z = 1.5 are new. Because the new faces come last, the grid vertices keep their welded indices 0..80 and the 4 new vertices get 81..84, so both an index-based Tier 1 and a geometric Tier 2 recover the same correspondence: 81 Unchanged + 4 Added vertices, 128 Unchanged + 10 Added faces, nothing removed or moved.",
+      "base": "cases/added-geometry/base.stl",
+      "target": "cases/added-geometry/target.stl",
+      "expect": {
+        "acceptableTiers": [1, 2],
+        "vertices": { "unchanged": 81, "moved": 0, "added": 4, "removed": 0 },
+        "faces": { "unchanged": 128, "modified": 0, "added": 10, "removed": 0 },
+        "baseMesh": { "vertexCount": 81, "faceCount": 128 },
+        "targetMesh": { "vertexCount": 85, "faceCount": 138 },
+        "mustMatch": [
+          [0, 0], [1, 1], [2, 2], [3, 3], [4, 4], [5, 5], [6, 6], [7, 7], [8, 8], [9, 9], [10, 10],
+          [11, 11], [12, 12], [13, 13], [14, 14], [15, 15], [16, 16], [17, 17], [18, 18], [19, 19],
+          [20, 20], [21, 21], [22, 22], [23, 23], [24, 24], [25, 25], [26, 26], [27, 27], [28, 28],
+          [29, 29], [30, 30], [31, 31], [32, 32], [33, 33], [34, 34], [35, 35], [36, 36], [37, 37],
+          [38, 38], [39, 39], [40, 40], [41, 41], [42, 42], [43, 43], [44, 44], [45, 45], [46, 46],
+          [47, 47], [48, 48], [49, 49], [50, 50], [51, 51], [52, 52], [53, 53], [54, 54], [55, 55],
+          [56, 56], [57, 57], [58, 58], [59, 59], [60, 60], [61, 61], [62, 62], [63, 63], [64, 64],
+          [65, 65], [66, 66], [67, 67], [68, 68], [69, 69], [70, 70], [71, 71], [72, 72], [73, 73],
+          [74, 74], [75, 75], [76, 76], [77, 77], [78, 78], [79, 79], [80, 80]
+        ]
+      }
+    },
+    {
+      "id": "removed-patch",
+      "title": "Grid with an interior 3×3-quad hole (OBJ ↔ ASCII STL)",
+      "description": "Base: flat 10×10-quad grid (121 vertices, 200 triangles) as OBJ. Target: the same triangle stream as ASCII STL with the 18 triangles of the interior quads i,j ∈ {4,5,6} deleted (the rest keep their relative order). Exactly the 4 vertices strictly inside the hole — (5,5), (6,5), (5,6), (6,6) — are no longer referenced by any triangle and disappear on normalisation; the 12 hole-boundary vertices survive (they are corners of neighbouring quads). Expected: 117 Unchanged + 4 Removed vertices; 182 Unchanged + 18 Removed faces. Note: deleting faces mid-stream shifts first-appearance indices — 57 of the 117 surviving vertices change index and only 58.8% of target faces are base faces under the identity index map — so a plain index Tier 1 cannot produce this answer and the engine should resolve in Tier 2 (Tier 1 stays acceptable for an ID/sequence-aware Tier 1 giving the same correspondence). mustMatch lists all 117 surviving pairs through both welding orders.",
+      "base": "cases/removed-patch/base.obj",
+      "target": "cases/removed-patch/target.stl",
+      "expect": {
+        "acceptableTiers": [1, 2],
+        "vertices": { "unchanged": 117, "moved": 0, "added": 0, "removed": 4 },
+        "faces": { "unchanged": 182, "modified": 0, "added": 0, "removed": 18 },
+        "baseMesh": { "vertexCount": 121, "faceCount": 200 },
+        "targetMesh": { "vertexCount": 117, "faceCount": 182 },
+        "mustMatch": [
+          [0, 0], [1, 1], [2, 2], [3, 3], [4, 4], [5, 5], [6, 6], [7, 7], [8, 8], [9, 9], [10, 10],
+          [11, 11], [12, 12], [13, 13], [14, 14], [15, 15], [16, 16], [17, 17], [18, 18], [19, 19],
+          [20, 20], [21, 21], [22, 22], [23, 23], [24, 24], [25, 25], [26, 26], [27, 27], [28, 28],
+          [29, 29], [30, 30], [31, 31], [32, 32], [33, 33], [34, 34], [35, 35], [36, 36], [37, 37],
+          [38, 38], [39, 39], [40, 40], [41, 41], [42, 42], [43, 43], [44, 44], [45, 45], [46, 46],
+          [47, 47], [48, 48], [49, 49], [50, 50], [51, 51], [52, 52], [53, 53], [54, 54], [55, 55],
+          [56, 56], [57, 57], [58, 58], [59, 59], [62, 61], [63, 60], [64, 62], [65, 63], [66, 64],
+          [67, 65], [68, 66], [69, 67], [70, 68], [73, 70], [74, 69], [75, 71], [76, 72], [77, 73],
+          [78, 74], [79, 75], [80, 76], [81, 77], [82, 87], [83, 89], [84, 79], [85, 78], [86, 80],
+          [87, 81], [88, 82], [89, 83], [90, 84], [91, 85], [92, 86], [93, 88], [94, 90], [95, 91],
+          [96, 92], [97, 93], [98, 94], [99, 95], [100, 96], [101, 97], [102, 98], [103, 99],
+          [104, 100], [105, 101], [106, 102], [107, 103], [108, 104], [109, 105], [110, 106],
+          [111, 107], [112, 108], [113, 109], [114, 110], [115, 111], [116, 112], [117, 113],
+          [118, 114], [119, 115], [120, 116]
+        ]
+      }
+    },
+    {
+      "id": "shuffled-faces",
+      "title": "Same grid with shuffled triangle order and one moved vertex (OBJ ↔ OBJ)",
+      "description": "An 8×8-quad height-field grid (81 vertices, 128 triangles, z = 0.125·((i+2j) mod 4)) as OBJ. Target: same triangles in a deterministic shuffled order, each triangle's corners cyclically rotated (winding kept), the v lines shuffled too, and interior vertex (3,5) moved +0.25 z. The welded first-appearance order is scrambled: only 3 of 81 vertices keep their index and 1.6% of target faces are base faces under the identity index map, so Tier 1 must reject. Geometric + adjacency matching is unambiguous: 80 vertices have an exact positional twin, and the moved vertex (displacement 0.25) is the mutual nearest neighbour of its twin (grid spacing 1). Expected Tier 2: 1 Moved, 80 Unchanged; the 6 triangles around (3,5) Modified, 122 Unchanged. mustMatch lists all 81 pairs through both welding orders.",
+      "base": "cases/shuffled-faces/base.obj",
+      "target": "cases/shuffled-faces/target.obj",
+      "expect": {
+        "acceptableTiers": [2],
+        "vertices": { "unchanged": 80, "moved": 1, "added": 0, "removed": 0 },
+        "faces": { "unchanged": 122, "modified": 6, "added": 0, "removed": 0 },
+        "baseMesh": { "vertexCount": 81, "faceCount": 128 },
+        "targetMesh": { "vertexCount": 81, "faceCount": 128 },
+        "mustMatch": [
+          [0, 73], [1, 74], [2, 58], [3, 52], [4, 78], [5, 76], [6, 79], [7, 17], [8, 20], [9, 63],
+          [10, 21], [11, 19], [12, 80], [13, 66], [14, 35], [15, 34], [16, 77], [17, 33], [18, 53],
+          [19, 51], [20, 28], [21, 14], [22, 16], [23, 23], [24, 22], [25, 39], [26, 50], [27, 57],
+          [28, 7], [29, 71], [30, 15], [31, 0], [32, 31], [33, 72], [34, 40], [35, 41], [36, 8],
+          [37, 6], [38, 67], [39, 64], [40, 2], [41, 1], [42, 29], [43, 30], [44, 75], [45, 18],
+          [46, 46], [47, 3], [48, 4], [49, 10], [50, 24], [51, 32], [52, 25], [53, 26], [54, 45],
+          [55, 47], [56, 13], [57, 5], [58, 9], [59, 59], [60, 54], [61, 60], [62, 27], [63, 61],
+          [64, 43], [65, 12], [66, 11], [67, 68], [68, 69], [69, 38], [70, 36], [71, 48], [72, 44],
+          [73, 42], [74, 56], [75, 55], [76, 65], [77, 70], [78, 62], [79, 37], [80, 49]
+        ]
+      }
+    },
+    {
+      "id": "mixed-topology-edit",
+      "title": "Reordered faces + moved region + removed patch + added flap (OBJ ↔ OBJ)",
+      "description": "Base: flat 12×12-quad grid (169 vertices, 288 triangles) as OBJ. Target, all at once: (1) the 2×2 vertex block i,j ∈ {2,3} raised +0.25 z; (2) the 18 triangles of quads i,j ∈ {7,8,9} deleted, orphaning the 4 interior vertices (8,8),(9,8),(8,9),(9,9); (3) a vertical flap of 3 quads (6 triangles) attached to the x = 12 border edge between y = 4 and 7, adding 4 vertices at z = 1; (4) triangle order shuffled, corners rotated, v lines shuffled (identity-index face agreement 0.7%, so Tier 1 must reject). Exact counts are guaranteed for Tier 2 by construction: every unchanged vertex has an exact positional twin; each moved vertex (displacement 0.25) is the mutual nearest neighbour of its twin (spacing 1) and has unchanged neighbours; the removed and added vertices are ≥ 1 unit from any unmatched vertex of the other side and not adjacent to each other, so no pairing between them is possible. Vertices: 161 Unchanged, 4 Moved, 4 Added, 4 Removed. Faces: 16 Modified (triangles touching the raised block), 18 Removed, 6 Added, 254 Unchanged on each side.",
+      "base": "cases/mixed-topology-edit/base.obj",
+      "target": "cases/mixed-topology-edit/target.obj",
+      "expect": {
+        "acceptableTiers": [2],
+        "vertices": { "unchanged": 161, "moved": 4, "added": 4, "removed": 4 },
+        "faces": { "unchanged": 254, "modified": 16, "added": 6, "removed": 18 },
+        "baseMesh": { "vertexCount": 169, "faceCount": 288 },
+        "targetMesh": { "vertexCount": 169, "faceCount": 276 },
+        "mustMatch": [
+          [0, 162], [1, 110], [2, 54], [3, 53], [4, 111], [5, 76], [6, 153], [7, 61], [8, 87],
+          [9, 62], [10, 126], [11, 86], [12, 140], [13, 125], [14, 141], [15, 139], [16, 41],
+          [17, 92], [18, 39], [19, 40], [20, 117], [21, 72], [22, 151], [23, 118], [24, 166],
+          [25, 130], [26, 55], [27, 114], [28, 78], [29, 77], [30, 60], [31, 149], [32, 129],
+          [33, 7], [34, 8], [35, 128], [36, 80], [37, 146], [38, 131], [39, 99], [40, 57], [41, 83],
+          [42, 84], [43, 85], [44, 19], [45, 17], [46, 112], [47, 6], [48, 108], [49, 82], [50, 81],
+          [51, 152], [52, 58], [53, 56], [54, 100], [55, 102], [56, 73], [57, 74], [58, 18],
+          [59, 133], [60, 132], [61, 109], [62, 52], [63, 50], [64, 144], [65, 106], [66, 94],
+          [67, 3], [68, 4], [69, 96], [70, 75], [71, 116], [72, 134], [73, 150], [74, 148], [75, 70],
+          [76, 51], [77, 42], [78, 95], [79, 93], [80, 115], [81, 5], [82, 38], [83, 97], [84, 101],
+          [85, 65], [86, 136], [87, 1], [88, 2], [89, 71], [90, 105], [91, 142], [92, 159],
+          [93, 123], [94, 122], [95, 37], [96, 164], [97, 104], [98, 64], [99, 66], [100, 135],
+          [101, 0], [102, 13], [103, 88], [104, 158], [105, 138], [106, 160], [107, 137], [108, 145],
+          [109, 156], [110, 147], [111, 103], [114, 28], [115, 12], [116, 21], [117, 15], [118, 47],
+          [119, 161], [120, 98], [121, 113], [122, 68], [123, 89], [124, 90], [127, 34], [128, 48],
+          [129, 20], [130, 14], [131, 46], [132, 16], [133, 59], [134, 10], [135, 67], [136, 69],
+          [137, 91], [138, 36], [139, 63], [140, 33], [141, 32], [142, 49], [143, 30], [144, 79],
+          [145, 22], [146, 23], [147, 9], [148, 11], [149, 119], [150, 107], [151, 35], [152, 26],
+          [153, 27], [154, 154], [155, 163], [156, 29], [157, 168], [158, 31], [159, 24], [160, 121],
+          [161, 45], [162, 127], [163, 157], [164, 124], [165, 120], [166, 25], [167, 155],
+          [168, 167]
+        ]
+      }
+    },
+    {
+      "id": "rigid-transform",
+      "title": "Asymmetric solid rotated 30° about (1,2,2) and translated, order shuffled (OBJ ↔ GLB)",
+      "description": "Base: the L-bracket solid (46 vertices, 88 triangles; covariance eigenvalues 2.252 > 0.9117 > 0.6345, so PCA axes are unambiguous and the shape has no symmetry) as OBJ. Target: GLB whose node applies rotation 30° about axis (1,2,2)/3 then translation (2.5, −1.25, 0.75) — base→target p ↦ R·p + t — with the triangle order shuffled, corners rotated and the vertex buffer shuffled (u32 indices). No vertex keeps its position (0 exact position matches), so Tiers 1 and 2 must reject; ICP must recover the transform. With the true alignment every target vertex lies within 2.4e-7 (float32 rounding of the baked node transform) of its base twin, well below moveEpsilon = 1e-6·diag ≈ 7.51e-6, so the ideal result is all 46 vertices / 88 faces Unchanged and nothing Added/Removed (surfaceTolerance ≈ 0.07515). Ranges allow ICP to leave ≤ 10% of vertices (4) above moveEpsilon; the face ranges follow (those vertices touch at most 34 faces). Alignment tolerance 0.01: |Δt| ≤ 0.01 units, |Δangle| ≤ 0.01°, axis within 0.01°. mustMatch lists every true pair (nearest neighbours after alignment are unambiguous: vertex spacing ≥ 1).",
+      "base": "cases/rigid-transform/base.obj",
+      "target": "cases/rigid-transform/target.glb",
+      "expect": {
+        "acceptableTiers": [3],
+        "vertices": { "unchanged": [42, 46], "moved": [0, 4], "added": 0, "removed": 0 },
+        "faces": { "unchanged": [54, 88], "modified": [0, 34], "added": 0, "removed": 0 },
+        "baseMesh": { "vertexCount": 46, "faceCount": 88 },
+        "targetMesh": { "vertexCount": 46, "faceCount": 88 },
+        "alignment": {
+          "translation": [2.5, -1.25, 0.75],
+          "rotationAxis": [0.3333333333333333, 0.6666666666666666, 0.6666666666666666],
+          "rotationDeg": 30,
+          "tolerance": 0.01
+        },
+        "mustMatch": [
+          [0, 4], [1, 3], [2, 21], [3, 5], [4, 28], [5, 38], [6, 30], [7, 37], [8, 36], [9, 29],
+          [10, 26], [11, 45], [12, 35], [13, 10], [14, 24], [15, 16], [16, 17], [17, 19], [18, 20],
+          [19, 15], [20, 22], [21, 18], [22, 1], [23, 0], [24, 31], [25, 2], [26, 9], [27, 34],
+          [28, 43], [29, 11], [30, 27], [31, 12], [32, 7], [33, 14], [34, 44], [35, 6], [36, 42],
+          [37, 13], [38, 33], [39, 32], [40, 41], [41, 8], [42, 39], [43, 25], [44, 40], [45, 23]
+        ]
+      }
+    },
+    {
+      "id": "remesh",
+      "title": "Cylinder at 24 vs 32 segments (binary STL ↔ OBJ)",
+      "description": "The same capped cylinder (r = 1, z ∈ [−1, 1], caps as triangle fans) tessellated with 24 segments (50 vertices, 96 triangles, binary STL) and 32 segments (66 vertices, 128 triangles, OBJ). Only the 2 cap centres and the ring vertices at multiples of 45° coincide (18 of 66 target vertices), so no one-to-one vertex matching covers the meshes and Tiers 1 and 2 must reject. Under the identity alignment (or any rotation about the axis — the shape is rotationally symmetric) every target vertex is within the 24-gon sagitta 1 − cos(7.5°) ≈ 0.008555 of the base surface and every base vertex within 0.00428 (< the 32-gon sagitta) of the target surface — at most 24.7% of surfaceTolerance = 1% of the bounds diagonal ≈ 0.03464 — so Tier 3 should classify every vertex Unchanged or Moved and report nothing Added/Removed. The ranges allow up to 2 misclassified vertices; only ring vertices can plausibly exceed the tolerance (cap centres stay exactly on the other surface), and a ring vertex touches 5 (base) / 5 (target) triangles, giving the face bounds. Unchanged/Moved splits depend on ICP details and are not asserted.",
+      "base": "cases/remesh/base.stl",
+      "target": "cases/remesh/target.obj",
+      "expect": {
+        "acceptableTiers": [3],
+        "vertices": { "added": [0, 2], "removed": [0, 2] },
+        "faces": { "added": [0, 10], "removed": [0, 10] },
+        "baseMesh": { "vertexCount": 50, "faceCount": 96 },
+        "targetMesh": { "vertexCount": 66, "faceCount": 128 }
+      }
+    },
+    {
+      "id": "remesh-box",
+      "title": "Box surface subdivided at 1/2 vs 1/3 spacing (OBJ ↔ GLB)",
+      "description": "A 4×3×2 box centred on the origin whose faces are uniformly subdivided at spacing 1/2 (base: 210 vertices, 416 triangles, OBJ) and 1/3 (target: 470 vertices, 936 triangles, GLB; in-plane coordinates are float32-rounded thirds, the out-of-plane coordinate of every face is exact). Both tessellate exactly the same surface: under the identity alignment every vertex of either mesh lies on the other surface (max distance 2.8e-17), and the vertex sets are symmetric about the box centre, so centroid, principal axes and the ICP fixed point agree (any 180° flip ambiguity maps the box onto itself). Only integer lattice points coincide (54 of 470), so Tiers 1 and 2 must reject. Expected Tier 3 with nothing Added/Removed (ideal: all Unchanged; surfaceTolerance ≈ 0.05385); the ranges allow 2 misclassified vertices, i.e. at most 2 × max valence (6 base / 6 target) faces.",
+      "base": "cases/remesh-box/base.obj",
+      "target": "cases/remesh-box/target.glb",
+      "expect": {
+        "acceptableTiers": [3],
+        "vertices": { "added": [0, 2], "removed": [0, 2] },
+        "faces": { "added": [0, 12], "removed": [0, 12] },
+        "baseMesh": { "vertexCount": 210, "faceCount": 416 },
+        "targetMesh": { "vertexCount": 470, "faceCount": 936 }
+      }
+    }
+  ]
+}

@@ -1,0 +1,95 @@
+{
+  "asset": {
+    "version": "2.0",
+    "generator": "polymerge fixtures generator"
+  },
+  "scene": 0,
+  "scenes": [
+    {
+      "name": "fixture",
+      "nodes": [
+        0
+      ]
+    }
+  ],
+  "nodes": [
+    {
+      "name": "column",
+      "translation": [
+        0.5,
+        -0.25,
+        1
+      ],
+      "rotation": [
+        0,
+        1,
+        0,
+        0
+      ],
+      "scale": [
+        2,
+        2,
+        2
+      ],
+      "mesh": 0
+    }
+  ],
+  "meshes": [
+    {
+      "name": "column",
+      "primitives": [
+        {
+          "attributes": {
+            "POSITION": 0
+          },
+          "indices": 1,
+          "mode": 4
+        }
+      ]
+    }
+  ],
+  "accessors": [
+    {
+      "bufferView": 0,
+      "componentType": 5126,
+      "count": 26,
+      "type": "VEC3",
+      "min": [
+        -1,
+        -1,
+        -0.5
+      ],
+      "max": [
+        1,
+        1,
+        0.75
+      ]
+    },
+    {
+      "bufferView": 1,
+      "componentType": 5123,
+      "count": 144,
+      "type": "SCALAR"
+    }
+  ],
+  "bufferViews": [
+    {
+      "buffer": 0,
+      "byteOffset": 0,
+      "byteLength": 312,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 312,
+      "byteLength": 288,
+      "target": 34963
+    }
+  ],
+  "buffers": [
+    {
+      "byteLength": 600,
+      "uri": "data:application/octet-stream;base64,AACAPwAAAAAAAAC/17NdPwAAAD8AAAC/17NdPwAAAD8AAEA/AACAPwAAAAAAAEA/AAAAP9ezXT8AAAC/AAAAP9ezXT8AAEA/AAAAAAAAgD8AAAC/AAAAAAAAgD8AAEA/AAAAv9ezXT8AAAC/AAAAv9ezXT8AAEA/17NdvwAAAD8AAAC/17NdvwAAAD8AAEA/AACAvwAAAAAAAAC/AACAvwAAAAAAAEA/17NdvwAAAL8AAAC/17NdvwAAAL8AAEA/AAAAv9ezXb8AAAC/AAAAv9ezXb8AAEA/AAAAAAAAgL8AAAC/AAAAAAAAgL8AAEA/AAAAP9ezXb8AAAC/AAAAP9ezXb8AAEA/17NdPwAAAL8AAAC/17NdPwAAAL8AAEA/AAAAAAAAAAAAAAC/AAAAAAAAAAAAAEA/AAABAAIAAAACAAMAAQAEAAUAAQAFAAIABAAGAAcABAAHAAUABgAIAAkABgAJAAcACAAKAAsACAALAAkACgAMAA0ACgANAAsADAAOAA8ADAAPAA0ADgAQABEADgARAA8AEAASABMAEAATABEAEgAUABUAEgAVABMAFAAWABcAFAAXABUAFgAAAAMAFgADABcAGAABAAAAGAAEAAEAGAAGAAQAGAAIAAYAGAAKAAgAGAAMAAoAGAAOAAwAGAAQAA4AGAASABAAGAAUABIAGAAWABQAGAAAABYAGQADAAIAGQACAAUAGQAFAAcAGQAHAAkAGQAJAAsAGQALAA0AGQANAA8AGQAPABEAGQARABMAGQATABUAGQAVABcAGQAXAAMA"
+    }
+  ]
+}
