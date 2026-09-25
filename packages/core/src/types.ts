@@ -263,7 +263,7 @@ export interface ITierAttempt {
 /** Rigid transform mapping BASE space into TARGET space. Identity for Tiers 1 and 2. */
 export interface IRigidTransform {
   matrix: Mat4;
-  /** RMS residual of the alignment (0 for identity). */
+  /** RMS residual of the alignment. 0 for Tiers 1 and 2; real (possibly > 0) for Tier 3 even when it settles on the identity. */
   rmsError: number;
   iterations: number;
   isIdentity: boolean;
@@ -277,6 +277,12 @@ export interface IMeshSummary {
   bounds: IBounds;
 }
 
+/**
+ * Aggregate counts. `unchanged` / `moved` (vertices) and `unchanged` / `modified` (faces)
+ * are counted on the TARGET side; `added` is target-side and `removed` is base-side by
+ * definition. (In Tiers 1/2 the matched counts are equal on both sides; in Tier 3 they
+ * can differ.)
+ */
 export interface IDiffStats {
   vertices: { unchanged: number; moved: number; added: number; removed: number };
   faces: { unchanged: number; modified: number; added: number; removed: number };
@@ -291,8 +297,10 @@ export interface IDiffStats {
  * Correspondence invariants:
  *  - Tiers 1 & 2 produce a one-to-one partial matching:
  *      targetToBase[t] === b  ⇔  baseToTarget[b] === t   (for b, t ≥ 0)
- *  - Tier 3 may map several target vertices to one base vertex; `baseToTarget[b]`
- *    is then the nearest such target vertex (or -1).
+ *  - Tier 3 may map several target vertices to one base vertex. `baseToTarget[b]`
+ *    is the nearest aligned target vertex whenever base vertex b lies within
+ *    surfaceTolerance of the target surface, else -1 (so the two arrays need not be
+ *    mutual inverses in Tier 3).
  *  - Unmatched ⇒ -1  (base side = Removed, target side = Added).
  *
  * Status rules:
