@@ -1,0 +1,23 @@
+# dependencies
+node_modules/
+
+# build output
+dist/
+*.tsbuildinfo
+
+# test / e2e artefacts
+coverage/
+apps/web/e2e/screenshots/
+*.log
+npm-debug.log*
+
+# editors / OS
+.DS_Store
+.idea/
+.vscode/*
+!.vscode/extensions.json
+*.swp
+
+# local env
+.env
+.env.*

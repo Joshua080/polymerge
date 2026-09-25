@@ -1,0 +1,31 @@
+{
+  "name": "polymerge-monorepo",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Vertex-level correspondence diff (and future merge) for 3D models: STL, OBJ, glTF/GLB.",
+  "license": "MIT",
+  "type": "module",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "npm run build -w @polymerge/core && npm run build -w @polymerge/cli && npm run build -w @polymerge/web",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "dev": "npm run dev -w @polymerge/web",
+    "fixtures": "tsx fixtures/generate.ts",
+    "e2e": "node apps/web/e2e/smoke.mjs",
+    "polymerge": "node packages/cli/dist/cli.js"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsx": "^4.23.15",
+    "typescript": "~6.0.2",
+    "vitest": "^5.0.2"
+  }
+}
