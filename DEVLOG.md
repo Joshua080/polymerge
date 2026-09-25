@@ -44,3 +44,13 @@ fixtures/                        generator + known-answer model pairs + e2e test
 3. Front-end Visualiser → `apps/web/**`
 4. Test Fixtures → `fixtures/**` (generator, cases, manifest, e2e tests)
 Orchestrator: types, mesh helpers, CLI, root config, docs, integration.
+
+### Milestone 1 — CLI + git integration (orchestrator, in parallel with the agents)
+
+`packages/cli` (`polymerge` bin, built with tsc against core's `dist`):
+
+- `polymerge diff <base> <target>`: colour report (tier attempts, vertex/face counts, displacement, alignment, largest vertex moves). `--json <file|->` writes the serialised `IDiffResult`, `--force-tier`, `--move-eps`, `--surface-tol`, `--exit-code`. Engine logs go to **stderr**, so stdout stays pipeable.
+- `polymerge view <base> <target>`: tiny `node:http` server that serves `apps/web/dist` and the two models at `/models/{base,target}/<name>`. It opens `/?base=…&target=…` in the browser. Model bytes are read up front so `git difftool` temp files may vanish.
+- `polymerge info <file>`: normalised mesh summary (welded vs loader counts, groups, materials, warnings).
+- `polymerge git-diff`: **GIT_EXTERNAL_DIFF driver** (`diff.polymerge.command`). Handles new/deleted files (`/dev/null`) and renames (9-arg form). It uses the repo path for format detection because git's temp files may be named arbitrarily. It always exits 0, since git aborts on non-zero, and falls back to "Binary files … differ" when it can't parse.
+- `polymerge git-setup`: prints the `.gitattributes` + `git config` snippet (it does not modify any config itself).
