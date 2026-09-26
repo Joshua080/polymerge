@@ -74,11 +74,33 @@ What the check deliberately does **not** judge (v1 limits):
 
 `--no-collision-check` (API: `detectCollisions: false`) turns the check off.
 
+### Merge review in the browser
+
+```bash
+polymerge view base.stl ours.stl theirs.stl     # three files open the merge review
+polymerge review part.stl                       # …or straight from a conflicted `git merge`
+```
+
+The merged model is coloured by who shaped each face:
+- **blue** — taken from ours;
+- **purple** — taken from theirs;
+- **teal** — the same change on both sides;
+- **grey** — untouched;
+- **orange** — conflict regions, which stay in their base state until you choose.
+
+Select a conflict by clicking its orange region in 3D, or its card in the panel. Its versions then appear in place as outlines: ours in blue, theirs in purple, and optionally base. Hovering a resolution button shows that version filled.
+
+To resolve, pick **Ours / Theirs / Base** with the buttons or keys `1` / `2` / `3`. `0` undoes a choice, and `n` / `p` step through conflicts. The model re-merges instantly in a Web Worker, and a warning appears if your choices collide with each other.
+
+When you're done, download the result as STL/OBJ, or copy the equivalent command. From `polymerge review`, that command is `polymerge resolve part.stl --pick …`, which finishes the git merge. `?mode=merge&demo=thin-wall` (also `boss-height`, `parts`, `mixed-choices`, `clean`) opens built-in examples.
+
 ## CLI
 
 ```
 polymerge diff <base> <target> [--json out.json|-] [--force-tier 1|2|3] [--exit-code] [--top N]
 polymerge view <base> <target> [--port N] [--no-open]
+polymerge view <base> <ours> <theirs>          # merge review: see conflicts, resolve by clicking
+polymerge review <path>                        # merge review of a conflicted git merge
 polymerge merge <base> <ours> <theirs> [-o out.stl|obj] [--resolve ours|theirs|base] [--pick id=side] [--report x.json] [--no-collision-check]
 polymerge resolve <path> --pick <id>=<side>   # finish a conflicted git merge of a model
 polymerge info <file>
@@ -104,6 +126,7 @@ git diff -- part.stl                              # structural report in the ter
 git log -p --ext-diff -- part.stl                 # history
 git difftool -y -t polymerge HEAD~1 -- part.stl   # visual diff in the browser
 git merge feature                                 # three-way model merge; conflicts → file marked UU
+polymerge review part.stl                         # look at the conflicts in the browser, pick by clicking
 polymerge resolve part.stl --pick 0=theirs && git add part.stl
 ```
 

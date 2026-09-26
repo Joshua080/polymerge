@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { readFile } from 'node:fs/promises';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -27,9 +28,11 @@ export interface ViewOptions {
   host?: string;
   open?: boolean;
   webDist?: string;
-  /** Display names (e.g. real file names when git passes temp files). */
-  baseName?: string;
-  targetName?: string;
+  /**
+   * Display name for every side (git passes temp files; --name gives the real path). In a
+   * merge review it is also the path `polymerge resolve` is suggested for.
+   */
+  name?: string;
 }
 
 /** Locate the built viewer: --web-dist, $POLYMERGE_WEB_DIST, or the monorepo's apps/web/dist. */
@@ -53,21 +56,24 @@ interface ServedModel {
 }
 
 /**
- * Start a local server with the viewer and the two models, then open the browser at
- * `/?base=/models/base/<name>&target=/models/target/<name>`. Model bytes are read
- * up front, so git difftool may delete its temp files while the viewer is open.
+ * Start a local server with the viewer and the models, then open the browser.
+ *  - two files (base, target): the diff viewer, `/?base=/models/base/<name>&target=…`;
+ *  - three files (base, ours, theirs): the merge review, `/?mode=merge&base=…&ours=…&theirs=…`.
+ * Model bytes are read up front, so git may delete its temp files while the viewer is open.
  */
-export async function startViewServer(basePath: string, targetPath: string, o: ViewOptions): Promise<{ server: http.Server; url: string }> {
+export async function startViewServer(files: string[], o: ViewOptions): Promise<{ server: http.Server; url: string }> {
+  if (files.length !== 2 && files.length !== 3) throw new Error(`view needs 2 files (diff) or 3 (merge), got ${files.length}`);
   const webDist = resolveWebDist(o.webDist);
-  const model = async (side: 'base' | 'target', filePath: string, name?: string): Promise<ServedModel> => {
-    const display = path.basename(name ?? filePath);
+  const sides = files.length === 3 ? ['base', 'ours', 'theirs'] : ['base', 'target'];
+  const model = async (side: string, filePath: string): Promise<ServedModel> => {
+    const display = path.basename(o.name ?? filePath);
     return {
       urlPath: `/models/${side}/${encodeURIComponent(display)}`,
       bytes: new Uint8Array(await readFile(filePath)),
       contentType: CONTENT_TYPES[path.extname(display).toLowerCase()] ?? 'application/octet-stream',
     };
   };
-  const models = [await model('base', basePath, o.baseName), await model('target', targetPath, o.targetName)];
+  const models = await Promise.all(files.map((f, i) => model(sides[i], f)));
 
   const server = http.createServer(async (req, res) => {
     try {
@@ -109,7 +115,9 @@ export async function startViewServer(basePath: string, targetPath: string, o: V
     });
   });
   const { port: actualPort } = server.address() as AddressInfo;
-  const query = new URLSearchParams({ base: models[0].urlPath, target: models[1].urlPath });
+  const query = new URLSearchParams(files.length === 3 ? { mode: 'merge' } : {});
+  sides.forEach((side, i) => query.set(side, models[i].urlPath));
+  if (files.length === 3 && o.name) query.set('path', o.name);
   return { server, url: `http://${host}:${actualPort}/?${query.toString()}` };
 }
 
@@ -129,9 +137,28 @@ export function openBrowser(url: string): void {
   }
 }
 
-/** `polymerge view <base> <target>` — serve until interrupted. */
-export async function runView(basePath: string, targetPath: string, o: ViewOptions): Promise<number> {
-  const { server, url } = await startViewServer(basePath, targetPath, o);
+/**
+ * `polymerge review <path>` — open the merge review on a conflicted git merge of <path>: git's
+ * index stages (:1 ancestor, :2 ours, :3 theirs) are served as base / ours / theirs, and the
+ * viewer offers the `polymerge resolve <path> --pick …` command that finishes the merge.
+ */
+export async function runReview(repoPath: string, o: ViewOptions, stage: (n: 1 | 2 | 3, repoPath: string) => Uint8Array): Promise<number> {
+  const dir = mkdtempSync(path.join(tmpdir(), 'polymerge-review-'));
+  try {
+    const files = ([1, 2, 3] as const).map((n) => {
+      const file = path.join(dir, `${n}-${path.basename(repoPath)}`);
+      writeFileSync(file, stage(n, repoPath));
+      return file;
+    });
+    return await runView(files, { ...o, name: repoPath });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+/** `polymerge view <base> <target>` / `polymerge view <base> <ours> <theirs>` — serve until interrupted. */
+export async function runView(files: string[], o: ViewOptions): Promise<number> {
+  const { server, url } = await startViewServer(files, o);
   process.stdout.write(`polymerge viewer running at ${url}\nPress Ctrl+C to stop.\n`);
   if (o.open !== false) openBrowser(url);
   await new Promise<void>((resolve) => {

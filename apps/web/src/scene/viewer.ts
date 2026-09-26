@@ -2,6 +2,10 @@
  * Three.js scene for one diff: target mesh coloured per face status, removed base faces,
  * a translucent base ghost, vertex markers, displacement vectors, a wireframe overlay and a
  * selection highlight. World space == diff TARGET space.
+ *
+ * Merge review (showMerge) reuses the same stage: the merged mesh coloured by who shaped each
+ * face, an outline of the selected conflict region and ghost previews of its versions.
+ * World space == the MERGED frame.
  */
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
@@ -19,6 +23,7 @@ import {
   makeRingTexture,
   type IFaceLayer,
 } from './layers.js';
+import { buildFaceSubset, buildMergeLayer, type IGhostSpec, type IMergeLayer, type MergeFaceKind } from './merge-layers.js';
 
 export interface ILayerVisibility {
   /** Target mesh, coloured by face status. */
@@ -49,15 +54,37 @@ export const DEFAULT_LAYERS: ILayerVisibility = {
 
 export interface IPickHit {
   /** Which mesh `vertex` / `face` index into. */
-  side: 'base' | 'target';
+  side: 'base' | 'target' | 'merged';
   vertex: number;
   face: number;
-  /** Status of the picked face (null in single-mesh preview). */
+  /** Status of the picked face (null in single-mesh preview / merge review). */
   faceStatus: number | null;
-  layer: 'target' | 'removed' | 'ghost' | 'preview';
-  /** Hit point, target space. */
+  layer: 'target' | 'removed' | 'ghost' | 'preview' | 'merged';
+  /** Hit point, target (or merged) space. */
   point: Vec3;
 }
+
+/** Merge review layers. */
+export interface IMergeLayerVisibility {
+  /** Faces neither side changed (grey). */
+  unchanged: boolean;
+  wireframe: boolean;
+  /** The whole base model, translucent. */
+  baseGhost: boolean;
+  /** Ghosts of the selected conflict region as base / ours / theirs have it. */
+  previewBase: boolean;
+  previewOurs: boolean;
+  previewTheirs: boolean;
+}
+
+export const DEFAULT_MERGE_LAYERS: IMergeLayerVisibility = {
+  unchanged: true,
+  wireframe: false,
+  baseGhost: false,
+  previewBase: false,
+  previewOurs: true,
+  previewTheirs: true,
+};
 
 export interface ILayerCounts {
   targetFaces: number;
@@ -70,7 +97,7 @@ export interface ILayerCounts {
 interface IPickable {
   object: THREE.Mesh;
   layer: IPickHit['layer'];
-  side: 'base' | 'target';
+  side: IPickHit['side'];
   mesh: IMesh;
   /** Positions of `mesh` in target space. */
   positions: Float64Array;
@@ -103,6 +130,17 @@ export class DiffViewer {
     markers?: THREE.Points;
     vectors?: THREE.LineSegments;
   } = {};
+  private merge: {
+    layer?: IMergeLayer;
+    mesh?: THREE.Mesh;
+    wire?: THREE.Mesh;
+    baseGhost?: THREE.Mesh;
+    highlight?: THREE.Mesh;
+    ghosts: { label: IGhostSpec['label']; objects: THREE.Mesh[] }[];
+  } = { ghosts: [] };
+  private mergeLayers: IMergeLayerVisibility = { ...DEFAULT_MERGE_LAYERS };
+  /** The version whose ghost is shown filled (hovering its resolution button), if any. */
+  private ghostEmphasis: IGhostSpec['label'] | null = null;
   private pickables: IPickable[] = [];
   private previewMode = false;
   private origin = new THREE.Vector3();
@@ -190,7 +228,9 @@ export class DiffViewer {
       depthTest: false,
     }),
     selLine: new THREE.LineBasicMaterial({ color: '#ffffff', depthTest: false, transparent: true }),
+    highlight: new THREE.MeshBasicMaterial({ color: '#ffffff', wireframe: true, transparent: true, opacity: 0.85, depthTest: false }),
   };
+  private readonly ghostMaterials = new Map<string, { fill: THREE.Material; wire: THREE.Material }>();
 
   private readonly selection = {
     to: new THREE.Points(new THREE.BufferGeometry(), this.materials.selTo),
@@ -368,11 +408,146 @@ export class DiffViewer {
         if ('geometry' in obj && obj.geometry instanceof THREE.BufferGeometry) geometries.add(obj.geometry);
       }
     }
+    this.clearMergeObjects(geometries);
     for (const g of geometries) g.dispose();
     this.objects = {};
     this.pickables = [];
     this.previewMode = false;
     this.dirty = true;
+  }
+
+  private clearMergeObjects(geometries: Set<THREE.BufferGeometry>): void {
+    const m = this.merge;
+    for (const obj of [m.mesh, m.wire, m.baseGhost, m.highlight, ...m.ghosts.flatMap((g) => g.objects)]) {
+      if (!obj) continue;
+      this.content.remove(obj);
+      geometries.add(obj.geometry);
+    }
+    this.merge = { ghosts: [] };
+  }
+
+  // -------------------------------------------------------------------------
+  // Merge review
+  // -------------------------------------------------------------------------
+
+  /**
+   * Show a merged mesh coloured per face. `refit` false keeps the camera and origin (the same
+   * merge re-resolved), so choosing a resolution never makes the view jump.
+   */
+  showMerge(merged: IMesh, kinds: MergeFaceKind[], base: IMesh, baseToMerged: THREE.Matrix4, opts: { refit: boolean }): IMergeLayer {
+    const keep = !opts.refit && !!this.merge.mesh;
+    this.clear();
+    this.previewMode = false;
+    if (!keep) {
+      this.origin.copy(centerOf(merged.positions));
+      this.content.position.copy(this.origin);
+    }
+    const layer = buildMergeLayer(merged, kinds, this.origin);
+    const mesh = new THREE.Mesh(layer.geometry, this.materials.target);
+    const wire = new THREE.Mesh(layer.geometry, this.materials.wire);
+    const baseGhost = new THREE.Mesh(buildFaceSubset(base, allFaces(base.faceCount), baseToMerged, this.origin), this.materials.ghost);
+    baseGhost.renderOrder = 5;
+    this.merge = { layer, mesh, wire, baseGhost, ghosts: [] };
+    this.content.add(mesh, wire, baseGhost);
+    this.pickables = [{ object: mesh, layer: 'merged', side: 'merged', mesh: merged, positions: merged.positions, faceMap: layer.faceMap, status: null }];
+    this.applyMergeLayers();
+    if (!keep) this.fit(boxOf(merged.positions));
+    return layer;
+  }
+
+  /** The recentring offset of the scene (geometry is stored as world − origin). */
+  get sceneOrigin(): THREE.Vector3 {
+    return this.origin.clone();
+  }
+
+  setMergeLayers(next: Partial<IMergeLayerVisibility>): void {
+    this.mergeLayers = { ...this.mergeLayers, ...next };
+    this.applyMergeLayers();
+  }
+
+  getMergeLayers(): IMergeLayerVisibility {
+    return { ...this.mergeLayers };
+  }
+
+  /** Outline some merged faces (the selected conflict region); null clears it. */
+  setMergeHighlight(merged: IMesh | null, faces: ArrayLike<number> | null): void {
+    if (this.merge.highlight) {
+      this.content.remove(this.merge.highlight);
+      this.merge.highlight.geometry.dispose();
+      this.merge.highlight = undefined;
+    }
+    if (merged && faces && faces.length > 0) {
+      const obj = new THREE.Mesh(buildFaceSubset(merged, faces, null, this.origin), this.materials.highlight);
+      obj.renderOrder = 25;
+      this.merge.highlight = obj;
+      this.content.add(obj);
+    }
+    this.dirty = true;
+  }
+
+  /** Replace the conflict previews (null clears them). */
+  setMergeGhosts(ghosts: IGhostSpec[] | null): void {
+    for (const g of this.merge.ghosts) {
+      for (const o of g.objects) this.content.remove(o);
+      g.objects[0]?.geometry.dispose();
+    }
+    this.merge.ghosts = [];
+    for (const spec of ghosts ?? []) {
+      const mats = this.ghostMaterial(spec.color);
+      const fill = new THREE.Mesh(spec.geometry, mats.fill);
+      const wire = new THREE.Mesh(spec.geometry, mats.wire);
+      fill.renderOrder = 7;
+      wire.renderOrder = 8;
+      this.merge.ghosts.push({ label: spec.label, objects: [fill, wire] });
+      this.content.add(fill, wire);
+    }
+    this.applyMergeLayers();
+  }
+
+  /**
+   * Show one version's ghost filled (and every other ghost hidden) — a live preview of what a
+   * resolution would look like; null returns to the outline-only previews of the layer toggles.
+   */
+  setMergeGhostEmphasis(label: IGhostSpec['label'] | null): void {
+    this.ghostEmphasis = label;
+    this.applyMergeLayers();
+  }
+
+  private ghostMaterial(color: string): { fill: THREE.Material; wire: THREE.Material } {
+    let m = this.ghostMaterials.get(color);
+    if (!m) {
+      m = {
+        fill: new THREE.MeshLambertMaterial({ color, flatShading: true, side: THREE.DoubleSide, transparent: true, opacity: 0.55, depthWrite: false }),
+        wire: new THREE.MeshBasicMaterial({ color, wireframe: true, transparent: true, opacity: 0.9, depthWrite: false }),
+      };
+      this.ghostMaterials.set(color, m);
+    }
+    return m;
+  }
+
+  private applyMergeLayers(): void {
+    const L = this.mergeLayers;
+    const m = this.merge;
+    if (m.layer) m.layer.geometry.setDrawRange(0, (L.unchanged ? m.layer.faceMap.length : m.layer.changedFaces) * 3);
+    if (m.wire) m.wire.visible = L.wireframe;
+    if (m.baseGhost) m.baseGhost.visible = L.baseGhost;
+    // Outlines per the layer toggles; while a resolution button is hovered, only that version, filled.
+    const show = { base: L.previewBase, ours: L.previewOurs, theirs: L.previewTheirs };
+    for (const g of m.ghosts) {
+      const [fill, wire] = g.objects;
+      const emphasised = this.ghostEmphasis === g.label;
+      fill.visible = emphasised;
+      wire.visible = this.ghostEmphasis ? emphasised : show[g.label];
+    }
+    this.dirty = true;
+  }
+
+  /** Screen position (CSS pixels, relative to the canvas) of a world point, or null if behind the camera. */
+  project(p: Vec3): [number, number] | null {
+    const v = new THREE.Vector3(p[0], p[1], p[2]).project(this.camera);
+    if (v.z > 1) return null;
+    const rect = this.renderer.domElement.getBoundingClientRect();
+    return [((v.x + 1) / 2) * rect.width, ((1 - v.y) / 2) * rect.height];
   }
 
   setLayers(next: Partial<ILayerVisibility>): void {
@@ -589,6 +764,12 @@ function withDepthBias<T extends THREE.Material>(material: T, factor = 0.985): T
   };
   material.customProgramCacheKey = () => `depth-bias-${factor}`;
   return material;
+}
+
+function allFaces(n: number): Uint32Array {
+  const out = new Uint32Array(n);
+  for (let i = 0; i < n; i++) out[i] = i;
+  return out;
 }
 
 function centerOf(positions: ArrayLike<number>): THREE.Vector3 {

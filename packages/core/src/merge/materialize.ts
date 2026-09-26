@@ -107,6 +107,8 @@ export function materialize(plan: IMergePlan, res: IResolutions): IMaterialized 
   for (const r of plan.regions) for (const c of r.partComponents) partRegion.set(c, r.id);
   const frameOf = new Map<number, IRigid>();
   const partFrames = new Map<number, IRigid>();
+  /** Which side's part motion placed each component (bits like vertexChangedBy). */
+  const frameBy = new Map<number, number>();
   const phi = (c: number): IRigid => {
     let g = frameOf.get(c);
     if (g) return g;
@@ -121,6 +123,15 @@ export function materialize(plan: IMergePlan, res: IResolutions): IMaterialized 
         partFrames.set(c, R);
         if (src === 'ours' && ours.partMotion.has(c)) stats.partMotionsFromOurs++;
         else if (src === 'theirs' && theirs.partMotion.has(c)) stats.partMotionsFromTheirs++;
+        const by =
+          src === 'both'
+            ? (ours.partMotion.has(c) ? 1 : 0) | (theirs.partMotion.has(c) ? 2 : 0)
+            : src === 'ours'
+              ? ours.partMotion.has(c) ? 1 : 0
+              : src === 'theirs'
+                ? theirs.partMotion.has(c) ? 2 : 0
+                : 0;
+        if (by) frameBy.set(c, by);
       }
     }
     g = R ? composeRigid(T, R) : T;
@@ -184,7 +195,7 @@ export function materialize(plan: IMergePlan, res: IResolutions): IMaterialized 
     positions.push(q[0], q[1], q[2]);
     vSource.push(0);
     vIndex.push(v);
-    vChanged.push(changedBy[v]);
+    vChanged.push(changedBy[v] | (frameBy.get(plan.baseComponents.id[v]) ?? 0));
     vConflict.push(plan.regionOfBase[v]);
   }
 

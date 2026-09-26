@@ -791,3 +791,175 @@ details summary {
 .inspector-card > button.small {
   margin-top: 10px;
 }
+
+/* ---------------------------------------------------------------- merge review */
+
+.mode-link {
+  margin-left: auto;
+  color: var(--accent);
+  text-decoration: none;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.brand .tagline {
+  white-space: nowrap;
+}
+
+.mode-link:hover {
+  text-decoration: underline;
+}
+
+.drops-3 {
+  grid-template-columns: 1fr;
+}
+
+.drops-3 .drop {
+  min-height: 0;
+}
+
+.merge-status {
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+
+.merge-status.ok {
+  color: #86efac;
+}
+
+.merge-status.bad {
+  color: #fdba74;
+}
+
+table.merge-applied td:first-child {
+  white-space: nowrap;
+  width: 1%;
+  padding-right: 10px;
+}
+
+.conflicts {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.conflict-card {
+  border: 1px solid var(--border);
+  border-left: 3px solid #f97316;
+  border-radius: var(--radius);
+  background: var(--panel-2);
+  padding: 8px 10px;
+  cursor: pointer;
+}
+
+.conflict-card.resolved {
+  border-left-color: var(--muted);
+}
+
+.conflict-card.selected {
+  border-color: #f8fafc;
+  box-shadow: 0 0 0 1px #f8fafc inset;
+}
+
+.conflict-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.conflict-id {
+  font-weight: 700;
+  font-family: var(--mono);
+}
+
+.chip {
+  font-size: 11px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: rgba(249, 115, 22, 0.16);
+  color: #fdba74;
+  font-family: var(--mono);
+}
+
+.conflict-state {
+  margin-left: auto;
+  font-size: 11.5px;
+  color: #fdba74;
+}
+
+.conflict-card.resolved .conflict-state {
+  color: #86efac;
+}
+
+.conflict-msg {
+  margin: 6px 0 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.conflict-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.conflict-actions .pick {
+  flex: 1;
+  border-color: var(--pick);
+}
+
+.conflict-actions .pick.active {
+  background: var(--pick);
+  color: #0b0f17;
+  font-weight: 600;
+}
+
+.bulk {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.merge-warning {
+  margin-top: 8px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  border: 1px solid #b45309;
+  background: rgba(180, 83, 9, 0.16);
+  color: #fcd34d;
+  font-size: 12px;
+}
+
+.merge-command {
+  margin: 6px 0 0;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  font: 11.5px/1.45 var(--mono);
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.hud-busy {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  pointer-events: none;
+  background: rgba(11, 15, 23, 0.72);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 5px 10px;
+  color: var(--muted);
+}
+
+/* In merge review the legend is wide: the key hint sits at the top right instead. */
+.merge-stage .hud-hint {
+  top: 12px;
+  bottom: auto;
+}
+
+.merge-stage .hud-busy {
+  top: 48px;
+}

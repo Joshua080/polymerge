@@ -215,6 +215,23 @@ export const DIFF_COLORS = {
   unchanged: '#9ca3af',
 } as const;
 
+/**
+ * Merge review colours (who shaped each face of a merged model). Deliberately disjoint from
+ * DIFF_COLORS: a merge is about provenance, not added / removed / moved.
+ */
+export const MERGE_COLORS = {
+  /** Untouched by either side. */
+  unchanged: '#9ca3af',
+  /** Taken from ours. */
+  ours: '#3b82f6',
+  /** Taken from theirs. */
+  theirs: '#a855f7',
+  /** The same change on both sides (convergent). */
+  both: '#14b8a6',
+  /** An unresolved conflict region (kept in its base state until resolved). */
+  conflict: '#f97316',
+} as const;
+
 export interface IDiffLogger {
   info(message: string): void;
   warn(message: string): void;
@@ -521,7 +538,10 @@ export interface IMergeProvenance {
   vertexSource: Uint8Array;
   /** Index in the source mesh (base / ours / theirs). */
   vertexIndex: Int32Array;
-  /** Bitmask of the sides whose change shaped the vertex: 1 = ours, 2 = theirs. */
+  /**
+   * Bitmask of the sides whose change shaped the vertex: 1 = ours, 2 = theirs (a local move or
+   * a part motion; whole-model frames are reported in `IMergeResult.frame` instead).
+   */
   vertexChangedBy: Uint8Array;
   faceSource: Uint8Array;
   faceIndex: Int32Array;

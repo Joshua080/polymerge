@@ -4,11 +4,12 @@
  *   1. diff driver:  `git diff` on a model prints the structural report;
  *   2. merge driver: a clean three-way merge commits with both edits;
  *   3. merge driver: a conflicting merge stops (UU), keeps the base geometry in the conflict
- *      region, and `polymerge resolve --pick 0=theirs` + `git add` finishes it.
+ *      region; `polymerge review` serves git's three stages to the merge review, and
+ *      `polymerge resolve --pick 0=theirs` + `git add` finishes it.
  *
  *   node scripts/e2e-git.mjs        (needs `npm run build` first)
  */
-import { execFileSync, spawnSync } from 'node:child_process';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -35,6 +36,33 @@ const zOf = (x, y) => {
   return m ? Number(m[1]) : NaN;
 };
 const write = (text) => fs.writeFileSync(path.join(dir, 'part.obj'), text);
+
+/** `polymerge review part.obj` during the conflict: the merge review is served git's three stages. */
+async function checkReview() {
+  const child = spawn(process.execPath, [cli, 'review', 'part.obj', '--no-open', '--port', '0'], { cwd: dir, stdio: ['ignore', 'pipe', 'pipe'] });
+  try {
+    const url = await new Promise((resolve, reject) => {
+      let buf = '';
+      child.stdout.on('data', (d) => {
+        buf += d;
+        const m = buf.match(/https?:\/\/\S+/);
+        if (m) resolve(m[0]);
+      });
+      child.on('exit', (c) => reject(new Error(`review exited ${c}`)));
+      setTimeout(() => reject(new Error('review did not start')), 30_000);
+    });
+    const u = new URL(url);
+    check(u.searchParams.get('mode') === 'merge' && u.searchParams.get('path') === 'part.obj', 'polymerge review opens the merge review for part.obj');
+    let same = true;
+    for (const [side, n] of [['base', 1], ['ours', 2], ['theirs', 3]]) {
+      const served = Buffer.from(await (await fetch(new URL(u.searchParams.get(side), u.origin))).arrayBuffer());
+      same &&= served.equals(execFileSync('git', ['show', `:${n}:part.obj`], { cwd: dir }));
+    }
+    check(same, 'it serves git stages :1 / :2 / :3 as base / ours / theirs');
+  } finally {
+    child.kill();
+  }
+}
 
 try {
   git('init', '-q', '-b', 'main');
@@ -72,6 +100,7 @@ try {
   check(/move-move/.test(clash.stderr), 'the driver explains the conflict (move-move)');
   check(git('status', '--short').trim() === 'UU part.obj', 'the model is marked unmerged (UU)');
   check(zOf(2, 2) === 0 && zOf(8, 7) === -0.25, 'conflict region keeps base geometry; other edits stay merged');
+  await checkReview();
   const res = polymerge('resolve', 'part.obj', '--pick', '0=theirs', '-q');
   check(res.status === 0, `polymerge resolve exits 0 (got ${res.status}: ${res.stderr.trim()})`);
   check(zOf(2, 2) === -1, 'resolve applied theirs to the conflict region');

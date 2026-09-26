@@ -79,6 +79,60 @@ Two checks were rewritten first, because they would have been flaky on a shared 
 | D17 | Damage counts only when the geometry differs from all three versions (base, ours, theirs). | A side's own design, including its own self-intersections, is never blamed on the merge; it is also what makes the check cheap. |
 | D18 | Damage created by *chosen* resolutions is a warning, not a new conflict; the git driver stops on it when resolving automatically. | Re-opening explicit choices would make resolution unstable; silently committing damage would be worse. |
 
+### Milestone 3 — Merge review in the viewer: see conflicts, resolve by clicking ✅
+
+Conflicts used to show only through the CLI and git. Visual review is the premise of the tool, so the viewer now has a **merge mode**.
+
+**Opening it:**
+- `polymerge view base ours theirs`: three files, where two open the diff.
+- `polymerge review <path>`: reads git's index stages :1/:2/:3 during a conflicted `git merge`.
+- `?mode=merge&base=…&ours=…&theirs=…`: URLs.
+- Three drop zones.
+- Five built-in examples, built in the browser from code (`?mode=merge&demo=…`): `thin-wall`, `boss-height`, `parts`, `mixed-choices`, `clean`.
+
+**What you see.**
+- The merged model is coloured by *who shaped each face*, with new `MERGE_COLORS` in core:
+  - ours blue, theirs purple, the same change on both teal, untouched grey;
+  - **unresolved conflict regions orange**, and they stay in the base state.
+  
+  These are deliberately disjoint from the diff's green / red / yellow: a merge is about provenance, not added/removed/moved.
+- The provenance now counts part motions as "shaped by" their side. Before, a part moved by ours showed grey.
+- The panel shows:
+  - the merge status and what was auto-applied from each side;
+  - one card per conflict: kinds, message, and **Ours / Theirs / Base** buttons;
+  - "All …" buttons, collision warnings, downloads, and the equivalent CLI command.
+
+**Resolving by clicking.**
+- Click an orange region in 3D (the pick maps the merged face to its region through provenance), or its card. The region gets a white outline, and its three versions appear in place as outlines: ours blue, theirs purple, base grey (optional).
+- Hovering a resolution button shows that version filled: a live preview of the choice.
+- Buttons or keys `1`/`2`/`3` resolve, `0` undoes, and `n`/`p` step through conflicts.
+- Each choice re-materialises the merge in the Web Worker without recomputing the diffs. The worker keeps the unresolved merge and receives the *complete* set of choices each time, which is what makes undo possible. The camera stays put.
+- Choices that collide with each other show the core's collision warning.
+
+**Finishing.**
+- Download the result as STL/OBJ; unresolved regions are written in their base state, as the CLI does.
+- Or copy the command: `polymerge merge … --pick 0=theirs`, plus `polymerge resolve <path> --pick …` when opened via `review`.
+
+**Engine.** `DiffEngine` gained `merge()` / `resolve()` with the same worker / main-thread fallback. A superseded *resolve* is abandoned rather than killing the worker, because the worker holds the merge.
+
+**Tests.**
+- `scripts/e2e-merge.mjs` (in `npm run e2e`) runs the real CLI server with headless Chromium:
+  - Three files open the merge review, and the merge runs in the worker.
+  - Pixel classes show the orange region and the blue/purple automatic edits. Clicking "Theirs" turns orange (40 k px) into purple (47 k px); the command carries `--pick 0=theirs` and the resolve command for the repository path; the downloaded STL has theirs' boss height.
+  - A **3D click on the region** selects it, and the key `1` resolves it.
+  - Mixed choices raise a visible warning; "All ours" clears it.
+- `scripts/e2e-git.mjs` now runs `polymerge review` inside a real conflicted merge and checks that the three stages are served.
+- `apps/web/test/merge-review.test.ts` (7 tests): face classes unresolved and resolved, part-motion provenance, preview placement, and frame mapping.
+
+Two bugs came up while writing the e2e, both fixed:
+- Translucent ghost fills turned the orange region brown, which is unreadable. Ghosts are now outline-only, filled only on hover.
+- Selecting a card on hover re-rendered the card list and swallowed the click. Selection now only toggles a class.
+
+| # | Decision | Why |
+|---|----------|-----|
+| D19 | Merge review colours are provenance (ours / theirs / both / conflict), not diff status. | The question in a merge is *whose change is this*, and the diff colours would mean something else. |
+| D20 | Every resolve re-materialises the unresolved merge with the complete set of choices, in the worker that holds it. | Undo and "change my mind" are free. Nothing drifts between the viewer and the CLI: the same `--pick` set gives the same model. |
+
 ---
 
 ## Session 2 — 2026-09-26 — correspondence fixes, then three-way merge

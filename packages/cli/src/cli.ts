@@ -4,6 +4,8 @@
  *
  *   polymerge diff <base> <target> [--json <file|->] [--force-tier 1|2|3] ...
  *   polymerge view <base> <target> [--port N] [--no-open]
+ *   polymerge view <base> <ours> <theirs> [--port N] [--no-open]
+ *   polymerge review <path>              (merge review of a conflicted git merge)
  *   polymerge info <file>
  *   polymerge merge <base> <ours> <theirs> [-o merged.stl] [--resolve ours|theirs|base] [--pick id=side]
  *   polymerge git-diff <git external-diff args...>
@@ -14,8 +16,8 @@ import { parseArgs } from 'node:util';
 import { runDiff } from './commands/diff.js';
 import { gitSetupText, runGitDiff } from './commands/git.js';
 import { runInfo } from './commands/info.js';
-import { runGitMerge, runGitResolve, runMerge } from './commands/merge.js';
-import { runView } from './commands/view.js';
+import { gitStage, runGitMerge, runGitResolve, runMerge } from './commands/merge.js';
+import { runReview, runView } from './commands/view.js';
 
 const VERSION = '0.1.0';
 
@@ -32,9 +34,11 @@ Usage:
       -q, --quiet            No report or engine log (useful with --json)
       -v, --verbose          Include engine debug logging
   polymerge view <base> <target> [options]   Open the interactive 3D diff in the browser
+  polymerge view <base> <ours> <theirs> [options]
+                                             Open the three-way merge review: see conflicts, resolve by clicking
       --port <n>             Port (default 5178, falls back to a free port)
       --host <addr>          Bind address (default 127.0.0.1)
-      --name <file>          Display name for both sides (git difftool passes $MERGED)
+      --name <file>          Display name for every side (git difftool passes $MERGED)
       --no-open              Do not launch a browser, just print the URL
       --web-dist <dir>       Path to the built viewer (default: apps/web/dist)
   polymerge merge <base> <ours> <theirs> [options]   Three-way merge (exit 1 = unresolved conflicts)
@@ -44,6 +48,8 @@ Usage:
       --report <file>        Write the conflicts and statistics as JSON
       --no-collision-check   Don't check the combined edits for surfaces passing through each other
       -q, --quiet            No report
+  polymerge review <path> [--port N] [--no-open]
+                                             Open the merge review on a conflicted git merge of <path>
   polymerge resolve <path> --pick <id>=<side> | --resolve <side>
                                              Finish a conflicted git merge of <path> (reads git's index stages)
   polymerge info <file>                      Print the normalised mesh summary
@@ -105,14 +111,15 @@ async function main(argv: string[]): Promise<number> {
           'web-dist': { type: 'string' },
         },
       });
-      requirePositionals('view', positionals, 2);
-      return runView(positionals[0], positionals[1], {
+      if (positionals.length !== 2 && positionals.length !== 3) {
+        throw new UsageError(`polymerge view: expected 2 files (diff) or 3 (merge: base ours theirs), got ${positionals.length}`);
+      }
+      return runView(positionals, {
         port: values.port,
         host: values.host,
         open: !values['no-open'],
         webDist: values['web-dist'],
-        baseName: values.name,
-        targetName: values.name,
+        name: values.name,
       });
     }
     case 'info': {
@@ -144,6 +151,20 @@ async function main(argv: string[]): Promise<number> {
         quiet: values.quiet,
         collisionCheck: !values['no-collision-check'],
       });
+    }
+    case 'review': {
+      const { values, positionals } = parseArgs({
+        args: rest,
+        allowPositionals: true,
+        options: {
+          port: { type: 'string' },
+          host: { type: 'string' },
+          'no-open': { type: 'boolean' },
+          'web-dist': { type: 'string' },
+        },
+      });
+      requirePositionals('review', positionals, 1);
+      return runReview(positionals[0], { port: values.port, host: values.host, open: !values['no-open'], webDist: values['web-dist'] }, gitStage);
     }
     case 'resolve': {
       const { values, positionals } = parseArgs({

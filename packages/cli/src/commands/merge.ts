@@ -181,14 +181,7 @@ export async function runGitMerge(args: string[], o: { resolve?: string; collisi
  */
 export async function runGitResolve(repoPath: string, o: MergeCommandOptions): Promise<number> {
   const format = outputFormat(repoPath, o.format);
-  const stage = (n: 1 | 2 | 3): Buffer => {
-    try {
-      return execFileSync('git', ['show', `:${n}:${repoPath}`], { maxBuffer: 1 << 30 });
-    } catch {
-      throw new Error(`git has no stage ${n} for ${repoPath} — is it an unresolved merge conflict? (git status)`);
-    }
-  };
-  const load = (n: 1 | 2 | 3) => loadMesh(new Uint8Array(stage(n)), { fileName: path.basename(repoPath) });
+  const load = (n: 1 | 2 | 3) => loadMesh(new Uint8Array(gitStage(n, repoPath)), { fileName: path.basename(repoPath) });
   const [base, ours, theirs] = await Promise.all([load(1), load(2), load(3)]);
   const result = mergeMeshes(base, ours, theirs, {
     logger: silentLogger,
@@ -202,4 +195,13 @@ export async function runGitResolve(repoPath: string, o: MergeCommandOptions): P
     process.stdout.write(result.clean ? `Wrote ${repoPath} — run "git add ${repoPath}" to mark it resolved.\n` : `Wrote ${repoPath} (still conflicted).\n`);
   }
   return result.clean ? 0 : 1;
+}
+
+/** One index stage of a conflicted file: 1 = common ancestor, 2 = ours, 3 = theirs. */
+export function gitStage(n: 1 | 2 | 3, repoPath: string): Buffer {
+  try {
+    return execFileSync('git', ['show', `:${n}:${repoPath}`], { maxBuffer: 1 << 30 });
+  } catch {
+    throw new Error(`git has no stage ${n} for ${repoPath} — is it an unresolved merge conflict? (git status)`);
+  }
 }
