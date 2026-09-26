@@ -239,6 +239,23 @@ export interface IDiffOptions {
   thresholds?: { tier1?: number; tier2?: number };
   icp?: { maxIterations?: number; convergence?: number };
   /**
+   * Tier 3: also estimate a uniform scale (unit mismatch, resize). Default true. When the
+   * estimated scale is within 0.5% of a known length-unit factor it is snapped to it and
+   * reported in `alignment.units`.
+   */
+  detectScale?: boolean;
+  /**
+   * Tiers 1/2: explain a whole-model motion (rigid or uniformly scaled, e.g. the same
+   * lineage re-exported in other units) as ONE global `alignment` instead of N moved
+   * vertices. Default true.
+   */
+  detectGlobalTransform?: boolean;
+  /**
+   * Recover parts (connected components) that moved rigidly on their own as Moved rather
+   * than Removed + Added, and report every part motion in `IDiffResult.parts`. Default true.
+   */
+  detectParts?: boolean;
+  /**
    * Log sink. Defaults to `console`. Regardless of the sink, the engine ALWAYS
    * emits one info line per tier attempt and one line naming the accepted tier.
    */
@@ -260,13 +277,65 @@ export interface ITierAttempt {
   metrics: Record<string, number>;
 }
 
-/** Rigid transform mapping BASE space into TARGET space. Identity for Tiers 1 and 2. */
+/** Length units recognised by unit-mismatch detection. */
+export type LengthUnit = 'mm' | 'cm' | 'm' | 'in' | 'ft';
+
+/** A detected unit conversion: target = factor × base (e.g. in → mm, factor 25.4). */
+export interface IUnitConversion {
+  from: LengthUnit;
+  to: LengthUnit;
+  factor: number;
+}
+
+/**
+ * Global alignment mapping BASE space into TARGET space: the similarity transform
+ * x ↦ scale·R·x + t (rigid when scale = 1).
+ *  - Tier 3: the ICP solution (with uniform scale when the models differ in units/size).
+ *  - Tiers 1 & 2: the identity, unless one rigid/similarity transform explains ≥ 90% of the
+ *    matched vertices (a whole-model move or unit re-export) — then that transform, so a
+ *    global move reads as one alignment instead of N moved vertices.
+ */
 export interface IRigidTransform {
+  /** Column-major 4×4; its 3×3 block is scale·R. */
   matrix: Mat4;
-  /** RMS residual of the alignment. 0 for Tiers 1 and 2; real (possibly > 0) for Tier 3 even when it settles on the identity. */
+  /** Uniform scale factor (1 = rigid). */
+  scale: number;
+  /** Present when `scale` was snapped to a known length-unit conversion factor. */
+  units?: IUnitConversion;
+  /** RMS residual of the alignment. 0 when it is the identity of Tiers 1/2; real (possibly > 0) for Tier 3 even when it settles on the identity. */
   rmsError: number;
   iterations: number;
   isIdentity: boolean;
+}
+
+/**
+ * A part (connected component) that moved rigidly relative to the global alignment.
+ *  - source 'registration': the part had lost its correspondence (it would have read as
+ *    Removed + Added) and was re-matched by rigidly registering the two components.
+ *  - source 'matched': the part was already matched; its matched vertices are explained by
+ *    one rigid motion, which is reported for context (and for merging).
+ */
+export interface IPartMotion {
+  source: 'registration' | 'matched';
+  /** Vertices of the part's component in the base / target mesh (ascending). */
+  baseVertices: Uint32Array;
+  targetVertices: Uint32Array;
+  /** Matched vertex pairs inside the part. */
+  matchedVertices: number;
+  /** Matched vertices deviating from the part's rigid motion by more than moveEpsilon (local edits on the moved part). */
+  deformedVertices: number;
+  /** The part's full transform, base space → target space (column-major; includes the global alignment). */
+  matrix: Mat4;
+  /** Rotation of the part relative to the global alignment. */
+  rotationDeg: number;
+  rotationAxis: Vec3;
+  /** Displacement of the part's centroid relative to the global alignment (target space). */
+  centroidShift: Vec3;
+  /** RMS residual of the rigid fit over the part's non-deformed matched vertices. */
+  rmsError: number;
+  /** Group names (OBJ object, glTF node, ...) of the part's first face, when available. */
+  baseName?: string;
+  targetName?: string;
 }
 
 export interface IMeshSummary {
@@ -308,6 +377,8 @@ export interface IDiffStats {
  *    matched & > moveEpsilon → Moved, unmatched → Added / Removed.
  *  - Vertex (Tier 3): classified by nearest-SURFACE distance d in aligned space:
  *    d ≤ moveEpsilon → Unchanged, d ≤ surfaceTolerance → Moved, else Added/Removed.
+ *    Exception: vertices of a recovered moved part (see `parts`) are Moved, with
+ *    displacement = |alignment·base[match] − target[t]| (how far the part moved).
  *  - Target face: any vertex Added, or (Tiers 1 & 2) the mapped vertex triple is not a
  *    base face → Added; else any vertex Moved → Modified; else Unchanged.
  *  - Base face: any vertex Removed, or (Tiers 1 & 2) the mapped triple is not a target
@@ -346,6 +417,8 @@ export interface IDiffResult {
   /** FaceStatusCode per target face (Unchanged | Modified | Added). */
   targetFaceStatus: Uint8Array;
   stats: IDiffStats;
+  /** Parts that moved rigidly on their own (relative to `alignment`). Empty when none. */
+  parts: IPartMotion[];
   durationMs: number;
 }
 
@@ -367,6 +440,121 @@ export interface IVertexChange {
 }
 
 // ---------------------------------------------------------------------------
+// Three-way merge  (implemented in src/merge/; semantics: docs/merge-design.md)
+// ---------------------------------------------------------------------------
+
+/** How a conflict region is settled: take one side's changes there, or neither. */
+export type MergeResolution = 'ours' | 'theirs' | 'base';
+
+/**
+ * Atomic conflict kinds (docs/merge-design.md §4):
+ *  - move-move: both sides moved the same vertex (locally, after frames) to different places;
+ *  - move-delete: one side deleted a vertex the other moved;
+ *  - delete-dependency: one side deleted a vertex the other side's new geometry is anchored to;
+ *  - competing-additions: both added different faces on the same edge (or re-meshed the same region);
+ *  - overlapping-additions: new geometry of both sides interpenetrates in space;
+ *  - part-motion: both moved the same part, differently;
+ *  - global-transform: both transformed the whole model, differently (not a pure unit conversion);
+ *  - lineage: a side lost vertex identity (Tier 3 remesh) — vertex-level merging impossible.
+ */
+export type MergeConflictKind =
+  | 'move-move'
+  | 'move-delete'
+  | 'delete-dependency'
+  | 'competing-additions'
+  | 'overlapping-additions'
+  | 'part-motion'
+  | 'global-transform'
+  | 'lineage';
+
+/** One conflict REGION (the mesh analogue of a conflict hunk): resolved as a unit. */
+export interface IMergeConflict {
+  /** Stable, deterministic id (0-based, in order of discovery). */
+  id: number;
+  /** Atomic conflict kinds found in the region, with counts. */
+  kinds: Partial<Record<MergeConflictKind, number>>;
+  /** Human-readable summary. */
+  message: string;
+  /** Base vertices / faces inside the region (whole-model conflicts list none). */
+  baseVertices: Uint32Array;
+  baseFaces: Uint32Array;
+  /** Vertices of ours / theirs involved in the region (their own indices). */
+  oursVertices: Uint32Array;
+  theirsVertices: Uint32Array;
+  /** A point to look at, in the merged frame. */
+  focus: Vec3;
+  /** Applied resolution; null = unresolved (the region is left in its BASE state). */
+  resolution: MergeResolution | null;
+  /** True for global-transform / lineage conflicts (they concern the whole model). */
+  wholeModel: boolean;
+}
+
+export interface IMergeStats {
+  /** Base vertices whose local move was taken from ours / theirs / both (identical). */
+  movedFromOurs: number;
+  movedFromTheirs: number;
+  movedConvergent: number;
+  /** Base vertices deleted because ours / theirs / both deleted them. */
+  deletedFromOurs: number;
+  deletedFromTheirs: number;
+  deletedConvergent: number;
+  /** Faces added by ours / theirs / both (identical additions counted once). */
+  facesAddedFromOurs: number;
+  facesAddedFromTheirs: number;
+  facesAddedConvergent: number;
+  /** Base faces removed in the merge. */
+  facesRemoved: number;
+  /** Parts whose motion was taken from ours / theirs. */
+  partMotionsFromOurs: number;
+  partMotionsFromTheirs: number;
+  conflicts: number;
+  unresolved: number;
+}
+
+/** Where every merged vertex / face came from (for review tools and the viewer). */
+export interface IMergeProvenance {
+  /** 0 = base, 1 = added by ours, 2 = added by theirs. */
+  vertexSource: Uint8Array;
+  /** Index in the source mesh (base / ours / theirs). */
+  vertexIndex: Int32Array;
+  /** Bitmask of the sides whose change shaped the vertex: 1 = ours, 2 = theirs. */
+  vertexChangedBy: Uint8Array;
+  faceSource: Uint8Array;
+  faceIndex: Int32Array;
+  /** Conflict region id per merged vertex (-1 = none). */
+  vertexConflict: Int32Array;
+}
+
+export interface IMergeOptions {
+  /** Options for the two underlying diffs (base → ours, base → theirs). */
+  diff?: IDiffOptions;
+  /** Resolutions by conflict id (ids are deterministic for the same inputs). */
+  resolutions?: Record<number, MergeResolution>;
+  /** Resolution for every conflict not listed in `resolutions`; default null = leave unresolved (base). */
+  defaultResolution?: MergeResolution | null;
+  /** Log sink (defaults to console); the two diffs log their tiers through it too. */
+  logger?: IDiffLogger;
+}
+
+export interface IMergeResult {
+  /** All non-conflicting changes applied; each conflict region per its resolution (base when unresolved). */
+  merged: IMesh;
+  /** True when there are no unresolved conflicts. */
+  clean: boolean;
+  conflicts: IMergeConflict[];
+  stats: IMergeStats;
+  /** Global frame of the merged model (base → merged). */
+  frame: { source: 'base' | 'ours' | 'theirs' | 'both' | 'composed' | 'conflict'; transform: IRigidTransform };
+  provenance: IMergeProvenance;
+  /** The correspondences the merge was computed from. */
+  ours: IDiffResult;
+  theirs: IDiffResult;
+  durationMs: number;
+}
+
+export type MergeMeshesFn = (base: IMesh, ours: IMesh, theirs: IMesh, options?: IMergeOptions) => IMergeResult;
+
+// ---------------------------------------------------------------------------
 // Tooling contract: test-fixture manifest (fixtures/manifest.json)
 // ---------------------------------------------------------------------------
 
@@ -382,7 +570,18 @@ export interface IFixtureExpectation {
   baseMesh?: { vertexCount: number; faceCount: number };
   targetMesh?: { vertexCount: number; faceCount: number };
   /** For rigid-motion cases: the known base→target transform. */
-  alignment?: { translation: Vec3; rotationAxis: Vec3; rotationDeg: number; tolerance: number };
+  alignment?: {
+    translation: Vec3;
+    rotationAxis: Vec3;
+    rotationDeg: number;
+    tolerance: number;
+    /** Expected uniform scale (default 1); compared with a relative tolerance of `tolerance`. */
+    scale?: number;
+    /** Expected unit conversion label, when the scale is a unit factor. */
+    units?: IUnitConversion;
+  };
+  /** Expected number of reported part motions (`IDiffResult.parts.length`). */
+  parts?: CountExpectation;
   /** Exact vertex-level correspondences that MUST hold: [baseIndex, targetIndex]. */
   mustMatch?: [base: number, target: number][];
 }

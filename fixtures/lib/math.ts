@@ -194,6 +194,20 @@ export function decomposeRigid(m: ArrayLike<number>): RigidDecomposition {
   return { translation, angleDeg: (angle * 180) / Math.PI, axis, orthonormalityError, determinant };
 }
 
+export interface SimilarityDecomposition extends RigidDecomposition {
+  /** Uniform scale = cube root of the 3×3 determinant (1 for a rigid motion). */
+  scale: number;
+}
+
+/** Decompose a column-major similarity 4×4 (3×3 block = s·R) into scale + rigid parts. */
+export function decomposeSimilarity(m: ArrayLike<number>): SimilarityDecomposition {
+  const det =
+    m[0] * (m[5] * m[10] - m[9] * m[6]) - m[4] * (m[1] * m[10] - m[9] * m[2]) + m[8] * (m[1] * m[6] - m[5] * m[2]);
+  const scale = det > 0 ? Math.cbrt(det) : 1;
+  const unscaled = Array.from(m, (v, i) => (i < 12 && i % 4 !== 3 ? v / scale : v));
+  return { ...decomposeRigid(unscaled), scale };
+}
+
 /** Angle in degrees between two directions. */
 export function angleBetweenDeg(a: readonly number[], b: readonly number[]): number {
   const c = dot(normalize(a), normalize(b));

@@ -8,6 +8,16 @@
  *   info  [polymerge] Tier N (<short>): ACCEPTED|REJECTED score=0.000 threshold=0.000 — <reason> (<ms> ms)
  *   info  [polymerge] ✔ correspondence resolved by Tier N — <TIER_NAMES[N]>
  *   warn  when Tier 3's quality is poor.
+ * Plus one info line per refinement that fires after the accepted tier:
+ *   info  [polymerge] ↳ global transform: …   (Tiers 1/2 — the whole model moved / changed units)
+ *   info  [polymerge] ↳ moved part …           (per part that moved rigidly on its own)
+ *
+ * Refinements after the accepted tier (each can be switched off in IDiffOptions):
+ *  1. Tiers 1/2: global-transform detection (global.ts) — one rigid/similarity motion that
+ *     explains ≥ 90% of the matched vertices becomes the alignment.
+ *  2. Tier 1: moved-part recovery (parts.ts) for components the index/ID matching lost
+ *     (Tiers 2 and 3 recover parts internally, before scoring).
+ *  3. Tiers 1/2: matched-part analysis — parts already matched that moved rigidly are reported.
  */
 import { computeBounds, summarizeMesh } from '../mesh.js';
 import {
@@ -22,9 +32,13 @@ import {
 } from '../types.js';
 import { classify } from './classify.js';
 import { DiffContext, pct, resolveOptions, type ITierOutcome } from './context.js';
+import { detectGlobalTransform } from './global.js';
+import { mat4ToRigid, rigidToMat4, rotationAngle } from './linalg.js';
+import { analyzeMatchedParts, finalizeParts, recoverPartsTopological } from './parts.js';
 import { runTier1 } from './tier1.js';
 import { runTier2 } from './tier2.js';
 import { runTier3, tier3Quality } from './tier3.js';
+import { describeUnits } from './units.js';
 
 export const TIER_SHORT_NAMES: Readonly<Record<MatchTier, string>> = {
   1: 'index/ID',
@@ -101,7 +115,7 @@ export const diffMeshes: DiffMeshesFn = (base: IMesh, target: IMesh, options: ID
         metrics: { error: 1 },
         targetToBase: new Int32Array(0),
         baseToTarget: new Int32Array(0),
-        alignment: { matrix: [], rmsError: 0, iterations: 0, isIdentity: true },
+        alignment: { matrix: [], scale: 1, rmsError: 0, iterations: 0, isIdentity: true },
       };
     }
     const durationMs = now() - start;
@@ -138,8 +152,57 @@ export const diffMeshes: DiffMeshesFn = (base: IMesh, target: IMesh, options: ID
     );
   }
 
-  const cls = classify(ctx, result);
   logger.info(`[polymerge] ✔ correspondence resolved by Tier ${result.tier} — ${TIER_NAMES[result.tier]}`);
+
+  // ---- Refinements -----------------------------------------------------------------------
+  let A = mat4ToRigid(result.alignment.matrix);
+  if (result.tier !== 3 && opts.detectGlobalTransform) {
+    const g = detectGlobalTransform(ctx, result.baseToTarget);
+    if (g) {
+      A = g.rigid;
+      result.alignment = {
+        matrix: rigidToMat4(g.rigid),
+        scale: g.rigid.s,
+        ...(g.units ? { units: g.units } : {}),
+        rmsError: g.rms,
+        iterations: 0,
+        isIdentity: false,
+      };
+      const t = g.rigid.t;
+      const scaleText = g.units
+        ? `unit conversion ${describeUnits(g.units)}, `
+        : g.rigid.s !== 1
+          ? `uniform scale ×${Number(g.rigid.s.toPrecision(6))}, `
+          : '';
+      logger.info(
+        `[polymerge] ↳ global transform: one ${g.rigid.s !== 1 ? 'similarity' : 'rigid'} motion explains ` +
+          `${pct(g.explained)} of the matched vertices (${scaleText}rotation ` +
+          `${((rotationAngle(g.rigid.r) * 180) / Math.PI).toFixed(2)}°, translation ` +
+          `(${Array.from(t, (v) => Number(v.toPrecision(6))).join(', ')})) — reported as the alignment`,
+      );
+    }
+  }
+  const internalParts = result.parts ? [...result.parts] : [];
+  if (opts.detectParts && result.tier === 1) {
+    internalParts.push(...recoverPartsTopological(ctx, A, result.baseToTarget, result.targetToBase));
+  }
+  if (opts.detectParts && result.tier !== 3) {
+    const skip = new Set(internalParts.map((p) => p.baseComponent));
+    internalParts.push(...analyzeMatchedParts(ctx, A, result.baseToTarget, result.targetToBase, skip));
+  }
+  const parts = finalizeParts(ctx, internalParts, A);
+  for (const p of parts) {
+    const verb = p.source === 'registration' ? 're-matched by rigid registration (would read as removed + added)' : 'already matched';
+    const name = p.baseName ?? p.targetName;
+    logger.info(
+      `[polymerge] ↳ moved part${name ? ` "${name}"` : ''}: ${p.baseVertices.length} base / ${p.targetVertices.length} target ` +
+        `vertices, rotation ${p.rotationDeg.toFixed(2)}°, centroid shift ` +
+        `(${p.centroidShift.map((v) => Number(v.toPrecision(4))).join(', ')})` +
+        `${p.deformedVertices > 0 ? `, ${p.deformedVertices} vertex(es) also edited locally` : ''} — ${verb}`,
+    );
+  }
+
+  const cls = classify(ctx, result);
 
   return {
     schemaVersion: 1,
@@ -159,6 +222,7 @@ export const diffMeshes: DiffMeshesFn = (base: IMesh, target: IMesh, options: ID
     baseFaceStatus: cls.baseFaceStatus,
     targetFaceStatus: cls.targetFaceStatus,
     stats: cls.stats,
+    parts,
     durationMs: now() - t0,
   };
 };

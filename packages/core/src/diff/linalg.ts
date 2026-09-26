@@ -1,47 +1,54 @@
 /**
- * Small dense linear algebra for the diff engine: rigid transforms, a cyclic Jacobi
- * eigen-solver for symmetric matrices, Horn's closed-form absolute orientation
- * (unit-quaternion) solver and area-weighted surface moments for PCA.
+ * Small dense linear algebra for the diff engine: rigid / similarity transforms, a cyclic
+ * Jacobi eigen-solver for symmetric matrices, Horn's closed-form absolute orientation
+ * (unit-quaternion) solver with optional uniform scale (Umeyama) and area-weighted surface
+ * moments for PCA.
  *
- * Conventions: a rigid transform maps x ↦ R·x + t with R stored ROW-major (r[row*3+col]).
- * `rigidToMat4` converts to the column-major Mat4 layout of the shared contract.
+ * Conventions: a transform maps x ↦ s·R·x + t with R a proper rotation stored ROW-major
+ * (r[row*3+col]) and s > 0 a uniform scale (1 for rigid motion). `rigidToMat4` converts to
+ * the column-major Mat4 layout of the shared contract (the 3×3 block there is s·R).
  */
 import type { IBounds, Mat4 } from '../types.js';
 
+/** Similarity transform x ↦ s·R·x + t (rigid when s = 1). */
 export interface IRigid {
-  /** 3×3 rotation, row-major. */
+  /** 3×3 proper rotation, row-major. */
   r: Float64Array;
   t: Float64Array;
+  /** Uniform scale (> 0); 1 for a rigid motion. */
+  s: number;
 }
 
 export function identityRigid(): IRigid {
-  return { r: Float64Array.of(1, 0, 0, 0, 1, 0, 0, 0, 1), t: new Float64Array(3) };
+  return { r: Float64Array.of(1, 0, 0, 0, 1, 0, 0, 0, 1), t: new Float64Array(3), s: 1 };
 }
 
-export function rigidFrom(r: ArrayLike<number>, t: ArrayLike<number>): IRigid {
-  return { r: Float64Array.from(r), t: Float64Array.from(t) };
+export function rigidFrom(r: ArrayLike<number>, t: ArrayLike<number>, s = 1): IRigid {
+  return { r: Float64Array.from(r), t: Float64Array.from(t), s };
 }
 
-/** out[o..o+2] = R·(x,y,z) + t */
+/** out[o..o+2] = s·R·(x,y,z) + t */
 export function applyRigid(g: IRigid, x: number, y: number, z: number, out: Float64Array, o = 0): void {
   const r = g.r;
   const t = g.t;
-  out[o] = r[0] * x + r[1] * y + r[2] * z + t[0];
-  out[o + 1] = r[3] * x + r[4] * y + r[5] * z + t[1];
-  out[o + 2] = r[6] * x + r[7] * y + r[8] * z + t[2];
+  const s = g.s;
+  out[o] = s * (r[0] * x + r[1] * y + r[2] * z) + t[0];
+  out[o + 1] = s * (r[3] * x + r[4] * y + r[5] * z) + t[1];
+  out[o + 2] = s * (r[6] * x + r[7] * y + r[8] * z) + t[2];
 }
 
-/** Inverse rigid transform: x ↦ Rᵀ·(x − t). */
+/** Inverse transform: x ↦ (1/s)·Rᵀ·(x − t). */
 export function invertRigid(g: IRigid): IRigid {
   const r = g.r;
   const t = g.t;
+  const si = 1 / g.s;
   const ri = Float64Array.of(r[0], r[3], r[6], r[1], r[4], r[7], r[2], r[5], r[8]);
   const ti = Float64Array.of(
-    -(ri[0] * t[0] + ri[1] * t[1] + ri[2] * t[2]),
-    -(ri[3] * t[0] + ri[4] * t[1] + ri[5] * t[2]),
-    -(ri[6] * t[0] + ri[7] * t[1] + ri[8] * t[2]),
+    -si * (ri[0] * t[0] + ri[1] * t[1] + ri[2] * t[2]),
+    -si * (ri[3] * t[0] + ri[4] * t[1] + ri[5] * t[2]),
+    -si * (ri[6] * t[0] + ri[7] * t[1] + ri[8] * t[2]),
   );
-  return { r: ri, t: ti };
+  return { r: ri, t: ti, s: si };
 }
 
 /** a ∘ b : x ↦ a(b(x)). */
@@ -49,7 +56,12 @@ export function composeRigid(a: IRigid, b: IRigid): IRigid {
   const r = mul3(a.r, b.r);
   const t = new Float64Array(3);
   applyRigid(a, b.t[0], b.t[1], b.t[2], t);
-  return { r, t };
+  return { r, t, s: a.s * b.s };
+}
+
+/** Same rotation and translation direction, different scale about the origin: s·R·x + t. */
+export function withScale(g: IRigid, s: number): IRigid {
+  return { r: Float64Array.from(g.r), t: Float64Array.from(g.t), s };
 }
 
 /** Row-major 3×3 product a·b. */
@@ -73,19 +85,29 @@ export function det3(a: ArrayLike<number>): number {
   );
 }
 
-/** Contract Mat4 (column-major) from a rigid transform. */
+/** Contract Mat4 (column-major) from a similarity transform (3×3 block = s·R). */
 export function rigidToMat4(g: IRigid): Mat4 {
   const r = g.r;
   const t = g.t;
-  return [r[0], r[3], r[6], 0, r[1], r[4], r[7], 0, r[2], r[5], r[8], 0, t[0], t[1], t[2], 1];
+  const s = g.s;
+  return [
+    s * r[0], s * r[3], s * r[6], 0,
+    s * r[1], s * r[4], s * r[7], 0,
+    s * r[2], s * r[5], s * r[8], 0,
+    t[0], t[1], t[2], 1,
+  ];
 }
 
-/** Rigid transform from a column-major Mat4 (the projective row is ignored). */
+/**
+ * Similarity transform from a column-major Mat4 (the projective row is ignored). The
+ * uniform scale is the cube root of the 3×3 determinant; the rotation is the block / s.
+ */
 export function mat4ToRigid(m: ArrayLike<number>): IRigid {
-  return {
-    r: Float64Array.of(m[0], m[4], m[8], m[1], m[5], m[9], m[2], m[6], m[10]),
-    t: Float64Array.of(m[12], m[13], m[14]),
-  };
+  const M = Float64Array.of(m[0], m[4], m[8], m[1], m[5], m[9], m[2], m[6], m[10]);
+  const d = det3(M);
+  const s = d > 0 ? Math.cbrt(d) : Math.hypot(M[0], M[3], M[6]) || 1;
+  const r = M.map((v) => v / s);
+  return { r, t: Float64Array.of(m[12], m[13], m[14]), s };
 }
 
 /** Rotation angle in radians (robust for small and large angles). */
@@ -218,12 +240,21 @@ export function quaternionToMatrix(w: number, x: number, y: number, z: number): 
 }
 
 /**
- * Horn (1987) closed-form absolute orientation: the rigid transform minimising
- * Σ |R·src_i + t − dst_i|². src/dst are interleaved xyz with `count` points each.
+ * Horn (1987) closed-form absolute orientation: the transform minimising
+ * Σ |s·R·src_i + t − dst_i|². src/dst are interleaved xyz with `count` points each.
  * The optimal rotation is the unit quaternion = eigenvector of the largest eigenvalue of
- * Horn's symmetric 4×4 matrix N, found with the Jacobi solver above.
+ * Horn's symmetric 4×4 matrix N, found with the Jacobi solver above; it does not depend on
+ * the scale. `scale`: a number keeps s fixed (default 1 = rigid); 'free' estimates it as
+ * s = Σ q'·R·p' / Σ |p'|² (Umeyama's least-squares scale for this objective), clamped to
+ * `scaleBounds` when given (guards trimmed ICP against collapsing the source).
  */
-export function hornRigid(src: ArrayLike<number>, dst: ArrayLike<number>, count: number): IRigid {
+export function hornRigid(
+  src: ArrayLike<number>,
+  dst: ArrayLike<number>,
+  count: number,
+  scale: number | 'free' = 1,
+  scaleBounds?: [number, number],
+): IRigid {
   if (count <= 0) return identityRigid();
   let psx = 0;
   let psy = 0;
@@ -292,12 +323,26 @@ export function hornRigid(src: ArrayLike<number>, dst: ArrayLike<number>, count:
     z = -z;
   }
   const r = quaternionToMatrix(w, x, y, z);
+  let s = scale === 'free' ? 1 : scale;
+  if (scale === 'free') {
+    // s = Σ q'ᵀ R p' / Σ |p'|²  with  Σ q'ᵀ R p' = Σ_ij R_ij S_ji  (S_ab = Σ p'_a q'_b).
+    const S = [sxx, sxy, sxz, syx, syy, syz, szx, szy, szz];
+    let num = 0;
+    for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++) num += r[i * 3 + j] * S[j * 3 + i];
+    let den = 0;
+    for (let i = 0; i < count; i++) {
+      const o = i * 3;
+      den += (src[o] - pcx) ** 2 + (src[o + 1] - pcy) ** 2 + (src[o + 2] - pcz) ** 2;
+    }
+    s = den > 0 && num > 0 ? num / den : 1;
+    if (scaleBounds) s = Math.min(scaleBounds[1], Math.max(scaleBounds[0], s));
+  }
   const t = Float64Array.of(
-    qcx - (r[0] * pcx + r[1] * pcy + r[2] * pcz),
-    qcy - (r[3] * pcx + r[4] * pcy + r[5] * pcz),
-    qcz - (r[6] * pcx + r[7] * pcy + r[8] * pcz),
+    qcx - s * (r[0] * pcx + r[1] * pcy + r[2] * pcz),
+    qcy - s * (r[3] * pcx + r[4] * pcy + r[5] * pcz),
+    qcz - s * (r[6] * pcx + r[7] * pcy + r[8] * pcz),
   );
-  return { r, t };
+  return { r, t, s };
 }
 
 /** Exact rotation matrix (row-major) for the rotation vector ω (axis · angle). */
@@ -345,14 +390,16 @@ export function solveLinear(A: Float64Array, b: Float64Array, n: number): Float6
 
 /**
  * One linearised point-to-plane step (Chen & Medioni): the rigid Δ minimising
- * Σ ((Δ(p_i) − q_i) · n_i)² for small rotations, with Δ(x) = R(ω)(x − c) + c + τ.
- * Rows are centred on the centroid c and the rotation block scaled by the RMS radius for
- * conditioning; a tiny Tikhonov term keeps directions the surface does not constrain
- * (sliding along a plane / spinning a cylinder) at zero instead of drifting.
- * p, q, n are interleaved xyz; n must be unit normals (zero rows are ignored).
+ * Σ ((Δ(p_i) − q_i) · n_i)² for small rotations, with Δ(x) = R(ω)(x − c) + c + τ — or, with
+ * `withScale`, the similarity Δ(x) = (1 + σ)·R(ω)(x − c) + c + τ (7 unknowns).
+ * Rows are centred on the centroid c and the rotation/scale columns scaled by the RMS radius
+ * for conditioning; a tiny Tikhonov term keeps directions the surface does not constrain
+ * (sliding along a plane / spinning a cylinder / scaling a plane in itself) at zero instead
+ * of drifting. p, q, n are interleaved xyz; n must be unit normals (zero rows are ignored).
  */
-export function pointToPlaneStep(p: Float64Array, q: Float64Array, n: Float64Array, count: number): IRigid {
+export function pointToPlaneStep(p: Float64Array, q: Float64Array, n: Float64Array, count: number, withScale = false): IRigid {
   if (count <= 0) return identityRigid();
+  const dim = withScale ? 7 : 6;
   let cx = 0;
   let cy = 0;
   let cz = 0;
@@ -367,9 +414,9 @@ export function pointToPlaneStep(p: Float64Array, q: Float64Array, n: Float64Arr
   let r2 = 0;
   for (let i = 0; i < count; i++) r2 += (p[i * 3] - cx) ** 2 + (p[i * 3 + 1] - cy) ** 2 + (p[i * 3 + 2] - cz) ** 2;
   const rho = Math.sqrt(r2 / count) || 1;
-  const A = new Float64Array(36);
-  const g = new Float64Array(6);
-  const a = new Float64Array(6);
+  const A = new Float64Array(dim * dim);
+  const g = new Float64Array(dim);
+  const a = new Float64Array(dim);
   for (let i = 0; i < count; i++) {
     const o = i * 3;
     const dx = (p[o] - cx) / rho;
@@ -384,27 +431,29 @@ export function pointToPlaneStep(p: Float64Array, q: Float64Array, n: Float64Arr
     a[3] = nx;
     a[4] = ny;
     a[5] = nz;
+    if (withScale) a[6] = dx * nx + dy * ny + dz * nz;
     const res = (q[o] - p[o]) * nx + (q[o + 1] - p[o + 1]) * ny + (q[o + 2] - p[o + 2]) * nz;
-    for (let j = 0; j < 6; j++) {
+    for (let j = 0; j < dim; j++) {
       g[j] += a[j] * res;
-      for (let k = 0; k <= j; k++) A[j * 6 + k] += a[j] * a[k];
+      for (let k = 0; k <= j; k++) A[j * dim + k] += a[j] * a[k];
     }
   }
   let trace = 0;
-  for (let j = 0; j < 6; j++) {
-    trace += A[j * 6 + j];
-    for (let k = 0; k < j; k++) A[k * 6 + j] = A[j * 6 + k];
+  for (let j = 0; j < dim; j++) {
+    trace += A[j * dim + j];
+    for (let k = 0; k < j; k++) A[k * dim + j] = A[j * dim + k];
   }
-  const lambda = 1e-9 * (trace / 6) + 1e-300;
-  for (let j = 0; j < 6; j++) A[j * 6 + j] += lambda;
-  const x = solveLinear(A, g, 6);
+  const lambda = 1e-9 * (trace / dim) + 1e-300;
+  for (let j = 0; j < dim; j++) A[j * dim + j] += lambda;
+  const x = solveLinear(A, g, dim);
   const r = rodrigues(x[0] / rho, x[1] / rho, x[2] / rho);
+  const s = withScale ? Math.max(0.5, Math.min(2, 1 + x[6] / rho)) : 1;
   const t = Float64Array.of(
-    cx + x[3] - (r[0] * cx + r[1] * cy + r[2] * cz),
-    cy + x[4] - (r[3] * cx + r[4] * cy + r[5] * cz),
-    cz + x[5] - (r[6] * cx + r[7] * cy + r[8] * cz),
+    cx + x[3] - s * (r[0] * cx + r[1] * cy + r[2] * cz),
+    cy + x[4] - s * (r[3] * cx + r[4] * cy + r[5] * cz),
+    cz + x[5] - s * (r[6] * cx + r[7] * cy + r[8] * cz),
   );
-  return { r, t };
+  return { r, t, s };
 }
 
 export interface IMoments {

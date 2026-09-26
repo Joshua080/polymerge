@@ -63,11 +63,13 @@
  */
 import { hasNeighbor, type IAdjacency } from './adjacency.js';
 import { pct, identityAlignment, type DiffContext, type ITierOutcome } from './context.js';
-import { PairHeap } from './heap.js';
+import { identityRigid } from './linalg.js';
+import { recoverPartsTopological } from './parts.js';
+import { PROPAGATION_ADJACENCY_WEIGHT, PROPAGATION_COST_CUTOFF, Propagator } from './propagate.js';
 import { closestPointOnTriangle, type KdTree } from './spatial.js';
 
-export const TIER2_ADJACENCY_WEIGHT = 2;
-export const TIER2_COST_CUTOFF = 3;
+export const TIER2_ADJACENCY_WEIGHT = PROPAGATION_ADJACENCY_WEIGHT;
+export const TIER2_COST_CUTOFF = PROPAGATION_COST_CUTOFF;
 
 export function runTier2(ctx: DiffContext): ITierOutcome {
   const { base, target } = ctx;
@@ -138,111 +140,18 @@ export function runTier2(ctx: DiffContext): ITierOutcome {
     };
   }
 
-  // ---- 2. Propagation ------------------------------------------------------------------
+  // ---- 2. Propagation (propagate.ts) ----------------------------------------------------
   const adjB = ctx.baseAdjacency;
   const adjT = ctx.targetAdjacency;
   const offB = adjB.offsets;
   const nbB = adjB.neighbors;
   const offT = adjT.offsets;
   const nbT = adjT.neighbors;
-  const vf = ctx.baseVertexFaces;
-  const offVF = vf.offsets;
-  const listVF = vf.neighbors;
-  const bf = base.faces;
-  const tSet = ctx.targetFaceSet;
   const Lb = ctx.baseEdgeLengths;
   const Lt = ctx.targetEdgeLengths;
-  const W = TIER2_ADJACENCY_WEIGHT;
-  const CUT = TIER2_COST_CUTOFF;
-  const heap = new PairHeap(Math.max(1024, Math.min(1 << 20, 4 * (nB - seeds) + 64)));
-  let maxAcceptedCost = 0;
-  let heapPops = 0;
-
-  const cost = (bv: number, tv: number): number => {
-    // Face support gate.
-    let supported = false;
-    for (let i = offVF[bv], e = offVF[bv + 1]; i < e; i++) {
-      const f = listVF[i] * 3;
-      const v0 = bf[f];
-      const v1 = bf[f + 1];
-      const v2 = bf[f + 2];
-      const x = v0 === bv ? v1 : v0;
-      const y = v2 === bv ? v1 : v2;
-      const tx = b2t[x];
-      const ty = b2t[y];
-      if (tx >= 0 && ty >= 0 && tSet.has(tv, tx, ty)) {
-        supported = true;
-        break;
-      }
-    }
-    if (!supported) return Infinity;
-    let mb = 0;
-    let a = 0;
-    let sx = 0;
-    let sy = 0;
-    let sz = 0;
-    for (let i = offB[bv], e = offB[bv + 1]; i < e; i++) {
-      const bn = nbB[i];
-      const tn = b2t[bn];
-      if (tn < 0) continue;
-      mb++;
-      if (hasNeighbor(adjT, tv, tn)) {
-        a++;
-        sx += tp[tn * 3] - bp[bn * 3];
-        sy += tp[tn * 3 + 1] - bp[bn * 3 + 1];
-        sz += tp[tn * 3 + 2] - bp[bn * 3 + 2];
-      }
-    }
-    if (a === 0) return Infinity;
-    let mt = 0;
-    for (let j = offT[tv], e = offT[tv + 1]; j < e; j++) if (t2b[nbT[j]] >= 0) mt++;
-    const J = a / (mb + mt - a);
-    const px = bp[bv * 3] + sx / a;
-    const py = bp[bv * 3 + 1] + sy / a;
-    const pz = bp[bv * 3 + 2] + sz / a;
-    const L = 0.5 * (Lb[bv] + Lt[tv]);
-    const g = Math.hypot(tp[tv * 3] - px, tp[tv * 3 + 1] - py, tp[tv * 3 + 2] - pz) / L;
-    return g / Math.sqrt(a) + W * (1 - J);
-  };
-
-  const pushFrom = (b: number, t: number): void => {
-    for (let i = offB[b], ei = offB[b + 1]; i < ei; i++) {
-      const bv = nbB[i];
-      if (b2t[bv] >= 0) continue;
-      for (let j = offT[t], ej = offT[t + 1]; j < ej; j++) {
-        const tv = nbT[j];
-        if (t2b[tv] >= 0) continue;
-        const c = cost(bv, tv);
-        if (c <= CUT) heap.push(c, bv, tv);
-      }
-    }
-  };
-
-  const drain = (): number => {
-    let accepted = 0;
-    while (heap.pop()) {
-      heapPops++;
-      const c0 = heap.topCost;
-      const bv = heap.topA;
-      const tv = heap.topB;
-      if (b2t[bv] >= 0 || t2b[tv] >= 0) continue;
-      const c = cost(bv, tv);
-      if (c > c0) {
-        // Stale (agreement dropped since the push): re-queue at its current cost.
-        if (c <= CUT) heap.push(c, bv, tv);
-        continue;
-      }
-      b2t[bv] = tv;
-      t2b[tv] = bv;
-      accepted++;
-      if (c > maxAcceptedCost) maxAcceptedCost = c;
-      pushFrom(bv, tv);
-    }
-    return accepted;
-  };
-
-  for (let b = 0; b < nB; b++) if (b2t[b] >= 0) pushFrom(b, b2t[b]);
-  let propagated = drain();
+  const prop = new Propagator(ctx, b2t, t2b, 4 * (nB - seeds) + 64);
+  for (let b = 0; b < nB; b++) if (b2t[b] >= 0) prop.pushFrom(b, b2t[b]);
+  let propagated = prop.drain();
 
   // ---- 3. Leftovers by near-exact position ---------------------------------------------
   const takenT = new Uint8Array(nT);
@@ -263,8 +172,22 @@ export function runTier2(ctx: DiffContext): ITierOutcome {
   }
   const leftoverMatched = fresh.length;
   if (leftoverMatched > 0) {
-    for (const b of fresh) pushFrom(b, b2t[b]);
-    propagated += drain();
+    for (const b of fresh) prop.pushFrom(b, b2t[b]);
+    propagated += prop.drain();
+  }
+
+  // ---- 3b. Moved parts: components that moved rigidly on their own ------------------------
+  // Positional seeds cannot exist inside a part that moved away from where it was; rigid
+  // registration of the still-unmatched components re-matches it (parts.ts), so it reads as
+  // Moved instead of Removed + Added — and counts towards coverage below.
+  const parts = ctx.options.detectParts ? recoverPartsTopological(ctx, identityRigid(), b2t, t2b) : [];
+  const inPart = new Uint8Array(nT);
+  let partMatched = 0;
+  for (const p of parts) {
+    for (const t of p.targetVertices) {
+      inPart[t] = 1;
+      if (t2b[t] >= 0) partMatched++;
+    }
   }
 
   // ---- 4. Score ------------------------------------------------------------------------
@@ -323,6 +246,7 @@ export function runTier2(ctx: DiffContext): ITierOutcome {
     const z = tp[t * 3 + 2];
     const b = t2b[t];
     if (b >= 0) {
+      if (inPart[t]) continue; // a registered rigid part motion is not a retessellation slide
       const d = Math.hypot(bp[b * 3] - x, bp[b * 3 + 1] - y, bp[b * 3 + 2] - z);
       if (d > eps && baseNear.within(x, y, z, 0.25 * d * d)) slid++;
     } else {
@@ -341,6 +265,9 @@ export function runTier2(ctx: DiffContext): ITierOutcome {
     `${seeds} seed(s) within moveEpsilon${ambiguous > 0 ? ` (+${ambiguous} ambiguous deferred)` : ''}, ` +
     `${propagated} propagated, ${leftoverMatched} exact-position leftover(s) → ` +
     `${matched}/${minV} of the smaller mesh matched (${pct(matchedFraction)}), edge consistency ${pct(edgeConsistency)}`;
+  if (parts.length > 0) {
+    reason += `; ${parts.length} moved part(s) re-matched by rigid registration (${partMatched} vertices)`;
+  }
   if (slid + onSurface > 0) {
     reason +=
       `; retessellation evidence: ${slid} match(es) slid along the old surface, ` +
@@ -362,12 +289,14 @@ export function runTier2(ctx: DiffContext): ITierOutcome {
       slidMatches: slid,
       onSurfaceUnmatched: onSurface,
       coverage,
-      maxAcceptedCost,
-      heapPops,
+      partsRecovered: parts.length,
+      maxAcceptedCost: prop.maxAcceptedCost,
+      heapPops: prop.heapPops,
     },
     targetToBase: t2b,
     baseToTarget: b2t,
     alignment: identityAlignment(),
+    parts,
   };
 }
 

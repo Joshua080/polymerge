@@ -4,7 +4,6 @@ import {
   MeshLoadError,
   TIER_NAMES,
   describeVertexChange,
-  diffMeshes,
   getPosition,
   serializeDiff,
   summarizeMesh,
@@ -15,6 +14,7 @@ import {
   type Vec3,
 } from '@polymerge/core';
 import { h, nextFrame, setChildren, swatch } from './dom.js';
+import { DiffEngine } from './engine.js';
 import { patch, publish, snapshot, type IPolymergeHook } from './hook.js';
 import {
   renderAttempts,
@@ -65,6 +65,8 @@ export class App {
   private source = '';
   private seq = 0;
   private engineLog: string[] = [];
+  /** Runs diffMeshes in a Web Worker (main-thread fallback). */
+  private readonly engine = new DiffEngine(new URLSearchParams(location.search).get('worker') !== '0');
   private manifest: Promise<IManifestInfo | null>;
   private currentCase: IFixtureCase | null = null;
   private touchedLayers = new Set<keyof ILayerVisibility>();
@@ -459,32 +461,28 @@ export class App {
     const target = this.target;
     if (!base || !target) return;
     this.setLoading('Computing diff…');
-    // Let the overlay paint before the (synchronous) engine blocks the main thread.
-    await nextFrame();
+    // Let the overlay paint first (matters for the main-thread fallback; the worker never blocks).
     await nextFrame();
     if (seq !== this.seq) return;
     const log: string[] = [];
-    const options: IDiffOptions = {
-      logger: {
-        info: (m) => {
-          log.push(m);
-          console.info(m);
-        },
-        warn: (m) => {
-          log.push(`WARN ${m}`);
-          console.warn(m);
-        },
-        debug: (m) => {
-          log.push(`debug ${m}`);
-        },
-      },
-    };
+    const options: Omit<IDiffOptions, 'logger'> = {};
     const forced = Number(this.el.tierSelect.value);
     if (forced === 1 || forced === 2 || forced === 3) options.forceTier = forced;
     let result: IDiffResult;
     try {
-      result = diffMeshes(base.mesh, target.mesh, options);
+      result = await this.engine.run(base.mesh, target.mesh, options, (level, m) => {
+        if (level === 'info') {
+          log.push(m);
+          console.info(m);
+          // Live progress in the overlay (tier attempts as they happen).
+          if (seq === this.seq) this.el.overlayMsg.textContent = m.replace(/^\[polymerge\]\s*/, '');
+        } else if (level === 'warn') {
+          log.push(`WARN ${m}`);
+          console.warn(m);
+        } else log.push(`debug ${m}`);
+      });
     } catch (err) {
+      if ((err as Error).name === 'AbortError') return; // superseded by a newer diff
       this.engineLog = log;
       this.renderEngineLog();
       if (seq === this.seq) this.fail('Diff failed', err);
@@ -771,6 +769,8 @@ export class App {
       hook.attempts = r.attempts;
       hook.base = r.base;
       hook.target = r.target;
+      hook.engine = this.engine.mode;
+      hook.parts = r.parts?.length ?? 0;
     } else {
       if (this.base) hook.base = summarizeMesh(this.base.mesh);
       if (this.target) hook.target = summarizeMesh(this.target.mesh);

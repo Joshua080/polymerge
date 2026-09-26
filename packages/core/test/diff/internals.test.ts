@@ -75,7 +75,7 @@ describe('linalg', () => {
   });
 
   it('rigid helpers: inverse, compose, Mat4 round trip, rotation angle', () => {
-    const g = { r: Float64Array.from(axisAngle([1, 2, 3], 30)), t: Float64Array.of(5, -3, 2) };
+    const g = { r: Float64Array.from(axisAngle([1, 2, 3], 30)), t: Float64Array.of(5, -3, 2), s: 1 };
     const id = composeRigid(g, invertRigid(g));
     for (let k = 0; k < 9; k++) expect(id.r[k]).toBeCloseTo(k % 4 === 0 ? 1 : 0, 14);
     for (let k = 0; k < 3; k++) expect(id.t[k]).toBeCloseTo(0, 13);
@@ -85,9 +85,44 @@ describe('linalg', () => {
     const viaMat = transformPoint(m, [1, 2, 3]);
     for (let k = 0; k < 3; k++) expect(viaMat[k]).toBeCloseTo(out[k], 13);
     const back = mat4ToRigid(m);
-    expect(Array.from(back.r)).toEqual(Array.from(g.r));
+    for (let k = 0; k < 9; k++) expect(back.r[k]).toBeCloseTo(g.r[k], 14);
+    expect(back.s).toBeCloseTo(1, 14);
     expect((rotationAngle(g.r) * 180) / Math.PI).toBeCloseTo(30, 10);
     expect((rotationAngle(quaternionToMatrix(0, 1, 0, 0)) * 180) / Math.PI).toBeCloseTo(180, 10);
+  });
+
+  it('similarity helpers: scale survives inverse, compose and the Mat4 round trip', () => {
+    const g = { r: Float64Array.from(axisAngle([0, 1, 2], 70)), t: Float64Array.of(1, 2, 3), s: 25.4 };
+    const id = composeRigid(invertRigid(g), g);
+    expect(id.s).toBeCloseTo(1, 14);
+    for (let k = 0; k < 9; k++) expect(id.r[k]).toBeCloseTo(k % 4 === 0 ? 1 : 0, 13);
+    for (let k = 0; k < 3; k++) expect(id.t[k]).toBeCloseTo(0, 12);
+    const m = rigidToMat4(g);
+    const out = new Float64Array(3);
+    applyRigid(g, 1, -2, 0.5, out);
+    const viaMat = transformPoint(m, [1, -2, 0.5]);
+    for (let k = 0; k < 3; k++) expect(viaMat[k]).toBeCloseTo(out[k], 11);
+    const back = mat4ToRigid(m);
+    expect(back.s).toBeCloseTo(25.4, 12);
+    for (let k = 0; k < 9; k++) expect(back.r[k]).toBeCloseTo(g.r[k], 13);
+  });
+
+  it('Horn with free scale recovers a similarity exactly; fixed scale keeps it', () => {
+    const src = Float64Array.from([0, 0, 0, 1, 0, 0, 0, 2, 0, 0, 0, 3, 1, 1, 1, -1, 2, 0.5]);
+    const R = axisAngle([1, 1, 0], 40);
+    const dst = new Float64Array(src.length);
+    for (let i = 0; i < src.length; i += 3) {
+      for (let a = 0; a < 3; a++) {
+        dst[i + a] = 2.5 * (R[a * 3] * src[i] + R[a * 3 + 1] * src[i + 1] + R[a * 3 + 2] * src[i + 2]) + [4, -1, 7][a];
+      }
+    }
+    const free = hornRigid(src, dst, 6, 'free');
+    expect(free.s).toBeCloseTo(2.5, 12);
+    for (let k = 0; k < 9; k++) expect(free.r[k]).toBeCloseTo(R[k], 12);
+    expect(Array.from(free.t).map((v) => Number(v.toFixed(9)))).toEqual([4, -1, 7]);
+    expect(hornRigid(src, dst, 6).s).toBe(1);
+    expect(hornRigid(src, dst, 6, 2.5).t[1]).toBeCloseTo(-1, 12);
+    expect(hornRigid(src, dst, 6, 'free', [0.5, 2]).s).toBe(2);
   });
 
   it('surface moments are tessellation-independent (area weighted)', () => {

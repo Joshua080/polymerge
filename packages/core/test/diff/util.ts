@@ -205,6 +205,52 @@ export function transformMesh(mesh: IMesh, r: number[], t: [number, number, numb
   return createMesh(out, mesh.faces, { metadata: { sourceName: mesh.metadata.sourceName } });
 }
 
+/** Uniformly scaled row-major rotation (s·R), for similarity transforms. */
+export function scaled(r: number[], s: number): number[] {
+  return r.map((v) => v * s);
+}
+
+/** Mean of a mesh's vertex positions. */
+export function vertexCentroid(mesh: IMesh): [number, number, number] {
+  const p = mesh.positions;
+  const c: [number, number, number] = [0, 0, 0];
+  for (let i = 0; i < p.length; i += 3) {
+    c[0] += p[i];
+    c[1] += p[i + 1];
+    c[2] += p[i + 2];
+  }
+  const n = mesh.vertexCount || 1;
+  return [c[0] / n, c[1] / n, c[2] / n];
+}
+
+/** Rigidly move a part: rotate by R about its vertex centroid, then translate by d. */
+export function moveRigid(mesh: IMesh, r: number[], d: [number, number, number]): IMesh {
+  const c = vertexCentroid(mesh);
+  const t: [number, number, number] = [
+    c[0] + d[0] - (r[0] * c[0] + r[1] * c[1] + r[2] * c[2]),
+    c[1] + d[1] - (r[3] * c[0] + r[4] * c[1] + r[5] * c[2]),
+    c[2] + d[2] - (r[6] * c[0] + r[7] * c[1] + r[8] * c[2]),
+  ];
+  return transformMesh(mesh, r, t);
+}
+
+/**
+ * Concatenate meshes into one multi-part mesh (vertices and faces appended in order).
+ * Returns the mesh and each part's first vertex index.
+ */
+export function combineMeshes(parts: IMesh[]): { mesh: IMesh; offsets: number[] } {
+  const pos: number[] = [];
+  const faces: number[] = [];
+  const offsets: number[] = [];
+  for (const p of parts) {
+    const o = pos.length / 3;
+    offsets.push(o);
+    pos.push(...p.positions);
+    for (const f of p.faces) faces.push(f + o);
+  }
+  return { mesh: createMesh(pos, faces, { metadata: { sourceName: 'assembly' } }), offsets };
+}
+
 /** Copy of `mesh` with some vertices displaced. */
 export function withMoves(mesh: IMesh, moves: Record<number, [number, number, number]>): IMesh {
   const pos = Float64Array.from(mesh.positions);

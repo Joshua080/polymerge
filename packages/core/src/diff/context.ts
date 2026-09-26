@@ -6,7 +6,9 @@
 import { boundsDiagonal, computeBounds, IDENTITY_MAT4 } from '../mesh.js';
 import type { IBounds, IDiffOptions, IMesh, IRigidTransform, MatchTier } from '../types.js';
 import { buildAdjacency, buildVertexFaces, meanEdgeLengths, type IAdjacency } from './adjacency.js';
+import { buildComponents, type IComponents } from './components.js';
 import { FaceSet } from './faceset.js';
+import type { IRigid } from './linalg.js';
 import { KdTree, TriangleBvh } from './spatial.js';
 
 /** Default acceptance thresholds (see tier1.ts / tier2.ts for the score definitions). */
@@ -27,6 +29,9 @@ export interface IResolvedOptions {
   thresholds: { tier1: number; tier2: number };
   icp: { maxIterations: number; convergence: number };
   forceTier?: MatchTier;
+  detectScale: boolean;
+  detectGlobalTransform: boolean;
+  detectParts: boolean;
 }
 
 function checkNonNegative(name: string, v: number | undefined): void {
@@ -68,11 +73,28 @@ export function resolveOptions(baseBounds: IBounds, targetBounds: IBounds, optio
       convergence: options.icp?.convergence ?? DEFAULT_ICP.convergence,
     },
     forceTier: options.forceTier,
+    detectScale: options.detectScale ?? true,
+    detectGlobalTransform: options.detectGlobalTransform ?? true,
+    detectParts: options.detectParts ?? true,
   };
 }
 
 export function identityAlignment(): IRigidTransform {
-  return { matrix: Array.from(IDENTITY_MAT4), rmsError: 0, iterations: 0, isIdentity: true };
+  return { matrix: Array.from(IDENTITY_MAT4), scale: 1, rmsError: 0, iterations: 0, isIdentity: true };
+}
+
+/** A part motion while the engine works (finalised into IPartMotion at the end). */
+export interface IPartInternal {
+  source: 'registration' | 'matched';
+  baseComponent: number;
+  targetComponent: number;
+  baseVertices: Uint32Array;
+  targetVertices: Uint32Array;
+  /** Full base → target transform of the part (includes the global alignment in force when found). */
+  transform: IRigid;
+  matchedVertices: number;
+  deformedVertices: number;
+  rmsError: number;
 }
 
 /** What every tier hands to the shared classifier. */
@@ -92,6 +114,8 @@ export interface ITierOutcome {
    * classifier measures matched-pair displacement instead.
    */
   surfaceDistance?: { target: Float64Array; base: Float64Array };
+  /** Parts found to move rigidly on their own (see parts.ts). */
+  parts?: IPartInternal[];
 }
 
 export class DiffContext {
@@ -109,6 +133,8 @@ export class DiffContext {
   private _tkd?: KdTree;
   private _bbvh?: TriangleBvh;
   private _tbvh?: TriangleBvh;
+  private _bcc?: IComponents;
+  private _tcc?: IComponents;
 
   constructor(
     readonly base: IMesh,
@@ -158,6 +184,14 @@ export class DiffContext {
   }
   get targetBvh(): TriangleBvh {
     return (this._tbvh ??= new TriangleBvh(this.target.positions, this.target.faces));
+  }
+  /** Connected components (parts) of the base mesh. */
+  get baseComponents(): IComponents {
+    return (this._bcc ??= buildComponents(this.base.vertexCount, this.base.faces));
+  }
+  /** Connected components (parts) of the target mesh. */
+  get targetComponents(): IComponents {
+    return (this._tcc ??= buildComponents(this.target.vertexCount, this.target.faces));
   }
 }
 

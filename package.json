@@ -19,7 +19,7 @@
     "test:watch": "vitest",
     "dev": "npm run dev -w @polymerge/web",
     "fixtures": "tsx fixtures/generate.ts",
-    "e2e": "node apps/web/e2e/smoke.mjs && node scripts/e2e-view.mjs",
+    "e2e": "node apps/web/e2e/smoke.mjs && node scripts/e2e-view.mjs && node scripts/e2e-worker.mjs && node scripts/e2e-git.mjs",
     "polymerge": "node packages/cli/dist/cli.js",
     "verify": "npm run typecheck && npm test && npm run build && npm run e2e"
   },

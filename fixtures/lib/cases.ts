@@ -35,7 +35,7 @@ import {
   valences,
   type KMesh,
 } from './kmesh.js';
-import { boundsDiagonal, composeTRS, covarianceEigenvalues, normalize, pointTriangleDistance, quatFromAxisAngle, type Quat } from './math.js';
+import { applyMat4, boundsDiagonal, composeTRS, covarianceEigenvalues, normalize, pointTriangleDistance, quatFromAxisAngle, type Quat } from './math.js';
 import { permutation, randomInts } from './prng.js';
 import {
   exactPositionMatches,
@@ -930,6 +930,142 @@ function remeshBox(): CaseDraft {
 // assembly
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Session 2 regression cases: moved parts and unit mismatch
+// ---------------------------------------------------------------------------
+
+/** Rotate `m` by quaternion q about the vertex centroid, then translate by d (float32-rounded). */
+function moveRigidly(m: KMesh, q: Quat, d: Vec3): KMesh {
+  const n = m.positions.length;
+  const c = m.positions.reduce<Vec3>((acc, p) => [acc[0] + p[0] / n, acc[1] + p[1] / n, acc[2] + p[2] / n], [0, 0, 0]);
+  const rot = composeTRS([0, 0, 0], q);
+  return mapPositions(m, (p) => {
+    const r = applyMat4(rot, [p[0] - c[0], p[1] - c[1], p[2] - c[2]]);
+    return [r[0] + c[0] + d[0], r[1] + c[1] + d[1], r[2] + c[2] + d[2]];
+  });
+}
+
+function movedPart(): CaseDraft {
+  const id = 'moved-part';
+  const body = lBracket('L:');
+  const part = mapPositions(lBracket('P:'), (p) => [0.5 * p[0] + 6, 0.5 * p[1], 0.5 * p[2]]);
+  const base0 = appendMesh(body, part);
+  const angle = 30;
+  const shift: Vec3 = [0, 2.5, 0.5];
+  const movedP = moveRigidly(part, quatFromAxisAngle([0, 0, 1], angle), shift);
+  let t = appendMesh(body, movedP);
+  t = rotateCorners(reorderFaces(t, permutation(t.faces.length, 0x9a1)), randomInts(t.faces.length, 3, 0x9a2));
+  const base = prepare(obj(base0, id, 'base'));
+  const target = prepare(obj(t, id, 'target', permutation(t.positions.length, 0x9a3)));
+  const ref = referenceDiff(base.welded, target.welded);
+  const nBody = body.positions.length;
+  const nPart = part.positions.length;
+  assertHand(`${id} vertices`, ref.stats.vertices, { unchanged: nBody, moved: nPart, added: 0, removed: 0 });
+  assertHand(`${id} faces`, ref.stats.faces, { unchanged: body.faces.length, modified: part.faces.length, added: 0, removed: 0 });
+  assertHand(`${id} nothing coincides`, exactPositionMatches(base.welded, target.welded), nBody);
+  return {
+    id,
+    title: 'A separate part rotated 30° and moved on its own, order shuffled (OBJ ↔ OBJ)',
+    description:
+      `Base: an L-bracket body (${nBody} vertices) plus a separate half-size L-bracket part (${nPart} vertices) at x ≈ 6, ` +
+      `as one OBJ. Target: the part alone rotated ${angle}° about +z around its centroid and moved by (0, 2.5, 0.5); the ` +
+      'body is untouched; triangle order, corners and v lines shuffled so only geometry can explain the correspondence. ' +
+      'Regression for the session-1 bug where such a part read as Removed + Added: no vertex of the part keeps its ' +
+      'position, so Tier 2 has no seeds there and must re-match the part by rigid registration. Expected: Tier 2, the ' +
+      `body Unchanged, all ${nPart} part vertices Moved with their exact partners, one reported part motion.`,
+    base,
+    target,
+    expect: { ...exactExpect([2], base, target, ref), parts: 1 },
+  };
+}
+
+function unitsInchToMm(): CaseDraft {
+  const id = 'units-inch-to-mm';
+  const solid = lBracket('U:');
+  const q = quatFromAxisAngle([0, 0, 1], 90);
+  const translation: Vec3 = [10, 20, 0];
+  const matrix = composeTRS(translation, q, [25.4, 25.4, 25.4]);
+  let t = mapPositions(solid, (p) => applyMat4(matrix, p));
+  t = rotateCorners(reorderFaces(t, permutation(t.faces.length, 0xb11)), randomInts(t.faces.length, 3, 0xb12));
+  const base = prepare(stl(solid, 'binary', id, 'base'));
+  const target = prepare(obj(t, id, 'target', permutation(t.positions.length, 0xb13)));
+  const ideal = referenceDiff(base.welded, target.welded, { checkTriples: false, baseToTarget: matrix });
+  const n = base.welded.positions.length;
+  const f = base.welded.faces.length;
+  assertHand(`${id} ideal is all unchanged`, [ideal.stats.vertices.unchanged, ideal.stats.faces.unchanged], [n, f]);
+  const maxResidual = Math.max(...ideal.displacement);
+  if (maxResidual > ideal.moveEpsilon / 4) throw new Error(`${id}: float32 residual ${maxResidual} too close to moveEpsilon`);
+  assertHand(`${id} nothing coincides`, exactPositionMatches(base.welded, target.welded), 0);
+  const slack = n - Math.ceil(0.9 * n);
+  const faceSlack = topValenceSum(base.welded, slack);
+  return {
+    id,
+    title: 'Same part exported in inches (STL) and millimetres (OBJ), rotated 90° and shuffled',
+    description:
+      `Base: the L-bracket (${n} vertices, ${f} triangles) in INCHES as binary STL. Target: the same part in MILLIMETRES ` +
+      '(×25.4), turned 90° about +z and moved by (10, 20, 0) mm, as OBJ with shuffled order — what a second modelling ' +
+      'tool with other unit settings produces. Regression for the session-1 bug where Tier 3 was rigid-only and read ' +
+      'such a pair as almost everything Added. Expected: Tier 3 with a similarity alignment whose scale snaps to exactly ' +
+      `25.4 (units in → mm); with it every vertex lies within ${maxResidual.toExponential(1)} (float32 rounding) of its ` +
+      `twin, far below moveEpsilon ≈ ${ideal.moveEpsilon.toExponential(2)}, so all vertices are Unchanged (ranges allow ` +
+      '10% ICP slack) and nothing is Added/Removed.',
+    base,
+    target,
+    expect: {
+      acceptableTiers: [3],
+      vertices: { unchanged: [n - slack, n], moved: [0, slack], added: 0, removed: 0 },
+      faces: { unchanged: [f - faceSlack, f], modified: [0, faceSlack], added: 0, removed: 0 },
+      baseMesh: size(base.welded),
+      targetMesh: size(target.welded),
+      alignment: {
+        translation,
+        rotationAxis: [0, 0, 1],
+        rotationDeg: 90,
+        tolerance: 0.01,
+        scale: 25.4,
+        units: { from: 'in', to: 'mm', factor: 25.4 },
+      },
+      mustMatch: ideal.pairs,
+      parts: 0,
+    },
+  };
+}
+
+function unitsSameLineage(): CaseDraft {
+  const id = 'units-same-lineage';
+  const solid = lBracket('S:');
+  const matrix = composeTRS([0, 0, 0], [0, 0, 0, 1], [25.4, 25.4, 25.4]);
+  const mm = mapPositions(solid, (p) => applyMat4(matrix, p));
+  const base = prepare(stl(solid, 'binary', id, 'base'));
+  const target = prepare(stl(mm, 'binary', id, 'target'));
+  const ref = referenceDiff(base.welded, target.welded, { checkTriples: true, baseToTarget: matrix });
+  const n = base.welded.positions.length;
+  assertHand(`${id} vertices`, ref.stats.vertices, { unchanged: n, moved: 0, added: 0, removed: 0 });
+  return {
+    id,
+    title: 'Same file re-exported in millimetres instead of inches, same order (STL ↔ STL)',
+    description:
+      `The L-bracket (${n} vertices) as binary STL in inches, and the identical triangle stream scaled ×25.4 (mm). ` +
+      'Index lineage is intact, so Tier 1 matches every vertex — and before session 2 reported all of them as Moved. ' +
+      'Expected now: Tier 1 plus ONE global transform (scale exactly 25.4, units in → mm, no rotation or translation), ' +
+      'with every vertex and face Unchanged relative to it.',
+    base,
+    target,
+    expect: {
+      ...exactExpect([1], base, target, ref),
+      alignment: {
+        translation: [0, 0, 0],
+        rotationAxis: [0, 0, 1],
+        rotationDeg: 0,
+        tolerance: 0.01,
+        scale: 25.4,
+        units: { from: 'in', to: 'mm', factor: 25.4 },
+      },
+      parts: 0,
+    },
+  };
+}
+
 const CASE_BUILDERS: Array<() => CaseDraft> = [
   identicalCube,
   cubeMovedCorner,
@@ -949,6 +1085,9 @@ const CASE_BUILDERS: Array<() => CaseDraft> = [
   rigidTransform,
   remeshCylinder,
   remeshBox,
+  movedPart,
+  unitsInchToMm,
+  unitsSameLineage,
 ];
 
 export const MAX_FILE_BYTES = 200 * 1024;

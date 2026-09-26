@@ -296,14 +296,18 @@ describe.each(manifest.cases)('fixture $id (three.js loaders, no polymerge code)
       t2b[t] = b;
     }
     const eps = 1e-6 * Math.max(boundsDiagonal(base.welded.positions), boundsDiagonal(target.welded.positions));
+    // A Tier 1/2 case may expect a global transform (e.g. a unit re-export): statuses are relative to it.
+    const a = e.alignment;
+    const g = a ? composeTRS(a.translation, quatFromAxisAngle(a.rotationAxis, a.rotationDeg), [a.scale ?? 1, a.scale ?? 1, a.scale ?? 1]) : null;
     const tvs = new Uint8Array(nt);
     const bvs = new Uint8Array(nb);
     for (let t = 0; t < nt; t++) {
       if (t2b[t] < 0) tvs[t] = VertexStatus.Added;
       else {
-        const d = distance(base.welded.positions[t2b[t]], target.welded.positions[t]);
-        // exact fixtures: every displacement is 0 or far above moveEpsilon
-        expect(d === 0 || d > 1000 * eps).toBe(true);
+        const from = g ? applyMat4(g, base.welded.positions[t2b[t]]) : base.welded.positions[t2b[t]];
+        const d = distance(from, target.welded.positions[t]);
+        // exact fixtures: every displacement is 0 (up to float32 rounding of a transform) or far above moveEpsilon
+        expect(d <= (g ? eps / 4 : 0) || d > 1000 * eps).toBe(true);
         tvs[t] = d <= eps ? VertexStatus.Unchanged : VertexStatus.Moved;
       }
     }
@@ -351,7 +355,7 @@ describe.each(manifest.cases)('fixture $id (three.js loaders, no polymerge code)
   it.runIf(fc.expect.alignment !== undefined)('every mustMatch pair satisfies target = R·base + t', async () => {
     const { base, target } = await loaded();
     const a = fc.expect.alignment!;
-    const m = composeTRS(a.translation, quatFromAxisAngle(a.rotationAxis, a.rotationDeg));
+    const m = composeTRS(a.translation, quatFromAxisAngle(a.rotationAxis, a.rotationDeg), [a.scale ?? 1, a.scale ?? 1, a.scale ?? 1]);
     const eps = 1e-6 * Math.max(boundsDiagonal(base.welded.positions), boundsDiagonal(target.welded.positions));
     const pairs = fc.expect.mustMatch!;
     expect(pairs.length).toBe(base.welded.positions.length);
@@ -361,9 +365,11 @@ describe.each(manifest.cases)('fixture $id (three.js loaders, no polymerge code)
     expect(worst).toBeLessThan(eps / 4);
     expect(inRange(base.welded.positions.length, fc.expect.vertices!.unchanged!)).toBe(true);
     expect(inRange(base.welded.faces.length, fc.expect.faces!.unchanged!)).toBe(true);
-    // no exact position survives the motion, so Tiers 1/2 have nothing to match
-    const set = new Set(base.welded.positions.map(positionKey));
-    expect(target.welded.positions.filter((p) => set.has(positionKey(p))).length).toBe(0);
+    // Tier 3 cases: no exact position survives the motion, so Tiers 1/2 have nothing to match
+    if (tiers.every((t) => t === 3)) {
+      const set = new Set(base.welded.positions.map(positionKey));
+      expect(target.welded.positions.filter((p) => set.has(positionKey(p))).length).toBe(0);
+    }
   });
 
   it.runIf(tiers.length === 1 && tiers[0] === 3 && fc.expect.alignment === undefined)(

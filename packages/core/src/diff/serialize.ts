@@ -7,6 +7,8 @@
  *   and revived, so every numeric field (matrix entries, metrics, ...) round-trips bit-exactly.
  *   Finite doubles round-trip exactly through JSON's shortest-representation printing, and
  *   Float32Array values are exact doubles, so they do too.
+ * - `parts[i].baseVertices / targetVertices` (Uint32Array) are handled the same way.
+ * - Older session-1 JSON (no `parts`, no `alignment.scale`) is upgraded on read.
  */
 import type { IDiffResult } from '../types.js';
 
@@ -55,6 +57,11 @@ export function serializeDiff(result: IDiffResult): string {
     const arr = (result as unknown as Record<string, ArrayLike<number>>)[key];
     plain[key] = Array.from(arr);
   }
+  plain.parts = (result.parts ?? []).map((p) => ({
+    ...p,
+    baseVertices: Array.from(p.baseVertices),
+    targetVertices: Array.from(p.targetVertices),
+  }));
   return JSON.stringify(plain, replacer);
 }
 
@@ -70,8 +77,16 @@ export function deserializeDiff(json: string): IDiffResult {
     if (!Array.isArray(v)) throw new TypeError(`deserializeDiff: field "${key}" must be an array`);
     raw[key] = Ctor.from(v as number[]);
   }
+  const parts = raw.parts ?? [];
+  if (!Array.isArray(parts)) throw new TypeError('deserializeDiff: field "parts" must be an array');
+  raw.parts = parts.map((p: Record<string, unknown>) => ({
+    ...p,
+    baseVertices: Uint32Array.from(p.baseVertices as number[]),
+    targetVertices: Uint32Array.from(p.targetVertices as number[]),
+  }));
   const result = raw as unknown as IDiffResult;
   if (!result.base || !result.target) throw new TypeError('deserializeDiff: missing base/target summaries');
+  if (result.alignment && typeof result.alignment.scale !== 'number') result.alignment.scale = 1;
   for (const [key, len] of Object.entries(LENGTH_OF)) {
     const got = (raw[key] as ArrayLike<number>).length;
     if (got !== len(result)) throw new RangeError(`deserializeDiff: field "${key}" has length ${got}, expected ${len(result)}`);

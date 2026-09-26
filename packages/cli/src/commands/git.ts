@@ -51,17 +51,21 @@ export async function runGitDiff(args: string[]): Promise<number> {
 export function gitSetupText(): string {
   const exts = ['stl', 'obj', 'gltf', 'glb'];
   return [
-    '# 1) Tell git which files polymerge should diff — add to .gitattributes:',
-    ...exts.map((e) => `*.${e} diff=polymerge`),
+    '# 1) Tell git which files polymerge should diff and merge — add to .gitattributes:',
+    ...exts.map((e) => `*.${e} diff=polymerge${e === 'stl' || e === 'obj' ? ' merge=polymerge' : ''}`),
     '',
     '# 2) Register the drivers (drop --global to scope them to one repo):',
     'git config --global diff.polymerge.command "polymerge git-diff"',
     `git config --global difftool.polymerge.cmd 'polymerge view "$LOCAL" "$REMOTE" --name "$MERGED"'`,
+    'git config --global merge.polymerge.name "polymerge three-way 3D merge"',
+    'git config --global merge.polymerge.driver "polymerge git-merge %O %A %B %P"',
     '',
     '# 3) Use it:',
     'git diff -- model.stl                      # structural summary in the terminal',
     'git log -p --ext-diff -- model.stl         # history (log/show need --ext-diff)',
     'git difftool -y -t polymerge HEAD~1 -- model.stl   # visual diff in the browser',
+    'git merge other-branch                     # STL/OBJ merged three-way; conflicts keep the base geometry',
+    'polymerge resolve model.stl --pick 0=theirs && git add model.stl   # settle a conflicted model',
     '',
     `# (polymerge must be on PATH: from the repo root run "npm run build && npm link -w @polymerge/cli")`,
   ].join('\n');

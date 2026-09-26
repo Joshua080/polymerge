@@ -88,6 +88,7 @@ export function renderSummary(result: IDiffResult): HTMLElement[] {
     ]),
   ];
   if (!result.alignment.isIdentity) out.push(renderAlignment(result));
+  if ((result.parts ?? []).length > 0) out.push(renderParts(result));
   return out;
 }
 
@@ -107,26 +108,60 @@ export function describeAlignment(matrix: ArrayLike<number>): { translation: Vec
   const angle = 2 * Math.acos(Math.min(1, q.w));
   const sinHalf = Math.sqrt(Math.max(0, 1 - q.w * q.w));
   const axis: Vec3 = sinHalf > 1e-9 ? [q.x / sinHalf, q.y / sinHalf, q.z / sinHalf] : [0, 0, 1];
-  const clean = (v: Vec3, eps: number): Vec3 => v.map((c) => (Math.abs(c) < eps ? 0 : c)) as Vec3;
   const scale = Math.max(1, Math.abs(t.x), Math.abs(t.y), Math.abs(t.z));
   return {
-    translation: clean([t.x, t.y, t.z], 1e-12 * scale),
+    translation: cleanVec([t.x, t.y, t.z], 1e-6 * scale),
     angleDeg: THREE.MathUtils.radToDeg(angle),
-    axis: clean(axis, 1e-9),
+    axis: cleanVec(axis, 1e-6),
     scale: [sc.x, sc.y, sc.z],
   };
 }
 
+/** Zero out components below `eps` (float32 storage noise reads better as 0 in the panel). */
+function cleanVec(v: Vec3, eps: number): Vec3 {
+  return v.map((c) => (Math.abs(c) < eps ? 0 : c)) as Vec3;
+}
+
 function renderAlignment(result: IDiffResult): HTMLElement {
-  const a = describeAlignment(result.alignment.matrix);
-  const rows: [string, string][] = [
+  const al = result.alignment;
+  const a = describeAlignment(al.matrix);
+  const rows: [string, string][] = [];
+  if (al.units) {
+    rows.push(['Units', `${al.units.from} → ${al.units.to} (×${fmtNum(al.units.factor, 6)})`]);
+  } else if ((al.scale ?? 1) !== 1) {
+    rows.push(['Uniform scale', `×${fmtNum(al.scale, 6)}`]);
+  }
+  rows.push(
     ['Translation', fmtVec(a.translation)],
     ['Rotation', `${fmtNum(a.angleDeg, 4)}° about ${fmtVec(a.axis, 3)}`],
-    ['RMS error', fmtNum(result.alignment.rmsError)],
-    ['ICP iterations', String(result.alignment.iterations)],
-  ];
-  if (a.scale.some((s) => Math.abs(s - 1) > 1e-6)) rows.push(['Scale (!)', fmtVec(a.scale)]);
-  return h('div', { class: 'alignment' }, h('h3', null, 'Alignment (base → target)'), kv(rows));
+    ['RMS error', fmtNum(al.rmsError)],
+  );
+  if (result.tier === 3) rows.push(['ICP iterations', String(al.iterations)]);
+  const title = result.tier === 3 ? 'Alignment (base → target)' : 'Global transform (whole model)';
+  return h('div', { class: 'alignment' }, h('h3', null, title), kv(rows));
+}
+
+/** Parts that moved rigidly on their own. */
+function renderParts(result: IDiffResult): HTMLElement {
+  return h(
+    'div',
+    { class: 'alignment parts' },
+    h('h3', null, `Moved parts (${result.parts.length})`),
+    h(
+      'ul',
+      { class: 'part-list' },
+      result.parts.map((p) =>
+        h(
+          'li',
+          { title: p.source === 'registration' ? 'Re-matched by rigid registration (would otherwise read as removed + added)' : 'Already matched; one rigid motion explains it' },
+          swatch(DIFF_COLORS.modified),
+          `${p.baseName ?? p.targetName ?? `${p.baseVertices.length}-vertex part`}: `,
+          `${fmtNum(p.rotationDeg, 3)}°, shift ${fmtVec(cleanVec(p.centroidShift, 1e-6 * Math.max(1, ...p.centroidShift.map(Math.abs))))}`,
+          p.deformedVertices > 0 ? ` · ${p.deformedVertices} edited` : '',
+        ),
+      ),
+    ),
+  );
 }
 
 export function renderAttempts(attempts: ITierAttempt[]): HTMLElement {

@@ -384,6 +384,94 @@
         "baseMesh": { "vertexCount": 210, "faceCount": 416 },
         "targetMesh": { "vertexCount": 470, "faceCount": 936 }
       }
+    },
+    {
+      "id": "moved-part",
+      "title": "A separate part rotated 30° and moved on its own, order shuffled (OBJ ↔ OBJ)",
+      "description": "Base: an L-bracket body (46 vertices) plus a separate half-size L-bracket part (46 vertices) at x ≈ 6, as one OBJ. Target: the part alone rotated 30° about +z around its centroid and moved by (0, 2.5, 0.5); the body is untouched; triangle order, corners and v lines shuffled so only geometry can explain the correspondence. Regression for the session-1 bug where such a part read as Removed + Added: no vertex of the part keeps its position, so Tier 2 has no seeds there and must re-match the part by rigid registration. Expected: Tier 2, the body Unchanged, all 46 part vertices Moved with their exact partners, one reported part motion.",
+      "base": "cases/moved-part/base.obj",
+      "target": "cases/moved-part/target.obj",
+      "expect": {
+        "acceptableTiers": [2],
+        "vertices": { "unchanged": 46, "moved": 46, "added": 0, "removed": 0 },
+        "faces": { "unchanged": 88, "modified": 88, "added": 0, "removed": 0 },
+        "baseMesh": { "vertexCount": 92, "faceCount": 176 },
+        "targetMesh": { "vertexCount": 92, "faceCount": 176 },
+        "mustMatch": [
+          [0, 63], [1, 34], [2, 2], [3, 32], [4, 41], [5, 89], [6, 78], [7, 62], [8, 65], [9, 86],
+          [10, 84], [11, 6], [12, 60], [13, 47], [14, 61], [15, 59], [16, 58], [17, 20], [18, 72],
+          [19, 73], [20, 0], [21, 1], [22, 90], [23, 77], [24, 7], [25, 8], [26, 18], [27, 19],
+          [28, 45], [29, 46], [30, 85], [31, 42], [32, 33], [33, 54], [34, 28], [35, 27], [36, 52],
+          [37, 51], [38, 79], [39, 53], [40, 48], [41, 49], [42, 23], [43, 22], [44, 69], [45, 21],
+          [46, 44], [47, 13], [48, 80], [49, 71], [50, 16], [51, 43], [52, 3], [53, 83], [54, 26],
+          [55, 11], [56, 10], [57, 5], [58, 30], [59, 82], [60, 25], [61, 24], [62, 39], [63, 88],
+          [64, 40], [65, 38], [66, 12], [67, 55], [68, 56], [69, 57], [70, 4], [71, 9], [72, 76],
+          [73, 75], [74, 81], [75, 74], [76, 17], [77, 15], [78, 70], [79, 35], [80, 50], [81, 14],
+          [82, 87], [83, 36], [84, 67], [85, 37], [86, 68], [87, 66], [88, 29], [89, 64], [90, 31],
+          [91, 91]
+        ],
+        "parts": 1
+      }
+    },
+    {
+      "id": "units-inch-to-mm",
+      "title": "Same part exported in inches (STL) and millimetres (OBJ), rotated 90° and shuffled",
+      "description": "Base: the L-bracket (46 vertices, 88 triangles) in INCHES as binary STL. Target: the same part in MILLIMETRES (×25.4), turned 90° about +z and moved by (10, 20, 0) mm, as OBJ with shuffled order — what a second modelling tool with other unit settings produces. Regression for the session-1 bug where Tier 3 was rigid-only and read such a pair as almost everything Added. Expected: Tier 3 with a similarity alignment whose scale snaps to exactly 25.4 (units in → mm); with it every vertex lies within 3.4e-6 (float32 rounding) of its twin, far below moveEpsilon ≈ 1.37e-4, so all vertices are Unchanged (ranges allow 10% ICP slack) and nothing is Added/Removed.",
+      "base": "cases/units-inch-to-mm/base.stl",
+      "target": "cases/units-inch-to-mm/target.obj",
+      "expect": {
+        "acceptableTiers": [3],
+        "vertices": { "unchanged": [42, 46], "moved": [0, 4], "added": 0, "removed": 0 },
+        "faces": { "unchanged": [54, 88], "modified": [0, 34], "added": 0, "removed": 0 },
+        "baseMesh": { "vertexCount": 46, "faceCount": 88 },
+        "targetMesh": { "vertexCount": 46, "faceCount": 88 },
+        "alignment": {
+          "translation": [10, 20, 0],
+          "rotationAxis": [0, 0, 1],
+          "rotationDeg": 90,
+          "tolerance": 0.01,
+          "scale": 25.4,
+          "units": { "from": "in", "to": "mm", "factor": 25.4 }
+        },
+        "mustMatch": [
+          [0, 14], [1, 15], [2, 13], [3, 25], [4, 1], [5, 40], [6, 41], [7, 2], [8, 17], [9, 0],
+          [10, 38], [11, 39], [12, 9], [13, 18], [14, 32], [15, 16], [16, 44], [17, 21], [18, 11],
+          [19, 20], [20, 5], [21, 4], [22, 3], [23, 42], [24, 43], [25, 45], [26, 22], [27, 12],
+          [28, 33], [29, 34], [30, 30], [31, 8], [32, 23], [33, 7], [34, 37], [35, 24], [36, 31],
+          [37, 6], [38, 27], [39, 26], [40, 36], [41, 28], [42, 10], [43, 19], [44, 35], [45, 29]
+        ],
+        "parts": 0
+      }
+    },
+    {
+      "id": "units-same-lineage",
+      "title": "Same file re-exported in millimetres instead of inches, same order (STL ↔ STL)",
+      "description": "The L-bracket (46 vertices) as binary STL in inches, and the identical triangle stream scaled ×25.4 (mm). Index lineage is intact, so Tier 1 matches every vertex — and before session 2 reported all of them as Moved. Expected now: Tier 1 plus ONE global transform (scale exactly 25.4, units in → mm, no rotation or translation), with every vertex and face Unchanged relative to it.",
+      "base": "cases/units-same-lineage/base.stl",
+      "target": "cases/units-same-lineage/target.stl",
+      "expect": {
+        "acceptableTiers": [1],
+        "vertices": { "unchanged": 46, "moved": 0, "added": 0, "removed": 0 },
+        "faces": { "unchanged": 88, "modified": 0, "added": 0, "removed": 0 },
+        "baseMesh": { "vertexCount": 46, "faceCount": 88 },
+        "targetMesh": { "vertexCount": 46, "faceCount": 88 },
+        "mustMatch": [
+          [0, 0], [1, 1], [2, 2], [3, 3], [4, 4], [5, 5], [6, 6], [7, 7], [8, 8], [9, 9], [10, 10],
+          [11, 11], [12, 12], [13, 13], [14, 14], [15, 15], [16, 16], [17, 17], [18, 18], [19, 19],
+          [20, 20], [21, 21], [22, 22], [23, 23], [24, 24], [25, 25], [26, 26], [27, 27], [28, 28],
+          [29, 29], [30, 30], [31, 31], [32, 32], [33, 33], [34, 34], [35, 35], [36, 36], [37, 37],
+          [38, 38], [39, 39], [40, 40], [41, 41], [42, 42], [43, 43], [44, 44], [45, 45]
+        ],
+        "alignment": {
+          "translation": [0, 0, 0],
+          "rotationAxis": [0, 0, 1],
+          "rotationDeg": 0,
+          "tolerance": 0.01,
+          "scale": 25.4,
+          "units": { "from": "in", "to": "mm", "factor": 25.4 }
+        },
+        "parts": 0
+      }
     }
   ]
 }
