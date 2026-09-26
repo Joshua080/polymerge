@@ -4,6 +4,32 @@ A living log of milestones, architectural decisions, what works, what is stubbed
 
 ---
 
+## Session 3 — 2026-09-26 — CI, combined-edit collisions, merge review in the viewer
+
+Priorities set by the owner:
+1. GitHub Actions CI running `npm run verify` on every push. Until now the project was verified on trust alone.
+2. Take a hard look at the "combined edits" gap: two edits that don't conflict individually but produce bad geometry together. Decide explicitly whether it is solvable now, then fix it or document it.
+3. Conflict display and click-to-resolve in the browser viewer.
+4. If time remains, investigate the 12-minute browser test stall properly.
+
+PR #1 was merged into `main` first (merge commit `557955a`). This session works on `claude/optimistic-franklin-u4oplc`, restarted from that `main`, with a new PR.
+
+### Milestone 1 — CI on every push ✅
+
+`.github/workflows/ci.yml` runs `npm run verify` on every push to any branch, and on pull requests from forks. That covers typecheck, unit/fixture/merge tests, perf tests, build, and all four end-to-end suites (21 browser cases, CLI → browser, worker responsiveness, real-git merge).
+- Runs on Ubuntu with Node 22, `npm ci`, and Playwright's Chromium plus its system dependencies.
+- Viewer screenshots are uploaded when a run fails.
+- A newer push cancels older runs of the same ref. The token is read-only.
+
+Two checks were rewritten first, because they would have been flaky on a shared runner:
+- **Perf tests run alone.** The three ~100k-vertex perf tests have absolute time bounds (1 s / 6 s / 15 s). Under the full parallel test run, one took 824 ms against its 1000 ms bound. That measured the scheduler, not the engine. They now run in a second vitest pass (`vitest.perf.config.ts`: no file parallelism, 120 s timeout) with the bounds unchanged. Locally they take 395 / 1159 / 2929 ms.
+- **The worker responsiveness check is scale-free.** It used to assert "no main-thread task > 250 ms during the diff". A runner twice as slow could break that absolute number.
+  - The app now publishes the diff's own timing window: epoch ms, measured where the diff ran (in the worker, or around the fallback call).
+  - The check measures the longest stretch of that window the main thread spent inside one long task. It must be < 25% with the worker, and ≥ 75% with `?worker=0`, which proves the measurement sees blocking.
+  - Locally: worker 0 ms of a 508 ms diff (0%); fallback 470 ms of 470 ms (100%).
+
+---
+
 ## Session 2 — 2026-09-26 — correspondence fixes, then three-way merge
 
 Priorities set by the owner: (1) fix the two known correspondence bugs, with regression tests that would have caught them; (2) design and start three-way merge; (3) if time allows, move the browser diff into a Web Worker.

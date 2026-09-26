@@ -14,13 +14,18 @@ self.onmessage = (ev: MessageEvent<IDiffRequest>) => {
   const req = ev.data;
   if (req?.type !== 'diff') return;
   const t0 = performance.now();
+  const startedAt = performance.timeOrigin + t0;
   const log = (level: 'info' | 'warn' | 'debug') => (message: string) => post({ type: 'log', id: req.id, level, message });
   try {
     const result = diffMeshes(req.base, req.target, {
       ...req.options,
       logger: { info: log('info'), warn: log('warn'), debug: log('debug') },
     });
-    post({ type: 'result', id: req.id, result, ms: performance.now() - t0 }, resultTransferables(result));
+    const t1 = performance.now();
+    post(
+      { type: 'result', id: req.id, result, ms: t1 - t0, startedAt, finishedAt: performance.timeOrigin + t1 },
+      resultTransferables(result),
+    );
   } catch (err) {
     const e = err instanceof Error ? err : new Error(String(err));
     post({ type: 'error', id: req.id, message: e.message, stack: e.stack });

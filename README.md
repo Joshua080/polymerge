@@ -1,5 +1,7 @@
 # polymerge
 
+[![CI](https://github.com/Joshua080/polymerge/actions/workflows/ci.yml/badge.svg)](https://github.com/Joshua080/polymerge/actions/workflows/ci.yml)
+
 **Structural diff for 3D models.** polymerge works out which vertex in version A became which vertex in version B, and shows the result in the browser: green for added, red for removed, yellow for moved or modified. It works across STL, OBJ and glTF/GLB, and plugs into `git diff` and `git difftool`.
 
 It is not a surface-deviation heatmap. polymerge computes a real vertex-to-vertex correspondence, so you can click a vertex and read *base #29 → target #77, Δ (0, 0, 0.25)*. That correspondence is also the foundation for three-way merging later.
@@ -11,8 +13,9 @@ It is not a surface-deviation heatmap. polymerge computes a real vertex-to-verte
 ```bash
 npm install
 npm run build          # core → cli → web viewer
-npm test               # unit + known-answer fixture suite
-npm run e2e            # headless-browser smoke tests (viewer + CLI → browser)
+npm test               # unit + known-answer fixture suite, then the perf tests on their own
+npm run e2e            # end-to-end: headless-browser viewer, CLI → browser, worker, real git
+npm run verify         # everything CI runs: typecheck, tests, build, e2e
 
 # Diff two models in the terminal
 node packages/cli/dist/cli.js diff fixtures/cases/mixed-topology-edit/base.obj fixtures/cases/mixed-topology-edit/target.obj

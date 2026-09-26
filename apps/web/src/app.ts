@@ -770,6 +770,7 @@ export class App {
       hook.base = r.base;
       hook.target = r.target;
       hook.engine = this.engine.mode;
+      if (this.engine.lastWindow) hook.diffWindow = this.engine.lastWindow;
       hook.parts = r.parts?.length ?? 0;
     } else {
       if (this.base) hook.base = summarizeMesh(this.base.mesh);

@@ -18,7 +18,8 @@ export interface IDiffRequest {
 
 export type WorkerMessage =
   | { type: 'log'; id: number; level: 'info' | 'warn' | 'debug'; message: string }
-  | { type: 'result'; id: number; result: IDiffResult; ms: number }
+  /** startedAt / finishedAt: when the diff ran, in epoch milliseconds (timeOrigin + now). */
+  | { type: 'result'; id: number; result: IDiffResult; ms: number; startedAt: number; finishedAt: number }
   | { type: 'error'; id: number; message: string; stack?: string };
 
 /** Typed-array buffers of a diff result, for the transfer list. */

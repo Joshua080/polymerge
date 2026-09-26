@@ -28,6 +28,8 @@ export interface IPolymergeHook {
   engine?: 'worker' | 'main';
   /** Number of reported part motions in the result. */
   parts?: number;
+  /** When the last diff computed, epoch ms [start, end] (for responsiveness checks). */
+  diffWindow?: [number, number];
   /** The vertex currently shown in the inspector, if any. */
   selection?: ISelectionSnapshot;
 }

@@ -19,6 +19,8 @@ export class DiffEngine {
   private pending: { id: number; reject: (e: Error) => void } | null = null;
   /** How the last diff actually ran. */
   mode: EngineMode = 'worker';
+  /** When the last diff computed, in epoch milliseconds [start, end] (worker or main thread). */
+  lastWindow: [number, number] | null = null;
 
   private useWorker: boolean;
 
@@ -57,12 +59,7 @@ export class DiffEngine {
     const worker = this.worker;
     if (!worker) {
       this.mode = 'main';
-      return Promise.resolve(
-        diffMeshes(base, target, {
-          ...options,
-          logger: { info: (m) => onLog('info', m), warn: (m) => onLog('warn', m), debug: (m) => onLog('debug', m) },
-        }),
-      );
+      return Promise.resolve(this.runHere(base, target, options, onLog));
     }
     this.mode = 'worker';
     const id = this.nextId++;
@@ -81,6 +78,7 @@ export class DiffEngine {
         if (msg.type === 'log') onLog(msg.level, msg.message);
         else if (msg.type === 'result') {
           done();
+          this.lastWindow = [msg.startedAt, msg.finishedAt];
           resolve(msg.result);
         } else {
           done();
@@ -97,12 +95,7 @@ export class DiffEngine {
         this.useWorker = false;
         try {
           this.mode = 'main';
-          resolve(
-            diffMeshes(base, target, {
-              ...options,
-              logger: { info: (m) => onLog('info', m), warn: (m) => onLog('warn', m), debug: (m) => onLog('debug', m) },
-            }),
-          );
+          resolve(this.runHere(base, target, options, onLog));
         } catch (err) {
           reject(err instanceof Error ? err : new Error(String(ev.message)));
         }
@@ -112,6 +105,17 @@ export class DiffEngine {
       const req: IDiffRequest = { type: 'diff', id, base, target, options };
       worker.postMessage(req);
     });
+  }
+
+  /** Main-thread fallback (records the same timing window as the worker path). */
+  private runHere(base: IMesh, target: IMesh, options: WorkerDiffOptions, onLog: IEngineLog): IDiffResult {
+    const start = performance.timeOrigin + performance.now();
+    const result = diffMeshes(base, target, {
+      ...options,
+      logger: { info: (m) => onLog('info', m), warn: (m) => onLog('warn', m), debug: (m) => onLog('debug', m) },
+    });
+    this.lastWindow = [start, performance.timeOrigin + performance.now()];
+    return result;
   }
 
   dispose(): void {

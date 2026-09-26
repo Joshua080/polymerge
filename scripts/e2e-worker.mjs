@@ -5,10 +5,15 @@
  *  - serves it with `polymerge view`, opens it in headless Chromium, and records the main
  *    thread's LONG TASKS (PerformanceObserver 'longtask') while the diff runs,
  *  - once with the Web Worker (default) and once with `?worker=0` (main-thread fallback).
- * Passes when the diff ran in the worker and no main-thread task during the diff phase took
- * longer than MAX_TASK_MS. (Raw frame gaps are printed for information only: headless
- * Chromium rasterises WebGL in software — SwiftShader — so a frame of a freshly loaded
- * 80k-triangle model can take ~300 ms without any JavaScript running.)
+ * The check is SCALE-FREE, so it holds on a slow CI runner as well as on a fast laptop: the app
+ * publishes the diff's own timing window (epoch ms, measured where the diff ran), and the
+ * script measures the longest stretch of that window the main thread spent inside a single
+ * long task. With the worker that must stay under WORKER_MAX_BLOCKED of the window; with the
+ * fallback the diff IS one main-thread task, so it must cover at least FALLBACK_MIN_BLOCKED
+ * (a sanity check that the measurement sees blocking at all). Absolute times are printed for
+ * information only. (So are raw frame gaps: headless Chromium rasterises WebGL in software —
+ * SwiftShader — so a frame of a freshly loaded 80k-triangle model can take ~300 ms without any
+ * JavaScript running.)
  *
  *   node scripts/e2e-worker.mjs      (needs `npm run build` first)
  */
@@ -20,7 +25,9 @@ import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
 import { createMesh, writeStl } from '@polymerge/core';
 
-const MAX_TASK_MS = 250;
+/** Fractions of the diff window spent inside one main-thread long task. */
+const WORKER_MAX_BLOCKED = 0.25;
+const FALLBACK_MIN_BLOCKED = 0.75;
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'polymerge-worker-'));
 
@@ -56,8 +63,9 @@ async function measure(browser, url) {
     w.__gaps = { max: 0, frames: 0, longTasks: [] };
     try {
       new PerformanceObserver((list) => {
-        for (const e of list.getEntries()) w.__gaps.longTasks.push([Math.round(e.startTime), Math.round(e.duration), document.querySelector('.loading-msg')?.textContent ?? '']);
-      }).observe({ type: 'longtask', buffered: true });
+        // Absolute epoch times, comparable with the diff window the worker reports.
+        for (const e of list.getEntries()) w.__gaps.longTasks.push([performance.timeOrigin + e.startTime, e.duration]);
+      }).observe({ type: 'longtask' });
     } catch {}
     let last = performance.now();
     const tick = (t) => {
@@ -106,11 +114,21 @@ try {
   try {
     const w = await measure(browser, url);
     const m = await measure(browser, `${url}&worker=0`);
-    // Longest main-thread task while the diff was computing (after "Computing diff…" appeared).
-    const diffTask = (r) => Math.max(0, ...r.gaps.longTasks.filter(([, , phase]) => phase !== 'Loading models…').map(([, d]) => d));
-    const line = (label, r) =>
-      `${label}: engine=${r.hook.engine} tier=${r.hook.tier} moved=${r.hook.stats?.vertices.moved} ready in ${r.ms} ms, ` +
-      `longest main-thread task during the diff ${diffTask(r)} ms, longest frame gap ${r.gaps.max.toFixed(0)} ms (${r.gaps.frames} frames)`;
+    // Longest stretch of the diff window [a, b] the main thread spent inside one long task.
+    const blocked = (r) => {
+      const [a, b] = r.hook.diffWindow ?? [0, 0];
+      let ms = 0;
+      for (const [s, d] of r.gaps.longTasks) ms = Math.max(ms, Math.min(s + d, b) - Math.max(s, a));
+      return { ms, window: b - a, fraction: b > a ? ms / (b - a) : NaN };
+    };
+    const line = (label, r) => {
+      const x = blocked(r);
+      return (
+        `${label}: engine=${r.hook.engine} tier=${r.hook.tier} moved=${r.hook.stats?.vertices.moved} ready in ${r.ms} ms, ` +
+        `diff ${x.window.toFixed(0)} ms, main thread blocked for ${x.ms.toFixed(0)} ms of it (${(100 * x.fraction).toFixed(1)}%), ` +
+        `longest frame gap ${r.gaps.max.toFixed(0)} ms (${r.gaps.frames} frames)`
+      );
+    };
     console.log(line('worker   ', w));
     if (process.env.GAPS) console.log('gaps>60ms', JSON.stringify(w.gaps.log.filter(([g]) => g > 60)), 'longtasks', JSON.stringify(w.gaps.longTasks));
     console.log(line('main-only', m));
@@ -120,8 +138,12 @@ try {
     };
     ok(w.hook.state === 'ready' && w.hook.engine === 'worker', 'the diff ran in the Web Worker');
     ok(w.hook.stats?.vertices.moved === 1 && w.hook.tier === 2, 'worker result is correct (Tier 2, 1 moved vertex)');
-    ok(diffTask(w) < MAX_TASK_MS, `main thread never blocked > ${MAX_TASK_MS} ms during the worker diff`);
-    ok(diffTask(m) > diffTask(w), 'the main-thread fallback blocks longer (sanity check of the measurement)');
+    ok(Array.isArray(w.hook.diffWindow) && Array.isArray(m.hook.diffWindow), 'both runs published their diff window');
+    ok(blocked(w).fraction < WORKER_MAX_BLOCKED, `worker diff: main thread blocked < ${100 * WORKER_MAX_BLOCKED}% of the diff window`);
+    ok(
+      blocked(m).fraction >= FALLBACK_MIN_BLOCKED,
+      `main-thread fallback: blocked ≥ ${100 * FALLBACK_MIN_BLOCKED}% of the diff window (sanity check of the measurement)`,
+    );
     ok(m.hook.engine === 'main' && m.hook.stats?.vertices.moved === 1, 'main-thread fallback gives the same result');
   } finally {
     await browser.close();
