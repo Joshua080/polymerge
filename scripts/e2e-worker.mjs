@@ -24,10 +24,12 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
 import { createMesh, writeStl } from '@polymerge/core';
+import { watchdog } from './watchdog.mjs';
 
 /** Fractions of the diff window spent inside one main-thread long task. */
 const WORKER_MAX_BLOCKED = 0.25;
 const FALLBACK_MIN_BLOCKED = 0.75;
+const dog = watchdog('e2e-worker', 5 * 60_000);
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'polymerge-worker-'));
 
@@ -96,6 +98,7 @@ const cli = spawn(process.execPath, [path.join(root, 'packages/cli/dist/cli.js')
   cwd: root,
   stdio: ['ignore', 'pipe', 'inherit'],
 });
+dog.onTimeout(() => cli.kill());
 let failures = 0;
 try {
   const url = await new Promise((resolve, reject) => {
@@ -112,7 +115,9 @@ try {
     args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist', '--enable-webgl'],
   });
   try {
+    dog.mark('worker run');
     const w = await measure(browser, url);
+    dog.mark('main-thread run');
     const m = await measure(browser, `${url}&worker=0`);
     // Longest stretch of the diff window [a, b] the main thread spent inside one long task.
     const blocked = (r) => {

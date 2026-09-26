@@ -3,6 +3,15 @@
  * polymerge viewer smoke test.
  *
  *   node apps/web/e2e/smoke.mjs [--mock] [--case <id> ...] [--all] [--build] [--timeout <ms>] [--verbose]
+ *                               [--trace] [--repeat <n>]
+ *
+ * --trace prints every browser call's duration per case and a per-step summary (--trace-live
+ * also announces each call on stderr as it starts); --repeat runs
+ * the targets n times over (stress runs hunting intermittent stalls). Every case has a hard
+ * deadline that names the call it is stuck in; the browser is then discarded (its process group
+ * killed if close() hangs) and relaunched. --simulate-hang <step> self-tests that path.
+ * Background: DEVLOG session 3, milestone 4 (a stalled GPU process stops frames; an unbounded
+ * frame wait turned that into an infinite hang).
  *
  * Serves apps/web/dist with `vite preview` (building first only if dist/ is missing, or with
  * --build), opens each target in headless Chromium (WebGL via SwiftShader), waits for
@@ -12,6 +21,7 @@
  *
  * Default target set: --all when fixtures/manifest.json exists, otherwise --mock.
  */
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import net from 'node:net';
 import path from 'node:path';
@@ -37,13 +47,30 @@ const HUES = {
 // ---------------------------------------------------------------------------
 
 function parseArgs(argv) {
-  const opts = { mock: false, all: false, cases: [], build: false, timeout: 120_000, verbose: false };
+  const opts = {
+    mock: false,
+    all: false,
+    cases: [],
+    build: false,
+    timeout: 120_000,
+    verbose: false,
+    trace: false,
+    traceLive: false,
+    repeat: 1,
+    deadlineSlack: 30_000,
+    simulateHang: null,
+  };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--mock') opts.mock = true;
     else if (a === '--all') opts.all = true;
     else if (a === '--build') opts.build = true;
     else if (a === '--verbose' || a === '-v') opts.verbose = true;
+    else if (a === '--trace') opts.trace = true;
+    else if (a === '--trace-live') opts.traceLive = opts.trace = true;
+    else if (a === '--repeat') opts.repeat = Number(argv[++i]);
+    else if (a === '--deadline-slack') opts.deadlineSlack = Number(argv[++i]);
+    else if (a === '--simulate-hang') opts.simulateHang = argv[++i];
     else if (a === '--case') {
       const id = argv[++i];
       if (!id) usage('--case needs an id');
@@ -57,7 +84,8 @@ function parseArgs(argv) {
 }
 
 function usage(error) {
-  const text = 'usage: node apps/web/e2e/smoke.mjs [--mock] [--case <id> ...] [--all] [--build] [--timeout <ms>] [--verbose]';
+  const text =
+    'usage: node apps/web/e2e/smoke.mjs [--mock] [--case <id> ...] [--all] [--build] [--timeout <ms>] [--verbose] [--trace] [--repeat <n>]';
   if (error) {
     console.error(`smoke: ${error}\n${text}`);
     process.exit(2);
@@ -144,6 +172,39 @@ function findChromeExecutable() {
     }
   }
   return undefined;
+}
+
+/**
+ * PIDs of the browsers this process launched (Playwright starts each in its own process group).
+ * Used to kill a browser whose close() hangs — e.g. with a stalled GPU process — so that a
+ * relaunch really starts fresh. POSIX only; elsewhere it finds nothing and nothing is killed.
+ */
+function childBrowserPids() {
+  try {
+    return execFileSync('ps', ['-o', 'pid=,args=', '--ppid', String(process.pid)], { encoding: 'utf8' })
+      .split('\n')
+      .filter((l) => /chrom|headless_shell/i.test(l))
+      .map((l) => Number(l.trim().split(/\s+/)[0]))
+      .filter((pid) => pid > 0);
+  } catch {
+    return [];
+  }
+}
+
+/** Close a browser; if that does not finish in 5 s, kill its whole process group. */
+async function discardBrowser(browser, pids) {
+  const closed = await Promise.race([
+    browser.close().then(() => true, () => true),
+    new Promise((resolve) => setTimeout(() => resolve(false), 5000)),
+  ]);
+  if (closed) return;
+  for (const pid of pids) {
+    try {
+      process.kill(-pid, 'SIGKILL');
+    } catch {
+      // already gone
+    }
+  }
 }
 
 async function launchBrowser() {
@@ -258,13 +319,57 @@ async function analyzePng(page, png) {
 // One target
 // ---------------------------------------------------------------------------
 
-async function runTarget(browser, baseUrl, target, opts) {
+/**
+ * Every browser call of a case goes through `trace.step`, which records the step's name and
+ * duration: if a case ever hangs again, the per-case deadline reports exactly which call hung
+ * (and `--trace` prints every step's timing).
+ */
+function makeTrace(simulateHang, live, caseName) {
+  const trace = { current: 'start', since: Date.now(), steps: [] };
+  trace.step = async (name, fn) => {
+    trace.current = name;
+    trace.since = Date.now();
+    if (live) process.stderr.write(`  › ${caseName}: ${name}\n`);
+    try {
+      // Self-test of the deadline path: --simulate-hang <step> makes that step never finish.
+      if (name === simulateHang) await new Promise(() => {});
+      return await fn();
+    } catch (err) {
+      trace.failed ??= name;
+      throw err;
+    } finally {
+      trace.steps.push([name, Date.now() - trace.since]);
+      trace.current = `after ${name}`;
+    }
+  };
+  return trace;
+}
+
+/** Two animation frames, but never more than `ms` (a stalled compositor must not hang the test). */
+const settleFrames = (page, ms = 3000) =>
+  page.evaluate(
+    (limit) =>
+      new Promise((resolve) => {
+        const done = () => resolve(undefined);
+        requestAnimationFrame(() => requestAnimationFrame(done));
+        setTimeout(done, limit);
+      }),
+    ms,
+  );
+
+async function runTarget(browser, baseUrl, target, opts, trace) {
   const failures = [];
   const warnings = [];
   const logs = [];
-  const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: 1 });
-  const page = await context.newPage();
+  const context = await trace.step('newContext', () => browser.newContext({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: 1 }));
+  // Explicit bound for every action that takes a timeout (screenshots, locator waits, boxes).
+  context.setDefaultTimeout(Math.min(30_000, opts.timeout));
+  const page = await trace.step('newPage', () => context.newPage());
   page.on('console', (m) => logs.push(`[console.${m.type()}] ${m.text()}`));
+  page.on('crash', () => {
+    logs.push('[crash] the renderer process crashed');
+    failures.push('renderer crashed');
+  });
   page.on('pageerror', (e) => {
     logs.push(`[pageerror] ${e.stack || e.message}`);
     failures.push(`uncaught page error: ${e.message}`);
@@ -277,17 +382,19 @@ async function runTarget(browser, baseUrl, target, opts) {
   const t0 = Date.now();
   const report = { name: target.name, url: baseUrl + target.query };
   try {
-    await page.goto(report.url, { waitUntil: 'load' });
-    await page.waitForFunction(() => ['ready', 'error'].includes(document.body.dataset.state), null, {
-      timeout: opts.timeout,
-      polling: 100,
-    });
+    await trace.step('goto', () => page.goto(report.url, { waitUntil: 'load' }));
+    await trace.step('wait ready', () =>
+      page.waitForFunction(() => ['ready', 'error'].includes(document.body.dataset.state), null, {
+        timeout: opts.timeout,
+        polling: 100,
+      }),
+    );
     report.ms = Date.now() - t0;
-    const hook = await page.evaluate(() => window.__POLYMERGE__);
+    const hook = await trace.step('read hook', () => page.evaluate(() => window.__POLYMERGE__));
     report.hook = hook;
     if (hook.state === 'error') {
       failures.push(`viewer reported error: ${hook.error}`);
-      await page.screenshot({ path: path.join(shotsDir, `${target.name}.png`) });
+      await trace.step('screenshot (error)', () => page.screenshot({ path: path.join(shotsDir, `${target.name}.png`) }));
       return { ...report, failures, warnings, logs };
     }
 
@@ -305,7 +412,7 @@ async function runTarget(browser, baseUrl, target, opts) {
     if (!hook.base || !hook.target) failures.push('hook.base / hook.target summaries missing');
     if (target.caseId) {
       if (hook.source !== `case:${target.caseId}`) failures.push(`hook.source is ${JSON.stringify(hook.source)}, expected "case:${target.caseId}"`);
-      const options = await page.$$eval('#examples option', (os) => os.map((o) => o.value).filter(Boolean));
+      const options = await trace.step('read examples', () => page.$$eval('#examples option', (os) => os.map((o) => o.value).filter(Boolean)));
       if (!options.includes(target.caseId)) failures.push(`examples select does not list "${target.caseId}" (${options.length} options)`);
     }
     if (target.expect?.acceptableTiers && !target.expect.acceptableTiers.includes(hook.tier)) {
@@ -313,14 +420,14 @@ async function runTarget(browser, baseUrl, target, opts) {
     }
 
     // --- pixels ------------------------------------------------------------------------
-    await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
-    await page.screenshot({ path: path.join(shotsDir, `${target.name}.png`) });
+    await trace.step('frames', () => settleFrames(page));
+    await trace.step('screenshot', () => page.screenshot({ path: path.join(shotsDir, `${target.name}.png`) }));
     const canvas = page.locator('canvas.viewer-canvas');
     // Hide HUD overlays (the legend has colour swatches) so only WebGL pixels are analysed.
-    const bare = await page.addStyleTag({ content: '.stage > :not(.viewport) { visibility: hidden !important; }' });
-    const png = await canvas.screenshot();
-    await bare.evaluate((n) => n.remove());
-    const px = await analyzePng(page, png);
+    const bare = await trace.step('hide HUD', () => page.addStyleTag({ content: '.stage > :not(.viewport) { visibility: hidden !important; }' }));
+    const png = await trace.step('canvas screenshot', () => canvas.screenshot());
+    await trace.step('show HUD', () => bare.evaluate((n) => n.remove()));
+    const px = await trace.step('analyse pixels', () => analyzePng(page, png));
     report.pixels = px;
     if (px.distinctColors < 8) failures.push(`canvas looks blank (${px.distinctColors} distinct colours)`);
     if (px.modelFraction < 0.01) failures.push(`model covers only ${(px.modelFraction * 100).toFixed(2)}% of the canvas`);
@@ -337,16 +444,16 @@ async function runTarget(browser, baseUrl, target, opts) {
 
     // --- click-to-inspect ---------------------------------------------------------------
     if (px.click) {
-      const box = await canvas.boundingBox();
-      await page.mouse.click(box.x + px.click.x, box.y + px.click.y);
+      const box = await trace.step('canvas box', () => canvas.boundingBox());
+      await trace.step('click', () => page.mouse.click(box.x + px.click.x, box.y + px.click.y));
       try {
-        await page.waitForFunction(() => !!window.__POLYMERGE__.selection, null, { timeout: 5000 });
-        const sel = await page.evaluate(() => window.__POLYMERGE__.selection);
+        await trace.step('wait selection', () => page.waitForFunction(() => !!window.__POLYMERGE__.selection, null, { timeout: 5000 }));
+        const sel = await trace.step('read selection', () => page.evaluate(() => window.__POLYMERGE__.selection));
         report.selection = sel;
         if (!['base', 'target'].includes(sel.side) || !Number.isInteger(sel.index)) failures.push('selection malformed');
-        if (!(await page.locator('.inspector-card').isVisible())) failures.push('inspector card not visible after click');
-        await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
-        await page.screenshot({ path: path.join(shotsDir, `${target.name}-inspect.png`) });
+        if (!(await trace.step('inspector visible', () => page.locator('.inspector-card').isVisible()))) failures.push('inspector card not visible after click');
+        await trace.step('frames', () => settleFrames(page));
+        await trace.step('screenshot (inspect)', () => page.screenshot({ path: path.join(shotsDir, `${target.name}-inspect.png`) }));
       } catch {
         (target.mock ? failures : warnings).push(`clicking the model at (${px.click.x}, ${px.click.y}) selected no vertex`);
       }
@@ -354,13 +461,13 @@ async function runTarget(browser, baseUrl, target, opts) {
       (target.mock ? failures : warnings).push('no solid surface area found to click');
     }
   } catch (err) {
-    failures.push(err.message.split('\n')[0]);
-    report.hook ??= await page.evaluate(() => window.__POLYMERGE__).catch(() => undefined);
-    await page.screenshot({ path: path.join(shotsDir, `${target.name}.png`) }).catch(() => {});
+    failures.push(`${err.message.split('\n')[0]} (in "${trace.failed ?? trace.current}")`);
+    report.hook ??= await trace.step('read hook (after error)', () => page.evaluate(() => window.__POLYMERGE__)).catch(() => undefined);
+    await trace.step('screenshot (after error)', () => page.screenshot({ path: path.join(shotsDir, `${target.name}.png`) })).catch(() => {});
   } finally {
-    await context.close();
+    await trace.step('close', () => context.close());
   }
-  return { ...report, failures, warnings, logs };
+  return { ...report, failures, warnings, logs, steps: trace.steps };
 }
 
 // ---------------------------------------------------------------------------
@@ -370,32 +477,59 @@ async function runTarget(browser, baseUrl, target, opts) {
 async function main() {
   const opts = parseArgs(process.argv.slice(2));
   const manifest = readManifest();
-  const targets = resolveTargets(opts, manifest);
-  if (targets.length === 0) throw new Error('nothing to test (empty manifest?)');
+  const once = resolveTargets(opts, manifest);
+  if (once.length === 0) throw new Error('nothing to test (empty manifest?)');
+  // --repeat n: the same targets n times over (a stress run hunting intermittent stalls).
+  const targets = Array.from({ length: Math.max(1, opts.repeat) }, () => once).flat();
   fs.mkdirSync(shotsDir, { recursive: true });
   await ensureBuild(opts.build);
   const { server, url } = await startPreview();
   let browser;
   let failed = 0;
+  const stepStats = {};
   try {
     browser = await launchBrowser();
+    let browserPids = childBrowserPids();
     console.log(`smoke: ${targets.length} target(s) against ${url} (${browser.version()})`);
     for (const target of targets) {
       // Hard per-case deadline: a hung browser call (seen once with SwiftShader) must fail the
       // case loudly instead of stalling the whole run. The browser is relaunched afterwards.
-      const deadline = opts.timeout + 30_000;
+      const deadline = opts.timeout + opts.deadlineSlack;
+      const trace = makeTrace(opts.simulateHang, opts.traceLive, target.name);
       let timer;
       const hung = new Promise((resolve) => {
         timer = setTimeout(
-          () => resolve({ name: target.name, hook: undefined, failures: [`hung: no result within ${deadline} ms (browser stalled)`], warnings: [], logs: [] }),
+          () =>
+            resolve({
+              name: target.name,
+              hook: undefined,
+              failures: [
+                `hung: no result within ${deadline} ms — stuck in "${trace.current}" for ${Date.now() - trace.since} ms ` +
+                  `(browser connected: ${browser.isConnected()}; steps done: ${trace.steps.map(([n, ms]) => `${n} ${ms}ms`).join(', ')})`,
+              ],
+              warnings: [],
+              logs: [],
+            }),
           deadline,
         );
       });
-      const r = await Promise.race([runTarget(browser, url, target, opts), hung]);
+      const r = await Promise.race([runTarget(browser, url, target, opts, trace), hung]);
       clearTimeout(timer);
+      for (const [name, ms] of r.steps ?? []) {
+        const agg = (stepStats[name] ??= { n: 0, total: 0, max: 0, maxCase: '' });
+        agg.n++;
+        agg.total += ms;
+        if (ms > agg.max) {
+          agg.max = ms;
+          agg.maxCase = r.name;
+        }
+      }
+      if (opts.trace) console.log(`     steps: ${(r.steps ?? []).map(([n, ms]) => `${n} ${ms}`).join(' · ')}`);
       if (r.failures.some((f) => f.startsWith('hung:'))) {
-        await Promise.race([browser.close().catch(() => {}), new Promise((res) => setTimeout(res, 5000))]);
+        const before = new Set(browserPids);
+        await discardBrowser(browser, browserPids);
         browser = await launchBrowser();
+        browserPids = childBrowserPids().filter((pid) => !before.has(pid));
       }
       const h = r.hook ?? {};
       const st = h.stats;
@@ -419,6 +553,12 @@ async function main() {
   } finally {
     await browser?.close();
     await server.close();
+  }
+  if (opts.trace) {
+    console.log('smoke: step timings (count · mean · max @ case)');
+    for (const [name, a] of Object.entries(stepStats)) {
+      console.log(`  ${name.padEnd(22)} ${String(a.n).padStart(4)} · ${(a.total / a.n).toFixed(0).padStart(5)} ms · ${String(a.max).padStart(5)} ms @ ${a.maxCase}`);
+    }
   }
   console.log(`smoke: ${targets.length - failed}/${targets.length} passed · screenshots in ${path.relative(process.cwd(), shotsDir) || shotsDir}`);
   process.exit(failed > 0 ? 1 : 0);

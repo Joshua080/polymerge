@@ -19,7 +19,9 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
 import { createMesh, loadMesh, writeStl } from '@polymerge/core';
+import { watchdog } from './watchdog.mjs';
 
+const dog = watchdog('e2e-merge', 5 * 60_000);
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const shots = path.join(root, 'apps/web/e2e/screenshots');
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'polymerge-merge-'));
@@ -141,6 +143,7 @@ const cli = spawn(
   [path.join(root, 'packages/cli/dist/cli.js'), 'view', ...['base', 'ours', 'theirs'].map((s) => path.join(dir, `${s}.stl`)), '--no-open', '--port', '0', '--name', 'parts/plate.stl'],
   { cwd: root, stdio: ['ignore', 'pipe', 'inherit'] },
 );
+dog.onTimeout(() => cli.kill());
 try {
   const url = await new Promise((resolve, reject) => {
     let buf = '';
@@ -158,6 +161,7 @@ try {
     args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist', '--enable-webgl'],
   });
   try {
+    dog.mark('1. CLI files (boss conflict)');
     // 1. CLI files: move-move conflict, resolved by clicking "Theirs"; download the result.
     const page = await browser.newPage({ viewport: { width: 1280, height: 800 }, acceptDownloads: true });
     const errors = [];
@@ -195,6 +199,7 @@ try {
     check(errors.length === 0, `no page errors (${errors.join('; ')})`);
     await page.close();
 
+    dog.mark('2. thin-wall example');
     // 2. Collision example: select by clicking the region in 3D, resolve with a key.
     const p2 = await browser.newPage({ viewport: { width: 1280, height: 800 } });
     await p2.goto(`${origin}/?mode=merge&demo=thin-wall`);
@@ -215,6 +220,7 @@ try {
     check(h.merge?.conflicts[0].resolution === 'ours' && h.merge.warnings.length === 0, 'key "1" resolves it to ours, with no warning');
     await p2.close();
 
+    dog.mark('3. mixed-choices example');
     // 3. Two conflicts whose MIXED resolution collides → a warning.
     const p3 = await browser.newPage({ viewport: { width: 1280, height: 800 } });
     await p3.goto(`${origin}/?mode=merge&demo=mixed-choices`);

@@ -14,6 +14,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
+import { watchdog } from './watchdog.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const [base, target] =
@@ -25,6 +26,8 @@ const cli = spawn(process.execPath, [path.join(root, 'packages/cli/dist/cli.js')
   cwd: root,
   stdio: ['ignore', 'pipe', 'inherit'],
 });
+const dog = watchdog('e2e-view', 3 * 60_000);
+dog.onTimeout(() => cli.kill());
 
 const fail = (msg) => {
   console.error(`e2e-view: FAIL — ${msg}`);
@@ -55,14 +58,17 @@ try {
   const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
   const consoleLines = [];
   page.on('console', (m) => consoleLines.push(m.text()));
+  dog.mark('load');
   await page.goto(url);
   await page.waitForSelector('body[data-state="ready"], body[data-state="error"]', { timeout: 120_000 });
+  dog.mark('read hook');
   const hook = await page.evaluate(() => window.__POLYMERGE__);
   if (hook.state !== 'ready') fail(`viewer error: ${hook.error}`);
   const tierLine = consoleLines.find((l) => /resolved by Tier \d/.test(l));
   if (!tierLine) fail('engine did not log the accepted tier to the browser console');
   const shots = path.join(root, 'apps/web/e2e/screenshots');
   fs.mkdirSync(shots, { recursive: true });
+  dog.mark('screenshot');
   await page.screenshot({ path: path.join(shots, 'cli-view.png') });
   console.log(`e2e-view: ready — ${hook.tierName}`);
   console.log(`e2e-view: browser console → ${tierLine}`);

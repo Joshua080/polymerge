@@ -16,7 +16,7 @@ PR #1 was merged into `main` first (merge commit `557955a`). This session works 
 
 ### Milestone 1 — CI on every push ✅
 
-`.github/workflows/ci.yml` runs `npm run verify` on every push to any branch, and on pull requests from forks. That covers typecheck, unit/fixture/merge tests, perf tests, build, and all four end-to-end suites (21 browser cases, CLI → browser, worker responsiveness, real-git merge).
+`.github/workflows/ci.yml` runs `npm run verify` on every push to any branch, and on pull requests from forks. That covers typecheck, unit/fixture/merge tests, perf tests, build, and every end-to-end suite: 21 browser cases, CLI → browser, worker responsiveness, real-git merge, and (since milestone 3) the merge review.
 - Runs on Ubuntu with Node 22, `npm ci`, and Playwright's Chromium plus its system dependencies.
 - Viewer screenshots are uploaded when a run fails.
 - A newer push cancels older runs of the same ref. The token is read-only.
@@ -132,6 +132,76 @@ Two bugs came up while writing the e2e, both fixed:
 |---|----------|-----|
 | D19 | Merge review colours are provenance (ours / theirs / both / conflict), not diff status. | The question in a merge is *whose change is this*, and the diff colours would mean something else. |
 | D20 | Every resolve re-materialises the unresolved merge with the complete set of choices, in the worker that holds it. | Undo and "change my mind" are free. Nothing drifts between the viewer and the CLI: the same `--pick` set gives the same model. |
+
+### Milestone 4 — The 12-minute browser-test stall, investigated
+
+**What the evidence says.** I reread the session-2 transcript at the moment of the stall:
+- The previous case (`moved-part`) had printed PASS, so its context had closed.
+- The stalled case (`units-inch-to-mm`) never wrote its first screenshot. So it hung between creating its context and that screenshot.
+- In that stretch, `goto` (30 s default) and the ready-wait (120 s) have timeouts. Either would have *thrown* rather than hung.
+
+That leaves five calls with **no timeout at all** in Playwright:
+- `newContext` and `newPage`;
+- the hook read (`page.evaluate`) and the examples read (`$$eval`);
+- the two-frame wait, `requestAnimationFrame` ×2 inside `evaluate`.
+
+Each of them waits forever if the renderer's main thread blocks, or, for the frame wait, if the page simply stops producing frames. Also, "12 minutes" was not a delay that resolved itself. It was how long it took me to notice and kill the run, so the hang was unbounded.
+
+**Most likely mechanism.** WebGL here is software-rendered by SwiftShader inside one GPU process that every page shares; the process runs at ~165% CPU during the suite. three.js makes synchronous GL calls (parameter queries, shader and program status). If that GPU process wedges or starves, the renderer's main thread blocks on the next synchronous call and frames stop. From then on, every no-timeout call above waits forever. This fits all the evidence:
+- it depended on what ran before, i.e. GPU-process state (the case passed in 0.8 s alone);
+- it vanished on rerun;
+- a browser relaunch, which starts a new GPU process, is the recovery.
+
+**Changes (`apps/web/e2e/smoke.mjs`):**
+- **Every browser call goes through `trace.step(name, …)`**, which records its name and duration. The per-case hard deadline now reports *which call is stuck and for how long*: `hung: … stuck in "read hook" for 149870 ms`. It also reports whether the browser is still connected and the steps completed so far. The next occurrence will name its cause instead of being a mystery.
+- **The frame wait is bounded in the page** (two rAFs, or 3 s, whichever comes first). A page that stops producing frames can no longer hang that step; a blocked main thread is still caught by the deadline.
+- **A context-wide default timeout** for every action that accepts one (screenshots, bounding boxes, waits), and a `crash` listener that fails the case with "renderer crashed" instead of letting it hang.
+- **`--trace`** prints every step's timing per case plus a per-step summary (count / mean / max @ case). **`--repeat n`** reruns the target list n times, for stress runs.
+- **`--simulate-hang <step>`** is a self-test of the deadline path: that step never finishes. Verified with `--simulate-hang frames`:
+  - Each case failed at its deadline with `stuck in "frames" for 6692 ms (browser connected: true; steps done: newContext 13ms, newPage 119ms, goto 374ms, …)`.
+  - The browser was relaunched, and the next case ran.
+- The other browser suites (`e2e-view`, `e2e-worker`, `e2e-merge`) had the same unbounded calls. A hang there would have stalled CI until the 30-minute job timeout. They now use `scripts/watchdog.mjs`: fail within 3–5 minutes, name the stage, and kill the CLI server they spawned.
+
+**Trying to reproduce it:**
+- **Plain stress**, `smoke.mjs --trace --repeat 12`: 252 cases in one browser, no relaunch, 6m21s. **252/252 passed, no hang.** The slowest single call in the whole run was a 1.04 s screenshot; means are 7–364 ms per step. So there is no slow tail that grows into a hang, and no accumulation across 252 contexts in one browser.
+- **CPU contention**: `--repeat 6` with four busy-loop processes pinning all 4 cores, 4m41s. **126/126 passed, no hang.** Screenshots slowed 2–3× (max 1.5 s); everything else barely moved.
+- **Fault injection**: freeze the shared GPU process (SIGSTOP) the moment the hook read starts. This is exactly the stage where session 2 stalled: after "ready", before the first screenshot. The result reproduced the failure mode deterministically:
+  - The hook read took 18 ms and the examples read 22 ms: **the page's JavaScript stays responsive**.
+  - The two-frame wait took **3003 ms**: frames stopped, and it returned only through the new 3 s bound.
+  - The screenshot hit its 20 s timeout. The error-path screenshot hung until the deadline, which reported `stuck in "screenshot (after error)"` and relaunched the browser. The next two cases passed in 0.9 s and 0.5 s.
+  
+  The old harness waited for two frames with no bound at that exact point, so it would have waited forever: the session-2 symptom.
+
+- **Permanent freeze** (nobody unfreezes the GPU process): the case fails at its deadline, naming the step. `browser.close()` cannot finish, so after 5 s the harness kills the stuck browser's whole process group (Playwright starts each browser in its own group) and relaunches. The next case passed, and nothing was left running. Before this, a stuck browser would have lingered for the rest of the run.
+
+**Conclusion.** The mechanism is identified and reproduced on demand. When Chromium's shared GPU process stalls (SwiftShader, headless), the page stops producing frames while its JavaScript stays alive. The harness's unbounded frame wait turned that into an infinite hang. *Why* the GPU process stalled once is inside Chromium/SwiftShader and did not recur in 378 stressed runs; it is not in polymerge's code. The harness now:
+- bounds that wait and every action;
+- names the stuck call if anything still hangs;
+- recovers with a fresh browser, which means a fresh GPU process.
+
+A hung case is still reported as a failure, never retried silently: an infrastructure stall should be seen, not hidden.
+
+| # | Decision | Why |
+|---|----------|-----|
+| D21 | Every browser wait in the e2e suites is bounded, and a hang names its step and discards the browser (process-group kill). Hangs fail the run and are never retried. | The session-2 stall was a Chromium GPU-process stall turned into an infinite hang by one unbounded frame wait. Fault injection shows the new harness diagnoses and recovers from exactly that. |
+
+### State at end of session 3
+
+**Verified.** `npm run verify` is green locally and on GitHub Actions for every push of this session, in about 1.5 min. It covers:
+- typecheck;
+- 458 unit / fixture / merge / web tests;
+- 4 perf tests;
+- build;
+- smoke (21 browser cases), e2e-view, e2e-worker, e2e-merge and e2e-git.
+
+**Known limits / next steps**
+1. **Collision check scope (v1, by decision):** coplanar contact, clearances, wall thickness and design intent are not judged (D16).
+2. **Deformation transfer for `lineage` conflicts:** apply an edit made on one tessellation to a remeshed other side. Carried over.
+3. **Saving from the merge review:** the viewer downloads the result or gives the exact command. A `polymerge review` session could write the file back and `git add` it directly. That needs a write endpoint on the local server, so it deserves its own security look (token, 127.0.0.1 only).
+4. **GLB/glTF writer**, and merging materials/UVs. Carried over.
+5. **Parsing in the worker**, and chunked scene building for very large results. Carried over.
+6. **Z-up models:** the viewer's default camera assumes Y-up, so CAD/print models (Z-up) open side-on. A per-model "up" choice would help merge review too.
+7. npm publishing. Carried over.
 
 ---
 
