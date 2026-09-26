@@ -32,7 +32,7 @@ fixtures/                        generator + known-answer model pairs + e2e test
 | D5 | Canonical colours are exported from core (`DIFF_COLORS`): added `#22c55e`, removed `#ef4444`, moved/modified `#facc15`, unchanged `#9ca3af`. | Single source of truth for the viewer, CLI and docs. |
 | D6 | The engine always logs each tier attempt and the accepted tier (default sink `console`). | Hard requirement: every diff states which tier fired. |
 | D7 | The viewer consumes core **from source** through a Vite alias; the CLI consumes the built `dist`. | No build step needed for web dev; a real `bin` for the CLI. |
-| D8 | Nothing is pushed to a remote this session. | Owner's instruction: local verification first. |
+| D8 | Nothing is pushed to a remote this session. | Owner's instruction: local verification first. Lifted once verification passed (Milestone 7). |
 
 **Environment findings**
 - three@0.186.1 loaders run under Node 22: STL ✔, OBJ ✔, GLB ✔ (custom attribute `_VERTEX_ID` surfaces as `_vertex_id`).
@@ -138,6 +138,13 @@ Orchestrator: types, mesh helpers, CLI, root config, docs, integration.
 | git driver in a scratch repo (`diff=polymerge` + `diff.polymerge.command`) | `git diff part.obj` prints the structural report, e.g. Tier 2 · *base #29 → target #77 Δ(0,0,0.25)*; new-file path verified |
 
 The integration fix went back to its owner: fixtures + parsers exposed `remesh` being accepted by Tier 2. The diagnosis was relayed to the diff agent, which added the retessellation evidence (slid / on-surface) to the Tier 2 score.
+
+### Milestone 7 — Published to GitHub ✅
+
+- Local verification passed from a fresh clone (`npm install && npm run verify`), and the owner then approved publishing.
+- The work is now on **`main`** at `github.com/Joshua080/polymerge`. It was renamed from the session branch `claude/optimistic-franklin-u4oplc`, so the history is unchanged.
+- The LICENSE copyright holder is Joshua Hurley.
+- No PR yet. PRs start with the next feature branch, compared against `main`.
 
 ### State at end of session 1
 
