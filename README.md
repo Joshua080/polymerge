@@ -4,7 +4,7 @@
 
 It is not a surface-deviation heatmap. polymerge computes a real vertex-to-vertex correspondence, so you can click a vertex and read *base #29 → target #77, Δ (0, 0, 0.25)*. That correspondence is also the foundation for three-way merging later.
 
-> Status: **v1 MVP**. The pipeline works end to end and is tested. Polish and merge support come next; see [DEVLOG.md](DEVLOG.md).
+> Status: diff (v1) and three-way merge (v1) work end to end and are tested; see [DEVLOG.md](DEVLOG.md).
 
 ## Quick start
 
@@ -45,13 +45,25 @@ To get a global `polymerge` command, run `npm link -w @polymerge/cli`.
    After the accepted tier, parts (connected components) that moved rigidly on their own are re-matched by registration, so they read as *moved* instead of removed + added. A whole-model motion, such as the same file re-exported in millimetres, is reported as one global transform (with the unit conversion named) instead of every vertex "moving".
 3. **Classify.** Every vertex is marked *unchanged / moved / added / removed*, and every face *unchanged / modified / added / removed*. The CLI reports these and the viewer colours them.
 
+## Three-way merge
+
+```bash
+polymerge merge base.stl ours.stl theirs.stl -o merged.stl       # exit 1 while conflicts remain
+polymerge merge base.stl ours.stl theirs.stl -o merged.stl --pick 0=theirs
+```
+
+Every change that does not conflict is applied. This includes composing frames: if ours was re-exported in mm and theirs moved a vertex, the result is theirs' edit, in mm. Real conflicts, such as the same vertex moved differently, a vertex deleted on one side while the other side builds on it, different geometry added on the same edge or in the same space, or the same part moved differently, are reported as regions. Those regions **keep the base geometry until you choose** `ours`, `theirs` or `base` for them; the tool never guesses. The rules are in [docs/merge-design.md](docs/merge-design.md).
+
 ## CLI
 
 ```
 polymerge diff <base> <target> [--json out.json|-] [--force-tier 1|2|3] [--exit-code] [--top N]
 polymerge view <base> <target> [--port N] [--no-open]
+polymerge merge <base> <ours> <theirs> [-o out.stl|obj] [--resolve ours|theirs|base] [--pick id=side] [--report x.json]
+polymerge resolve <path> --pick <id>=<side>   # finish a conflicted git merge of a model
 polymerge info <file>
 polymerge git-diff …          # git external diff driver
+polymerge git-merge …         # git merge driver
 polymerge git-setup           # prints the git config below
 ```
 
@@ -59,27 +71,31 @@ polymerge git-setup           # prints the git config below
 
 ```bash
 # .gitattributes
-*.stl  diff=polymerge
-*.obj  diff=polymerge
+*.stl  diff=polymerge merge=polymerge
+*.obj  diff=polymerge merge=polymerge
 *.gltf diff=polymerge
 *.glb  diff=polymerge
 
 git config diff.polymerge.command "polymerge git-diff"
 git config difftool.polymerge.cmd 'polymerge view "$LOCAL" "$REMOTE" --name "$MERGED"'
+git config merge.polymerge.driver "polymerge git-merge %O %A %B %P"
 
 git diff -- part.stl                              # structural report in the terminal
 git log -p --ext-diff -- part.stl                 # history
 git difftool -y -t polymerge HEAD~1 -- part.stl   # visual diff in the browser
+git merge feature                                 # three-way model merge; conflicts → file marked UU
+polymerge resolve part.stl --pick 0=theirs && git add part.stl
 ```
 
 ## Repository layout
 
 ```
-packages/core   @polymerge/core: types, parsers, tiered diff engine (runs in Node and the browser)
+packages/core   @polymerge/core: types, parsers, tiered diff engine, three-way merge, writers (Node + browser)
 packages/cli    @polymerge/cli: the `polymerge` command
 apps/web        @polymerge/web: Vite + Three.js viewer
 fixtures/       generator for known-answer model pairs, plus the end-to-end suite
-scripts/        CLI → browser end-to-end check
+docs/           design notes (three-way merge semantics)
+scripts/        CLI → browser and real-git end-to-end checks
 ```
 
 ## License

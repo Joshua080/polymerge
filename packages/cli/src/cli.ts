@@ -5,13 +5,16 @@
  *   polymerge diff <base> <target> [--json <file|->] [--force-tier 1|2|3] ...
  *   polymerge view <base> <target> [--port N] [--no-open]
  *   polymerge info <file>
+ *   polymerge merge <base> <ours> <theirs> [-o merged.stl] [--resolve ours|theirs|base] [--pick id=side]
  *   polymerge git-diff <git external-diff args...>
+ *   polymerge git-merge %O %A %B %P
  *   polymerge git-setup
  */
 import { parseArgs } from 'node:util';
 import { runDiff } from './commands/diff.js';
 import { gitSetupText, runGitDiff } from './commands/git.js';
 import { runInfo } from './commands/info.js';
+import { runGitMerge, runGitResolve, runMerge } from './commands/merge.js';
 import { runView } from './commands/view.js';
 
 const VERSION = '0.1.0';
@@ -34,8 +37,17 @@ Usage:
       --name <file>          Display name for both sides (git difftool passes $MERGED)
       --no-open              Do not launch a browser, just print the URL
       --web-dist <dir>       Path to the built viewer (default: apps/web/dist)
+  polymerge merge <base> <ours> <theirs> [options]   Three-way merge (exit 1 = unresolved conflicts)
+      -o, --output <file>    Write the merged model (.stl or .obj)
+      --resolve <side>       Resolve every conflict with ours | theirs | base
+      --pick <id>=<side>     Resolve one conflict (repeatable), e.g. --pick 0=theirs
+      --report <file>        Write the conflicts and statistics as JSON
+      -q, --quiet            No report
+  polymerge resolve <path> --pick <id>=<side> | --resolve <side>
+                                             Finish a conflicted git merge of <path> (reads git's index stages)
   polymerge info <file>                      Print the normalised mesh summary
   polymerge git-diff <7 git args>            git external diff driver (diff.<name>.command)
+  polymerge git-merge %O %A %B %P            git merge driver (merge.<name>.driver)
   polymerge git-setup                        Print the git configuration snippet
   polymerge --version | --help
 `;
@@ -107,8 +119,49 @@ async function main(argv: string[]): Promise<number> {
       requirePositionals('info', positionals, 1);
       return runInfo(positionals[0]);
     }
+    case 'merge': {
+      const { values, positionals } = parseArgs({
+        args: rest,
+        allowPositionals: true,
+        options: {
+          output: { type: 'string', short: 'o' },
+          format: { type: 'string' },
+          resolve: { type: 'string' },
+          pick: { type: 'string', multiple: true },
+          report: { type: 'string' },
+          quiet: { type: 'boolean', short: 'q' },
+        },
+      });
+      requirePositionals('merge', positionals, 3);
+      return runMerge(positionals[0], positionals[1], positionals[2], {
+        output: values.output,
+        format: values.format,
+        resolve: values.resolve,
+        pick: values.pick,
+        report: values.report,
+        quiet: values.quiet,
+      });
+    }
+    case 'resolve': {
+      const { values, positionals } = parseArgs({
+        args: rest,
+        allowPositionals: true,
+        options: {
+          resolve: { type: 'string' },
+          pick: { type: 'string', multiple: true },
+          format: { type: 'string' },
+          quiet: { type: 'boolean', short: 'q' },
+        },
+      });
+      requirePositionals('resolve', positionals, 1);
+      return runGitResolve(positionals[0], { resolve: values.resolve, pick: values.pick, format: values.format, quiet: values.quiet });
+    }
     case 'git-diff':
       return runGitDiff(rest);
+    case 'git-merge': {
+      const { values, positionals } = parseArgs({ args: rest, allowPositionals: true, options: { resolve: { type: 'string' } } });
+      return runGitMerge(positionals, { resolve: values.resolve });
+    }
     case 'git-setup':
       process.stdout.write(gitSetupText() + '\n');
       return 0;

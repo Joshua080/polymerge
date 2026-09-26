@@ -440,6 +440,121 @@ export interface IVertexChange {
 }
 
 // ---------------------------------------------------------------------------
+// Three-way merge  (implemented in src/merge/; semantics: docs/merge-design.md)
+// ---------------------------------------------------------------------------
+
+/** How a conflict region is settled: take one side's changes there, or neither. */
+export type MergeResolution = 'ours' | 'theirs' | 'base';
+
+/**
+ * Atomic conflict kinds (docs/merge-design.md §4):
+ *  - move-move: both sides moved the same vertex (locally, after frames) to different places;
+ *  - move-delete: one side deleted a vertex the other moved;
+ *  - delete-dependency: one side deleted a vertex the other side's new geometry is anchored to;
+ *  - competing-additions: both added different faces on the same edge (or re-meshed the same region);
+ *  - overlapping-additions: new geometry of both sides interpenetrates in space;
+ *  - part-motion: both moved the same part, differently;
+ *  - global-transform: both transformed the whole model, differently (not a pure unit conversion);
+ *  - lineage: a side lost vertex identity (Tier 3 remesh) — vertex-level merging impossible.
+ */
+export type MergeConflictKind =
+  | 'move-move'
+  | 'move-delete'
+  | 'delete-dependency'
+  | 'competing-additions'
+  | 'overlapping-additions'
+  | 'part-motion'
+  | 'global-transform'
+  | 'lineage';
+
+/** One conflict REGION (the mesh analogue of a conflict hunk): resolved as a unit. */
+export interface IMergeConflict {
+  /** Stable, deterministic id (0-based, in order of discovery). */
+  id: number;
+  /** Atomic conflict kinds found in the region, with counts. */
+  kinds: Partial<Record<MergeConflictKind, number>>;
+  /** Human-readable summary. */
+  message: string;
+  /** Base vertices / faces inside the region (whole-model conflicts list none). */
+  baseVertices: Uint32Array;
+  baseFaces: Uint32Array;
+  /** Vertices of ours / theirs involved in the region (their own indices). */
+  oursVertices: Uint32Array;
+  theirsVertices: Uint32Array;
+  /** A point to look at, in the merged frame. */
+  focus: Vec3;
+  /** Applied resolution; null = unresolved (the region is left in its BASE state). */
+  resolution: MergeResolution | null;
+  /** True for global-transform / lineage conflicts (they concern the whole model). */
+  wholeModel: boolean;
+}
+
+export interface IMergeStats {
+  /** Base vertices whose local move was taken from ours / theirs / both (identical). */
+  movedFromOurs: number;
+  movedFromTheirs: number;
+  movedConvergent: number;
+  /** Base vertices deleted because ours / theirs / both deleted them. */
+  deletedFromOurs: number;
+  deletedFromTheirs: number;
+  deletedConvergent: number;
+  /** Faces added by ours / theirs / both (identical additions counted once). */
+  facesAddedFromOurs: number;
+  facesAddedFromTheirs: number;
+  facesAddedConvergent: number;
+  /** Base faces removed in the merge. */
+  facesRemoved: number;
+  /** Parts whose motion was taken from ours / theirs. */
+  partMotionsFromOurs: number;
+  partMotionsFromTheirs: number;
+  conflicts: number;
+  unresolved: number;
+}
+
+/** Where every merged vertex / face came from (for review tools and the viewer). */
+export interface IMergeProvenance {
+  /** 0 = base, 1 = added by ours, 2 = added by theirs. */
+  vertexSource: Uint8Array;
+  /** Index in the source mesh (base / ours / theirs). */
+  vertexIndex: Int32Array;
+  /** Bitmask of the sides whose change shaped the vertex: 1 = ours, 2 = theirs. */
+  vertexChangedBy: Uint8Array;
+  faceSource: Uint8Array;
+  faceIndex: Int32Array;
+  /** Conflict region id per merged vertex (-1 = none). */
+  vertexConflict: Int32Array;
+}
+
+export interface IMergeOptions {
+  /** Options for the two underlying diffs (base → ours, base → theirs). */
+  diff?: IDiffOptions;
+  /** Resolutions by conflict id (ids are deterministic for the same inputs). */
+  resolutions?: Record<number, MergeResolution>;
+  /** Resolution for every conflict not listed in `resolutions`; default null = leave unresolved (base). */
+  defaultResolution?: MergeResolution | null;
+  /** Log sink (defaults to console); the two diffs log their tiers through it too. */
+  logger?: IDiffLogger;
+}
+
+export interface IMergeResult {
+  /** All non-conflicting changes applied; each conflict region per its resolution (base when unresolved). */
+  merged: IMesh;
+  /** True when there are no unresolved conflicts. */
+  clean: boolean;
+  conflicts: IMergeConflict[];
+  stats: IMergeStats;
+  /** Global frame of the merged model (base → merged). */
+  frame: { source: 'base' | 'ours' | 'theirs' | 'both' | 'composed' | 'conflict'; transform: IRigidTransform };
+  provenance: IMergeProvenance;
+  /** The correspondences the merge was computed from. */
+  ours: IDiffResult;
+  theirs: IDiffResult;
+  durationMs: number;
+}
+
+export type MergeMeshesFn = (base: IMesh, ours: IMesh, theirs: IMesh, options?: IMergeOptions) => IMergeResult;
+
+// ---------------------------------------------------------------------------
 // Tooling contract: test-fixture manifest (fixtures/manifest.json)
 // ---------------------------------------------------------------------------
 
