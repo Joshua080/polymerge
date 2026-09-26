@@ -84,6 +84,97 @@ New modules: `diff/components.ts` (connected components by union-find), `diff/pa
 
 **Verification:** `npm run typecheck` is clean. `npm test` passes **406** tests; the 100 skips are per-case `runIf` gates. The build succeeds. `npm run e2e` passes **21/21** browser cases plus the CLI → browser check. At 100k vertices (warm), Tier 1 takes ≈ 0.28 s and Tier 2 ≈ 0.9 s, about 10% more than before because of the component bookkeeping; Tier 3 takes ≈ 2.5 s.
 
+### Milestone 4 — Three-way merge: design ✅
+
+Written up in **`docs/merge-design.md`** before any code. The key conclusions:
+
+- **Text-merge rules do not transfer.**
+  - A vertex is a surface *sample*, so adjacent edits must **not** conflict by themselves.
+  - Frames (a whole-model move, a unit re-export, a moved part) change every coordinate without changing the design locally.
+- **Frames + residuals.** Each side is decomposed into atomic edits against the base:
+  - a global frame `T_S` and per-part frames `R_S,c`;
+  - a local residual per vertex, expressed in the **base frame**: `δ_S(v) = Φ_S(v)⁻¹(p_S) − p_O`;
+  - vertex and face deletions;
+  - additions, each anchored to base vertices or floating.
+  
+  Frames and residuals are merged independently with the classic three-way rule (unchanged → take the other; equal → convergent; else conflict). The merged position is `Φ_M(v)(p_O + δ_M)`. So "ours converted to mm, theirs moved a vertex" and "ours moved a part, theirs edited it" compose instead of conflicting.
+- **Unit conversions compose last.** A pure unit conversion is a change of *representation*, not design, so it composes with the other side's whole-model move (`U ∘ T`) instead of conflicting.
+- **Eight conflict kinds:** `move-move`, `move-delete`, `delete-dependency`, `competing-additions` (same edge; also catches both sides re-meshing a region differently), `overlapping-additions` (interpenetrating new geometry), `part-motion`, `global-transform` and `lineage` (Tier 3 remesh: no vertex identity).
+- **Deliberately not conflicts:** adjacent vertex edits; a hole on one side with a rim vertex moved on the other; re-triangulation on one side with a vertex moved on the other; convergent changes; additions that share only one anchor vertex.
+- **Regions are the unit of resolution** (the analogue of a conflict hunk). A region is the union of *whole* change components of both sides that touch an atomic conflict, closed under overlap, so resolving never half-applies an edit. The choices are `ours` / `theirs` / `base`. **Unresolved regions keep the base state**; the merge never guesses.
+
+### Milestone 5 — Three-way merge: implementation ✅
+
+`packages/core/src/merge/`:
+- `sides.ts`: the decomposition above. A Tier 3 side is usable only when its correspondence is one-to-one and preserves every face; otherwise the result is a `lineage` conflict.
+- `plan.ts`: frame decisions, atomic conflicts, convergent-addition unification (mutual nearest within ε, in the base frame), competing edges, and regions by union-find over the change components of both sides.
+- `overlap.ts`: interpenetration tests between additions. They use edge-crosses-triangle (Möller–Trumbore) plus vertex-touches-triangle tests, compared in the base frame, with a uniform grid to stay near-linear.
+- `materialize.ts`: the merged mesh (orphaned vertices dropped), provenance for every vertex and face, and statistics.
+- `index.ts`: `mergeMeshes(base, ours, theirs, opts)` and `resolveMerge(result, {id: side})`, which re-resolves without recomputing the diffs.
+
+Supporting changes:
+- **Writers** (`packages/core/src/writers/`): OBJ (keeps groups) and STL (binary/ASCII). Each number is the shortest decimal that round-trips through float32. GLB output is not supported yet.
+- **CLI:**
+  - `polymerge merge <base> <ours> <theirs> -o out.stl|obj [--resolve side] [--pick id=side] [--report x.json]` exits 1 while conflicts are unresolved.
+  - `polymerge git-merge %O %A %B %P` is the git merge driver. It writes the result over %A and exits 1 on conflicts, so git marks the file `UU`.
+  - `polymerge resolve <path> --pick 0=theirs` reads git's index stages :1/:2/:3 to finish a conflicted merge.
+  - `git-setup` prints the `merge=polymerge` attributes and the driver config.
+- **Contract:** `IMergeResult`, `IMergeConflict`, `IMergeStats`, `IMergeProvenance`, `IMergeOptions`, `MergeConflictKind` and `MergeResolution` are in `types.ts`.
+
+Tests:
+- `packages/core/test/merge/merge.test.ts`: 25 scenarios.
+  - Clean merges: disjoint edits, adjacent edits, convergent moves/deletes/additions, a hole plus a rim move, additions on different edges, a re-ordered (Tier 2) side, and an orphan vertex.
+  - Frame composition: part motion + local edit, unit conversion + local edit, both converted, and unit conversion + whole-model move.
+  - Every conflict kind, with resolution and base-state checks.
+  - Symmetry (ours ↔ theirs), identities (merge with base or self), and logging.
+- `writers.test.ts` (6) and `packages/cli/test/merge.test.ts` (5) run in-process with real files.
+- `scripts/e2e-git.mjs` runs with **real git** and is part of `npm run e2e`: diff driver, a clean `git merge`, a conflicting `git merge` (UU, base kept in the region, other edits merged), then `polymerge resolve` + `git add` + commit.
+
+**Decisions**
+
+| # | Decision | Why |
+|---|----------|-----|
+| D12 | Merge = frames (global, per part) + base-frame residuals, merged independently. | It removes the false conflicts a per-vertex comparison would produce for unit re-exports, whole-model moves and moved parts. |
+| D13 | Adjacent vertex edits do not conflict; conflicts need the *same* vertex, anchor edge, part, frame or space. | Mesh vertices are samples, not semantic lines. Composition side effects such as intersections are a separate, future check. |
+| D14 | Conflict regions are unions of whole change components; unresolved regions stay at the base state. | Resolving never half-applies an edit, and the tool never guesses (owner's requirement). Git sees a conflicted file. |
+| D15 | A Tier 3 side with retessellation is a whole-model `lineage` conflict. | Vertex-level merging needs vertex identity. Transferring edits across tessellations is future work. |
+
+### Milestone 6 — Diff in a Web Worker ✅
+
+- `apps/web/src/engine.ts` (`DiffEngine`) runs `diffMeshes` in one persistent **module worker** (`src/worker/diff.worker.ts`, protocol in `src/worker/protocol.ts`).
+  - Meshes are structured-cloned in. The result's typed arrays are **transferred** back without copying.
+  - Engine log lines stream to the main thread, so the browser console still names the tier and the loading overlay shows each tier attempt live.
+  - A newer diff supersedes a running one by terminating the busy worker.
+  - The engine falls back to the main thread when workers are unavailable or fail to load. `?worker=0` forces the fallback.
+- The worker bundle is 59 kB. Tree-shaking keeps three.js out of it; it holds the diff engine only.
+- The test hook exposes `engine: 'worker' | 'main'` and `parts`. The smoke test now fails if a real diff didn't run in the worker.
+- **Evidence:** `scripts/e2e-worker.mjs` is part of `npm run e2e`. It uses a 40k-vertex pair, re-indexed so Tier 2 has real work.
+
+  | Mode | Longest main-thread task during the diff | Frames rendered |
+  |---|---|---|
+  | Worker | 143 ms (building the scene from the result) | 35 |
+  | `?worker=0` | 513 ms (the diff itself) | 7 |
+
+  The check measures main-thread **long tasks**, not raw frame gaps. Headless Chromium rasterises WebGL in software (SwiftShader), so one frame of a freshly loaded 80k-triangle model took ~330 ms with *no* JavaScript running. The long-task observer showed this, and it would not happen on a real GPU.
+- Still on the main thread: parsing files (~100 ms at 80k triangles) and building three.js buffers from the result (~100–150 ms). Moving parsing into the worker is the next step.
+
+### Test infrastructure fix
+
+During one full `npm run e2e` run, headless Chromium stalled on one case for 12 minutes. That case passed in 0.8 s on its own, and so did a full rerun (21/21). The per-case Playwright timeouts did not fire, because a browser call hung outside them. `apps/web/e2e/smoke.mjs` now gives each case a **hard deadline** (timeout + 30 s). A stalled case fails loudly as `hung: …`, and the browser is relaunched for the remaining cases. Hangs are reported, never silently retried.
+
+### State at end of session 2
+
+**Verified** (full `npm run verify` — see the commit): typecheck clean; all unit, fixture and merge tests pass; build OK; `npm run e2e` passes. That covers 21/21 browser cases, CLI → browser, the worker responsiveness check, and real-git diff/merge/resolve.
+
+**Known limits / next steps**
+1. **Merge UX in the viewer:** show merge results and conflict regions, and pick ours/theirs per region with a click. Today it is CLI and git only.
+2. **`collision` conflicts:** independent edits whose *composition* intersects or flips faces (design §4). Today this is only detected between additions.
+3. **Deformation transfer for `lineage` conflicts:** apply an edit made on one tessellation to a remeshed other side.
+4. **GLB/glTF writer**, so merges can output GLB. Materials/UVs are not merged yet.
+5. **Parsing in the worker.** Chunked scene building for very large results.
+6. **Merge performance:** the plan builds adjacency/components on top of two full diffs. It is fine at the tested sizes (≤ 10k vertices in tests) but has not been profiled at 100k+.
+7. Carried over from session 1: CI (GitHub Actions running `npm run verify`), npm publishing, and the small contract follow-ups.
+
 ---
 
 ## Session 1 — 2026-09-25 — v1 MVP: end-to-end pipeline

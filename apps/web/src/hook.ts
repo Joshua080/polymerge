@@ -24,6 +24,10 @@ export interface IPolymergeHook {
   target?: IMeshSummary;
   /** Where the current pair came from: "mock", "case:<id>", "url" or "files". */
   source?: string;
+  /** Where the last diff ran: in the Web Worker, or on the main thread (fallback). */
+  engine?: 'worker' | 'main';
+  /** Number of reported part motions in the result. */
+  parts?: number;
   /** The vertex currently shown in the inspector, if any. */
   selection?: ISelectionSnapshot;
 }

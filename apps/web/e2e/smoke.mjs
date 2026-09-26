@@ -294,6 +294,8 @@ async function runTarget(browser, baseUrl, target, opts) {
     // --- hook contract -----------------------------------------------------------
     if (![1, 2, 3].includes(hook.tier)) failures.push(`hook.tier is ${JSON.stringify(hook.tier)}`);
     if (typeof hook.tierName !== 'string' || !hook.tierName) failures.push('hook.tierName missing');
+    // Real diffs run in the Web Worker (the mock builds its result on the main thread by design).
+    if (!target.mock && hook.engine !== 'worker') failures.push(`diff ran on "${hook.engine}", expected the Web Worker`);
     const s = hook.stats;
     const statKeys = { vertices: ['unchanged', 'moved', 'added', 'removed'], faces: ['unchanged', 'modified', 'added', 'removed'] };
     for (const [group, keys] of Object.entries(statKeys))
@@ -379,7 +381,22 @@ async function main() {
     browser = await launchBrowser();
     console.log(`smoke: ${targets.length} target(s) against ${url} (${browser.version()})`);
     for (const target of targets) {
-      const r = await runTarget(browser, url, target, opts);
+      // Hard per-case deadline: a hung browser call (seen once with SwiftShader) must fail the
+      // case loudly instead of stalling the whole run. The browser is relaunched afterwards.
+      const deadline = opts.timeout + 30_000;
+      let timer;
+      const hung = new Promise((resolve) => {
+        timer = setTimeout(
+          () => resolve({ name: target.name, hook: undefined, failures: [`hung: no result within ${deadline} ms (browser stalled)`], warnings: [], logs: [] }),
+          deadline,
+        );
+      });
+      const r = await Promise.race([runTarget(browser, url, target, opts), hung]);
+      clearTimeout(timer);
+      if (r.failures.some((f) => f.startsWith('hung:'))) {
+        await Promise.race([browser.close().catch(() => {}), new Promise((res) => setTimeout(res, 5000))]);
+        browser = await launchBrowser();
+      }
       const h = r.hook ?? {};
       const st = h.stats;
       const line = st
