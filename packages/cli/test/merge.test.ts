@@ -20,6 +20,14 @@ function grid(moves: Record<number, [number, number, number]> = {}) {
   return createMesh(pos, faces);
 }
 
+/** Two parallel 6×6 sheets: the grid at z = 0 (vertices 0–35) and a copy at z = 1 (36–71). */
+function sheets(moves: Record<number, [number, number, number]> = {}) {
+  const g = grid();
+  const pos = [...g.positions, ...g.positions.map((x, i) => (i % 3 === 2 ? x + 1 : x))];
+  for (const [k, d] of Object.entries(moves)) for (let a = 0; a < 3; a++) pos[Number(k) * 3 + a] += d[a];
+  return createMesh(pos, [...g.faces, ...g.faces.map((f) => f + 36)]);
+}
+
 let dir = '';
 const file = (name: string): string => path.join(dir, name);
 
@@ -32,6 +40,14 @@ beforeAll(() => {
   writeFileSync(file('base.stl'), writeStl(grid()));
   writeFileSync(file('ours.stl'), writeStl(grid({ 14: [0, 0, 1] })));
   writeFileSync(file('theirs.stl'), writeStl(grid({ 14: [0, 0, -1] })));
+  // Combined-edit fold: vertex 14 (2, 2) and its neighbour 15 (3, 2) pushed past each other.
+  writeFileSync(file('ours-fold.obj'), writeObj(grid({ 14: [0.6, 0, 0] })));
+  writeFileSync(file('theirs-fold.obj'), writeObj(grid({ 15: [-0.6, 0, 0] })));
+  // Two stacked sheets (z = 0 and z = 1). Vertex 14 of the lower sheet is a move-move conflict;
+  // theirs also lowers vertex 50 of the upper sheet (directly above it) to z = 0.5.
+  writeFileSync(file('sheets.stl'), writeStl(sheets()));
+  writeFileSync(file('sheets-ours.stl'), writeStl(sheets({ 14: [0, 0, 0.7] })));
+  writeFileSync(file('sheets-theirs.stl'), writeStl(sheets({ 14: [0, 0, 0.2], 50: [0, 0, -0.5] })));
   vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
   vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
 });
@@ -79,6 +95,18 @@ describe('polymerge merge', () => {
     expect(await zAt(file('o4.obj'), 2, 2)).toBe(1);
   });
 
+  it('combined edits that fold the surface → collision conflict (exit 1); --no-collision-check merges them', async () => {
+    const report = file('fold.json');
+    expect(await runMerge(file('base.obj'), file('ours-fold.obj'), file('theirs-fold.obj'), { output: file('f1.obj'), report, quiet: true })).toBe(1);
+    const json = JSON.parse(readFileSync(report, 'utf8'));
+    expect(Object.keys(json.conflicts[0].kinds)).toEqual(['collision']);
+    expect(json.conflicts[0].baseVertices).toEqual(expect.arrayContaining([14, 15]));
+    expect(await zAt(file('f1.obj'), 2, 2)).toBe(0); // region kept at base: vertex 14 still at x = 2
+    expect(
+      await runMerge(file('base.obj'), file('ours-fold.obj'), file('theirs-fold.obj'), { output: file('f2.obj'), quiet: true, collisionCheck: false }),
+    ).toBe(0);
+  });
+
   it('validates flags and output formats', () => {
     expect(parsePicks(['0=ours', '12=base'])).toEqual({ 0: 'ours', 12: 'base' });
     expect(() => parsePicks(['x=ours'])).toThrow(/--pick/);
@@ -99,5 +127,26 @@ describe('polymerge git-merge (merge driver protocol)', () => {
     expect(await zAt(file('A2.tmp'), 2, 2)).toBe(1);
     expect(await runGitMerge([file('base.stl'), file('A2.tmp'), file('theirs.stl'), 'x.glb'])).toBe(2);
     expect(await runGitMerge(['only-one'])).toBe(2);
+  });
+
+  it('with --resolve, a resolution that combines into damage stops the merge (exit 1) instead of committing it', async () => {
+    // Unresolved, vertex 14 stays at base and theirs' lowered upper sheet is harmless. Resolving
+    // 14 'ours' raises it to 0.7, through the upper sheet theirs lowered to 0.5.
+    const report = file('sheets.json');
+    writeFileSync(file('A3.tmp'), readFileSync(file('sheets-ours.stl')));
+    expect(await runGitMerge([file('sheets.stl'), file('A3.tmp'), file('sheets-theirs.stl'), 'part.stl'])).toBe(1);
+    writeFileSync(file('A4.tmp'), readFileSync(file('sheets-ours.stl')));
+    expect(await runGitMerge([file('sheets.stl'), file('A4.tmp'), file('sheets-theirs.stl'), 'part.stl'], { resolve: 'theirs' })).toBe(0);
+    writeFileSync(file('A5.tmp'), readFileSync(file('sheets-ours.stl')));
+    expect(await runGitMerge([file('sheets.stl'), file('A5.tmp'), file('sheets-theirs.stl'), 'part.stl'], { resolve: 'ours' })).toBe(1);
+    // The explicit CLI writes the chosen result and reports the warning (exit 0: nothing unresolved).
+    expect(
+      await runMerge(file('sheets.stl'), file('sheets-ours.stl'), file('sheets-theirs.stl'), { output: file('f3.stl'), resolve: 'ours', report, quiet: true }),
+    ).toBe(0);
+    const json = JSON.parse(readFileSync(report, 'utf8'));
+    expect(json.clean).toBe(true);
+    expect(json.warnings).toHaveLength(1);
+    expect(json.warnings[0].kind).toBe('collision');
+    expect(json.warnings[0].mergedFaces.length).toBeGreaterThan(0);
   });
 });

@@ -28,6 +28,57 @@ Two checks were rewritten first, because they would have been flaky on a shared 
   - The check measures the longest stretch of that window the main thread spent inside one long task. It must be < 25% with the worker, and ≥ 75% with `?worker=0`, which proves the measurement sees blocking.
   - Locally: worker 0 ms of a 508 ms diff (0%); fallback 470 ms of 470 ms (100%).
 
+**Verified on GitHub.** Before the first push, a fresh clone ran `npm ci && npm run verify` and passed in 1m18s. The first Actions run ([run #1](https://github.com/Joshua080/polymerge/actions/runs/36242458833)) was green in 1m34s end to end, 58 s of it for `npm run verify`.
+- Perf tests on the runner: Tier 2 690 ms, Tier 3 1593 ms, against bounds of 6 s and 15 s.
+- Worker: 0% of a 324 ms diff. Fallback: 100% of 281 ms.
+- All 21 browser cases passed, plus e2e-view and e2e-git.
+
+### Milestone 2 — Combined edits: decided **solvable now**, and fixed for a stated class ✅
+
+**The gap.** Two edits that don't conflict under any rule, because they touch different vertices, edges, parts and frames, can still break the model once both are applied. Session 2 merged them silently.
+
+**Decision.** The gap splits into two classes, and I treated them differently:
+1. **Damage: solved now.** Surfaces passing through each other and faces folding over or collapsing are *objective* and *checkable*, and each one is attributable to specific edits. They are now a new conflict kind, **`collision`**.
+2. **Design judgement: a stated v1 limit.** Coplanar contact, clearances, minimum wall thickness and design intent in general are *not* judged. Deciding whether two parts may touch, or how thin a wall may be, needs knowledge of intent that a mesh does not carry. This is written down in `docs/merge-design.md` §4.1, the README, and here.
+
+**How it works** (`packages/core/src/merge/collide.ts`; details in the design doc):
+- **Versions.** Each merged face gets a bit per version (base / ours / theirs): set when the face differs from that version or is missing there. Only geometry that differs from all three can be new damage. This also means a side's *own* self-intersection is never blamed on the merge.
+- **Fold.** A face whose normal opposes every non-degenerate version of it, or that collapses below ε where none of its versions did.
+- **Crossing.** A face pair that properly crosses (an edge passes through the other face, with ε margins on both endpoints) in "part space", where the same pair crosses in no version.
+- **Regions.** A collision joins every change unit under its faces: both sides' change components at the corners, the added faces, and the frames of the parts involved. That needed two pieces of plumbing:
+  - Region building now reruns (`buildRegions` / `addAtomics`).
+  - A region can own a part *frame* even when the frame itself isn't in conflict.
+- **Repeat until sound.** A region left at base can expose damage that its edits had hidden. For example, theirs dented a wall and lowered a block into the dent; reverting the dent leaves the block through the flat wall. So the check → re-region loop repeats until clean. The regression test takes 3 passes (18 crossings, then 16, then 0).
+- **After resolution.** Picked resolutions can still combine badly. They are explicit choices, so they are not re-opened. They become `IMergeResult.warnings` instead: faces involved, and the conflicts that meet there. The CLI prints them. `polymerge git-merge --resolve` exits 1 on a warning, so git never auto-commits damaged geometry.
+- **Opt-out:** `detectCollisions: false` in the API, `--no-collision-check` on the CLI.
+
+**Tests.**
+- `packages/core/test/merge/collision.test.ts`, 10 scenarios:
+  - a thin wall pushed from both sides;
+  - neighbours pushed past each other (fold);
+  - two parts moved into the same space;
+  - an addition pierced by the other side's edit;
+  - the exposed-by-reversion case;
+  - mixed resolutions → warning;
+  - negative controls: near but not touching, and a side's own self-intersection;
+  - symmetry;
+  - the escape hatch.
+  
+  Each scenario checks that both sides are sound on their own and that each resolution gives back that side's geometry.
+- CLI: 2 more tests. One covers the collision conflict in `merge` and `--no-collision-check`; the other covers the git driver stopping on a warning.
+- The 25 existing merge tests are unchanged and all pass: no false positives on frame composition, additions or convergence.
+
+**Cost.** A new perf test, `packages/core/test/merge/perf.test.ts`, covers 100k vertices / 198k faces. Ours moves a 50k-vertex part, and theirs makes 3000 local edits on it. The merge is clean, and the check adds about 25% (0.96 s → 1.2 s).
+- On scattered edits over 99k faces it adds about 16%.
+- Two optimisations got it there: bit tagging without per-vertex closures, and a BVH only over faces near the candidates.
+- The final unresolved materialisation is also reused by `assemble`, instead of being computed twice.
+
+| # | Decision | Why |
+|---|----------|-----|
+| D16 | Combined-edit *damage* (crossings, folds) is a conflict (`collision`); combined *design judgement* (contact, clearance, thickness) is not checked in v1. | Damage is objective and attributable to edits; the other judgements need intent the mesh does not carry. |
+| D17 | Damage counts only when the geometry differs from all three versions (base, ours, theirs). | A side's own design, including its own self-intersections, is never blamed on the merge; it is also what makes the check cheap. |
+| D18 | Damage created by *chosen* resolutions is a warning, not a new conflict; the git driver stops on it when resolving automatically. | Re-opening explicit choices would make resolution unstable; silently committing damage would be worse. |
+
 ---
 
 ## Session 2 — 2026-09-26 — correspondence fixes, then three-way merge

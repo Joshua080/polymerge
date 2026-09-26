@@ -55,14 +55,31 @@ polymerge merge base.stl ours.stl theirs.stl -o merged.stl       # exit 1 while 
 polymerge merge base.stl ours.stl theirs.stl -o merged.stl --pick 0=theirs
 ```
 
-Every change that does not conflict is applied. This includes composing frames: if ours was re-exported in mm and theirs moved a vertex, the result is theirs' edit, in mm. Real conflicts, such as the same vertex moved differently, a vertex deleted on one side while the other side builds on it, different geometry added on the same edge or in the same space, or the same part moved differently, are reported as regions. Those regions **keep the base geometry until you choose** `ours`, `theirs` or `base` for them; the tool never guesses. The rules are in [docs/merge-design.md](docs/merge-design.md).
+Every change that does not conflict is applied. This includes composing frames: if ours was re-exported in mm and theirs moved a vertex, the result is theirs' edit, in mm.
+
+Real conflicts are reported as regions:
+- the same vertex moved differently;
+- a vertex deleted on one side while the other side builds on it;
+- different geometry added on the same edge or in the same space;
+- the same part moved differently.
+
+Those regions **keep the base geometry until you choose** `ours`, `theirs` or `base` for them; the tool never guesses. The rules are in [docs/merge-design.md](docs/merge-design.md).
+
+**Combined edits are checked too.** Two edits can each be fine on their own side and still break the model together. For example, both sides push the two faces of a thin wall towards each other, or move two parts into the same space. The merge applies everything that does not conflict and inspects the result. When surfaces pass through each other, or faces fold over or collapse, where neither base, ours nor theirs has that damage, it reports a **`collision` conflict** covering both edits. Picking resolutions per region can also produce such damage (top from ours, bottom from theirs). That combination is reported as a **warning**, and the git merge driver then stops rather than committing it.
+
+What the check deliberately does **not** judge (v1 limits):
+- surfaces that only touch or overlap in the same plane;
+- near misses, such as clearances or minimum wall thickness;
+- design intent in general.
+
+`--no-collision-check` (API: `detectCollisions: false`) turns the check off.
 
 ## CLI
 
 ```
 polymerge diff <base> <target> [--json out.json|-] [--force-tier 1|2|3] [--exit-code] [--top N]
 polymerge view <base> <target> [--port N] [--no-open]
-polymerge merge <base> <ours> <theirs> [-o out.stl|obj] [--resolve ours|theirs|base] [--pick id=side] [--report x.json]
+polymerge merge <base> <ours> <theirs> [-o out.stl|obj] [--resolve ours|theirs|base] [--pick id=side] [--report x.json] [--no-collision-check]
 polymerge resolve <path> --pick <id>=<side>   # finish a conflicted git merge of a model
 polymerge info <file>
 polymerge git-diff …          # git external diff driver

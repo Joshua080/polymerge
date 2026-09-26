@@ -6,13 +6,16 @@
  *      spatially overlapping additions,
  *   4. conflict REGIONS: unions of whole change components of both sides that touch an atomic
  *      conflict, closed under overlap (docs/merge-design.md §5).
- * Materialisation (materialize.ts) turns a plan + resolutions into a mesh.
+ * Materialisation (materialize.ts) turns a plan + resolutions into a mesh. Collision conflicts
+ * (collide.ts) are found on that mesh afterwards and added with `addAtomics`, which rebuilds the
+ * regions.
  */
 import { buildAdjacency } from '../diff/adjacency.js';
 import { componentVertices, type IComponents } from '../diff/components.js';
 import { boxCorners, composeRigid, identityRigid, invertRigid, maxMotion, applyRigid, type IRigid } from '../diff/linalg.js';
 import { KdTree } from '../diff/spatial.js';
 import type { IMesh, MergeConflictKind } from '../types.js';
+import type { IMaterialized } from './materialize.js';
 import { findOverlaps } from './overlap.js';
 import { sideFrame, type ISide } from './sides.js';
 
@@ -24,6 +27,28 @@ export interface IFrameDecision {
   /** Null when the two sides conflict (the resolution picks). */
   merged: IRigid | null;
   source: FrameSource;
+}
+
+/** One atomic conflict, before grouping into regions. */
+export interface IAtomic {
+  kind: MergeConflictKind;
+  /** Base vertices involved: every change component (either side) touching them joins. */
+  base: number[];
+  /** Added faces involved, as slots into each side's addedFaces. */
+  oursFaceSlots: number[];
+  theirsFaceSlots: number[];
+  /** Part-motion conflict: the base component. */
+  part?: number;
+  /** Base components whose part FRAME is involved (collisions with a moved part). */
+  frames?: number[];
+  /** Collision flavour (for the region summary). */
+  collision?: 'crossing' | 'fold';
+  detail?: string;
+}
+
+interface IChangeComponents {
+  uf: UnionFind;
+  touched: Uint8Array;
 }
 
 export interface IRegion {
@@ -56,6 +81,8 @@ export interface IMergePlan {
   /** 1 = this added face also exists identically on the other side. */
   oursConvergent: Uint8Array;
   theirsConvergent: Uint8Array;
+  /** Convergent added-face pairs [ours slot, theirs slot]. */
+  convergentPairs: Array<[number, number]>;
   regions: IRegion[];
   /** Region of each base vertex (-1 = none). */
   regionOfBase: Int32Array;
@@ -64,6 +91,22 @@ export interface IMergePlan {
   regionOfTheirsFace: Int32Array;
   /** Movement threshold in base units (max of both sides). */
   eps: number;
+  /** Atomic conflicts the regions are built from (collision atomics are appended later). */
+  atomics: IAtomic[];
+  /** Components with a part-motion conflict. */
+  partConflicts: number[];
+  /** Bounding-box corners of each moved part (base frame), for frame comparisons. */
+  partCorners: Map<number, Float64Array>;
+  /** Added-face slot of each side face (-1 = not an addition). */
+  oursSlotOfFace: Int32Array;
+  theirsSlotOfFace: Int32Array;
+  /** Change components of each side (null until regions are built). */
+  changeA: IChangeComponents | null;
+  changeB: IChangeComponents | null;
+  /** Check combinations for collisions (IMergeOptions.detectCollisions). */
+  detectCollisions: boolean;
+  /** The materialised merge with every conflict unresolved, once regions are final (cache). */
+  unresolvedMerge: IMaterialized | null;
 }
 
 function sameRigid(a: IRigid, b: IRigid, corners: Float64Array, eps: number): boolean {
@@ -163,11 +206,21 @@ export function buildPlan(base: IMesh, ours: ISide, theirs: ISide, baseComponent
     unified: new Int32Array(nB).fill(-1),
     oursConvergent: new Uint8Array(ours.mesh.faceCount),
     theirsConvergent: new Uint8Array(theirs.mesh.faceCount),
+    convergentPairs: [],
     regions: [],
     regionOfBase: new Int32Array(nO).fill(-1),
     regionOfOursFace: new Int32Array(ours.mesh.faceCount).fill(-1),
     regionOfTheirsFace: new Int32Array(theirs.mesh.faceCount).fill(-1),
     eps,
+    atomics: [],
+    partConflicts: [],
+    partCorners: new Map(),
+    oursSlotOfFace: slotsOf(ours),
+    theirsSlotOfFace: slotsOf(theirs),
+    changeA: null,
+    changeB: null,
+    detectCollisions: true,
+    unresolvedMerge: null,
   });
   const plan = empty();
 
@@ -199,6 +252,7 @@ export function buildPlan(base: IMesh, ours: ISide, theirs: ISide, baseComponent
     const b = theirs.partMotion.get(c) ?? I;
     const verts = componentVertices(baseComponents, c);
     const cc = partCorners(base, verts);
+    plan.partCorners.set(c, cc);
     let d: IFrameDecision;
     if (isIdentity(b, cc, eps)) d = { ours: a, theirs: b, merged: a, source: 'ours' };
     else if (isIdentity(a, cc, eps)) d = { ours: a, theirs: b, merged: b, source: 'theirs' };
@@ -211,15 +265,7 @@ export function buildPlan(base: IMesh, ours: ISide, theirs: ISide, baseComponent
   }
 
   // ---- 2. Vertices ----------------------------------------------------------------------------
-  interface IAtomic {
-    kind: MergeConflictKind;
-    base: number[];
-    oursFaceSlots: number[];
-    theirsFaceSlots: number[];
-    part?: number;
-    detail?: string;
-  }
-  const atomics: IAtomic[] = [];
+  const atomics = plan.atomics;
   for (let v = 0; v < nO; v++) {
     const dA = ours.deleted[v];
     const dB = theirs.deleted[v];
@@ -334,45 +380,10 @@ export function buildPlan(base: IMesh, ours: ISide, theirs: ISide, baseComponent
   }
 
   // ---- 4. Regions -------------------------------------------------------------------------------
-  const adj = buildAdjacency(nO, base.faces);
-  const cA = changeComponents({ base }, ours, adj);
-  const cB = changeComponents({ base }, theirs, adj);
-  const nNodesA = nO + ours.addedFaces.length;
-  const nNodesB = nO + theirs.addedFaces.length;
-  const offB = nNodesA;
-  const offP = nNodesA + nNodesB;
-  const uf = new UnionFind(offP + partConflicts.length);
-  const nodeA = (x: number): number => cA.uf.find(x);
-  const nodeB = (x: number): number => offB + cB.uf.find(x);
-  // Overlap: a base vertex touched by both sides joins their components.
-  for (let v = 0; v < nO; v++) if (cA.touched[v] && cB.touched[v]) uf.union(nodeA(v), nodeB(v));
-  // Convergent additions join the two sides' components.
-  for (const [i, j] of convergentPairs) uf.union(nodeA(nO + i), nodeB(nO + j));
-  const seeds: number[] = [];
-  const seedKinds: Array<[number, IAtomic]> = [];
-  const seedAtomic = (node: number, a: IAtomic): void => {
-    seeds.push(node);
-    seedKinds.push([node, a]);
-  };
-  for (const a of atomics) {
-    const nodes: number[] = [];
-    for (const v of a.base) {
-      if (cA.touched[v]) nodes.push(nodeA(v));
-      if (cB.touched[v]) nodes.push(nodeB(v));
-    }
-    for (const i of a.oursFaceSlots) nodes.push(nodeA(nO + i));
-    for (const j of a.theirsFaceSlots) nodes.push(nodeB(nO + j));
-    for (let k = 1; k < nodes.length; k++) uf.union(nodes[0], nodes[k]);
-    if (nodes.length > 0) seedAtomic(nodes[0], a);
-  }
-  partConflicts.forEach((c, k) => {
-    const node = offP + k;
-    for (const v of componentVertices(baseComponents, c)) {
-      if (cA.touched[v]) uf.union(node, nodeA(v));
-      if (cB.touched[v]) uf.union(node, nodeB(v));
-    }
+  plan.partConflicts = partConflicts;
+  for (const c of partConflicts) {
     const d = plan.parts.get(c)!;
-    seedAtomic(node, {
+    atomics.push({
       kind: 'part-motion',
       base: [],
       oursFaceSlots: [],
@@ -380,25 +391,95 @@ export function buildPlan(base: IMesh, ours: ISide, theirs: ISide, baseComponent
       part: c,
       detail: `ours ${describeRigid(d.ours)} vs theirs ${describeRigid(d.theirs)}`,
     });
-  });
+  }
+  plan.convergentPairs = convergentPairs;
+  const adj = buildAdjacency(nO, base.faces);
+  plan.changeA = changeComponents({ base }, ours, adj);
+  plan.changeB = changeComponents({ base }, theirs, adj);
+  buildRegions(plan);
+  return plan;
+}
+
+/** Add atomic conflicts (collisions found on a materialised merge) and rebuild the regions. */
+export function addAtomics(plan: IMergePlan, extra: IAtomic[]): void {
+  plan.atomics.push(...extra);
+  plan.unresolvedMerge = null;
+  buildRegions(plan);
+}
+
+/**
+ * Regions = connected groups of change units (each side's change components, conflicting part
+ * frames, and part frames involved in collisions) joined by atomic conflicts, numbered in order
+ * of first discovery.
+ */
+function buildRegions(plan: IMergePlan): void {
+  const { base, ours, theirs, baseComponents } = plan;
+  const nO = base.vertexCount;
+  const cA = plan.changeA!;
+  const cB = plan.changeB!;
+  const nNodesA = nO + ours.addedFaces.length;
+  const nNodesB = nO + theirs.addedFaces.length;
+  const offB = nNodesA;
+  const offP = nNodesA + nNodesB;
+  // Frame units: conflicting part frames first, then frames only involved in collisions.
+  const frameNode = new Map<number, number>();
+  plan.partConflicts.forEach((c, k) => frameNode.set(c, offP + k));
+  for (const a of plan.atomics) for (const c of a.frames ?? []) if (!frameNode.has(c)) frameNode.set(c, offP + frameNode.size);
+  const uf = new UnionFind(offP + frameNode.size);
+  const nodeA = (x: number): number => cA.uf.find(x);
+  const nodeB = (x: number): number => offB + cB.uf.find(x);
+  // Overlap: a base vertex touched by both sides joins their components.
+  for (let v = 0; v < nO; v++) if (cA.touched[v] && cB.touched[v]) uf.union(nodeA(v), nodeB(v));
+  // Convergent additions join the two sides' components.
+  for (const [i, j] of plan.convergentPairs) uf.union(nodeA(nO + i), nodeB(nO + j));
+  // A conflicting part frame spans every change of either side on that part.
+  for (const c of plan.partConflicts) {
+    const node = frameNode.get(c)!;
+    for (const v of componentVertices(baseComponents, c)) {
+      if (cA.touched[v]) uf.union(node, nodeA(v));
+      if (cB.touched[v]) uf.union(node, nodeB(v));
+    }
+  }
+  const seeds: Array<[number, IAtomic]> = [];
+  for (const a of plan.atomics) {
+    const nodes: number[] = [];
+    for (const v of a.base) {
+      if (cA.touched[v]) nodes.push(nodeA(v));
+      if (cB.touched[v]) nodes.push(nodeB(v));
+    }
+    for (const i of a.oursFaceSlots) nodes.push(nodeA(nO + i));
+    for (const j of a.theirsFaceSlots) nodes.push(nodeB(nO + j));
+    if (a.part !== undefined) nodes.push(frameNode.get(a.part)!);
+    for (const c of a.frames ?? []) nodes.push(frameNode.get(c)!);
+    for (let k = 1; k < nodes.length; k++) uf.union(nodes[0], nodes[k]);
+    if (nodes.length > 0) seeds.push([nodes[0], a]);
+  }
 
   // Regions in order of first discovery.
   const regionOfRoot = new Map<number, number>();
   const regions: IRegion[] = [];
-  for (const [node, a] of seedKinds) {
+  const collisions: Array<{ crossing: number; fold: number }> = [];
+  for (const [node, a] of seeds) {
     const root = uf.find(node);
     let r = regionOfRoot.get(root);
     if (r === undefined) {
       r = regions.length;
       regionOfRoot.set(root, r);
       regions.push({ id: r, kinds: {}, baseVertices: [], oursFaces: [], theirsFaces: [], partComponents: [], details: [] });
+      collisions.push({ crossing: 0, fold: 0 });
     }
     const reg = regions[r];
     reg.kinds[a.kind] = (reg.kinds[a.kind] ?? 0) + 1;
-    if (a.part !== undefined) reg.partComponents.push(a.part);
+    if (a.part !== undefined && !reg.partComponents.includes(a.part)) reg.partComponents.push(a.part);
     if (a.detail) reg.details.push(a.detail);
+    if (a.collision) collisions[r][a.collision]++;
   }
+  collisions.forEach(({ crossing, fold }, r) => {
+    const text = [crossing > 0 ? `${crossing} crossing face pair(s)` : '', fold > 0 ? `${fold} folded or collapsed face(s)` : ''].filter(Boolean);
+    if (text.length > 0) regions[r].details.push(text.join(', '));
+  });
   const regionOfNode = (node: number): number => regionOfRoot.get(uf.find(node)) ?? -1;
+  plan.regionOfBase.fill(-1);
   for (let v = 0; v < nO; v++) {
     let r = -1;
     if (cA.touched[v]) r = regionOfNode(nodeA(v));
@@ -408,15 +489,20 @@ export function buildPlan(base: IMesh, ours: ISide, theirs: ISide, baseComponent
       regions[r].baseVertices.push(v);
     }
   }
-  partConflicts.forEach((c, k) => {
-    const r = regionOfNode(offP + k);
+  // Part frames in a region: the region decides the frame, and shows the whole part. Vertices
+  // another change of either side touches keep that change's own region.
+  for (const [c, node] of frameNode) {
+    const r = regionOfNode(node);
+    if (r < 0) continue;
+    if (!regions[r].partComponents.includes(c)) regions[r].partComponents.push(c);
     for (const v of componentVertices(baseComponents, c)) {
-      if (plan.regionOfBase[v] < 0) {
-        plan.regionOfBase[v] = r;
-        regions[r].baseVertices.push(v);
-      }
+      if (plan.regionOfBase[v] >= 0 || cA.touched[v] || cB.touched[v]) continue;
+      plan.regionOfBase[v] = r;
+      regions[r].baseVertices.push(v);
     }
-  });
+  }
+  plan.regionOfOursFace.fill(-1);
+  plan.regionOfTheirsFace.fill(-1);
   ours.addedFaces.forEach((f, i) => {
     const r = regionOfNode(nodeA(nO + i));
     plan.regionOfOursFace[f] = r;
@@ -429,11 +515,17 @@ export function buildPlan(base: IMesh, ours: ISide, theirs: ISide, baseComponent
   });
   for (const r of regions) r.baseVertices.sort((a, b) => a - b);
   plan.regions = regions;
-  return plan;
+}
+
+/** Added-face slot per side face (-1 = not an addition). */
+function slotsOf(side: ISide): Int32Array {
+  const out = new Int32Array(side.mesh.faceCount).fill(-1);
+  side.addedFaces.forEach((f, i) => (out[f] = i));
+  return out;
 }
 
 /** Bounding-box corners of a set of base vertices. */
-function partCorners(base: IMesh, verts: Uint32Array): Float64Array {
+export function partCorners(base: IMesh, verts: Uint32Array): Float64Array {
   const min = [Infinity, Infinity, Infinity];
   const max = [-Infinity, -Infinity, -Infinity];
   const p = base.positions;

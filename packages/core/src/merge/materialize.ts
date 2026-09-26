@@ -9,7 +9,8 @@
  * Base faces: kept outside regions iff both sides kept them; in a region per the chosen side.
  * Added faces: included when not in a region, or the region chose their side; identical
  * additions of both sides are emitted once (from ours).
- * Frames: Φ_M(c) = T_M ∘ R_M,c with conflicting frames taken from the resolution.
+ * Frames: Φ_M(c) = T_M ∘ R_M,c. A part whose frame belongs to a region (a part-motion conflict,
+ * or a part motion involved in a collision) takes the region's choice: ours' R, theirs' R, or none.
  */
 import { componentVertices } from '../diff/components.js';
 import { applyRigid, composeRigid, identityRigid, type IRigid } from '../diff/linalg.js';
@@ -24,6 +25,10 @@ export interface IMaterialized {
   stats: Omit<IMergeStats, 'conflicts' | 'unresolved'>;
   /** Global frame actually applied. */
   global: IRigid;
+  /** Local residual applied to each base vertex (base frame, xyz; 0 when unmoved or deleted). */
+  delta: Float64Array;
+  /** Relative part frame R_M,c applied per base component (absent = identity). */
+  partFrames: Map<number, IRigid>;
 }
 
 export interface IResolutions {
@@ -80,6 +85,8 @@ function copyMesh(m: IMesh, source: 0 | 1 | 2): IMaterialized {
     },
     stats: emptyStats(),
     global: identityRigid(),
+    delta: new Float64Array(0),
+    partFrames: new Map(),
   };
 }
 
@@ -99,21 +106,21 @@ export function materialize(plan: IMergePlan, res: IResolutions): IMaterialized 
   const partRegion = new Map<number, number>();
   for (const r of plan.regions) for (const c of r.partComponents) partRegion.set(c, r.id);
   const frameOf = new Map<number, IRigid>();
+  const partFrames = new Map<number, IRigid>();
   const phi = (c: number): IRigid => {
     let g = frameOf.get(c);
     if (g) return g;
     const d = c >= 0 ? plan.parts.get(c) : undefined;
     let R: IRigid | null = null;
     if (d) {
-      if (d.merged) R = d.merged;
-      else {
-        const choice = res.region(partRegion.get(c) ?? -1);
-        R = choice === 'ours' ? d.ours : choice === 'theirs' ? d.theirs : null;
-      }
+      const region = partRegion.get(c);
+      // A frame inside a region follows the region's choice (unresolved = base = no motion).
+      const src = region !== undefined ? res.region(region) : d.source;
+      R = region !== undefined ? (src === 'ours' ? d.ours : src === 'theirs' ? d.theirs : null) : d.merged;
       if (R) {
-        const src = d.merged ? d.source : res.region(partRegion.get(c) ?? -1);
-        if (src === 'ours') stats.partMotionsFromOurs++;
-        else if (src === 'theirs') stats.partMotionsFromTheirs++;
+        partFrames.set(c, R);
+        if (src === 'ours' && ours.partMotion.has(c)) stats.partMotionsFromOurs++;
+        else if (src === 'theirs' && theirs.partMotion.has(c)) stats.partMotionsFromTheirs++;
       }
     }
     g = R ? composeRigid(T, R) : T;
@@ -313,6 +320,8 @@ export function materialize(plan: IMergePlan, res: IResolutions): IMaterialized 
     },
     stats,
     global: T,
+    delta,
+    partFrames,
   };
 }
 

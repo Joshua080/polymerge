@@ -7,6 +7,8 @@
  * Both diffs (base → ours, base → theirs) run with the regular tiered engine, so the merge
  * log states which tier resolved each side. Every non-conflicting change is applied; each
  * conflict region stays in its BASE state until a resolution chooses 'ours' / 'theirs'.
+ * The combination is then checked for damage neither side has (collide.ts): collision
+ * conflicts before resolution, warnings after it.
  */
 import { buildComponents } from '../diff/components.js';
 import { diffMeshes } from '../diff/engine.js';
@@ -22,6 +24,7 @@ import type {
   MergeMeshesFn,
   MergeResolution,
 } from '../types.js';
+import { addCollisionConflicts, collisionWarning } from './collide.js';
 import { materialize, type IResolutions } from './materialize.js';
 import { buildPlan, type IMergePlan, type IRegion } from './plan.js';
 import { decomposeSide } from './sides.js';
@@ -41,6 +44,7 @@ const KIND_TEXT: Record<MergeConflictKind, (n: number) => string> = {
   'part-motion': (n) => `both sides moved the same part differently (${n})`,
   'global-transform': () => 'both sides transformed the whole model differently',
   lineage: () => 'vertex identity was lost on one side, so edits cannot be merged vertex by vertex',
+  collision: () => 'edits that are fine on each side make the surface pass through itself or fold over when combined',
 };
 
 function regionMessage(r: IRegion): string {
@@ -165,9 +169,16 @@ function assemble(
     global: globalConflict ? choiceOf(globalConflict.id) : null,
     lineage: plan.lineage !== null ? choiceOf(0) : null,
   };
-  const m = materialize(plan, res);
+  const nothingChosen = provisional.every((c) => choiceOf(c.id) === null);
+  const m = nothingChosen && plan.unresolvedMerge ? plan.unresolvedMerge : materialize(plan, res);
   const conflicts = buildConflicts(plan, m.global).map((c) => ({ ...c, resolution: choiceOf(c.id) }));
   const unresolved = conflicts.filter((c) => c.resolution === null).length;
+  // Unresolved regions are base and the unresolved merge was checked when planning; chosen
+  // resolutions can still combine badly with each other or with the automatic changes.
+  const warning =
+    plan.detectCollisions && plan.lineage === null && conflicts.some((c) => c.resolution !== null && !c.wholeModel)
+      ? collisionWarning(plan, m)
+      : null;
   const isIdentity = plan.global.source === 'base' || (plan.global.source === 'conflict' && res.global !== 'ours' && res.global !== 'theirs');
   const units =
     plan.global.source === 'ours' || (plan.global.source === 'conflict' && res.global === 'ours')
@@ -196,6 +207,7 @@ function assemble(
       },
     },
     provenance: m.provenance,
+    warnings: warning ? [warning] : [],
     ours: plan.ours.diff,
     theirs: plan.theirs.diff,
     durationMs: now() - t0,
@@ -212,6 +224,7 @@ function assemble(
     for (const c of conflicts) {
       logger.info(`[polymerge]   conflict #${c.id}${c.resolution ? ` → ${c.resolution}` : ''}: ${c.message}`);
     }
+    for (const w of result.warnings) logger.warn(`[polymerge] merge: WARNING ${w.message}`);
   }
   return result;
 }
@@ -230,6 +243,8 @@ export const mergeMeshes: MergeMeshesFn = (base: IMesh, ours: IMesh, theirs: IMe
   const sideA = decomposeSide('ours', base, ours, dA, baseComponents, baseFaceSet);
   const sideB = decomposeSide('theirs', base, theirs, dB, baseComponents, baseFaceSet);
   const plan = buildPlan(base, sideA, sideB, baseComponents);
+  plan.detectCollisions = options.detectCollisions !== false;
+  if (plan.detectCollisions) addCollisionConflicts(plan, logger);
   return assemble(plan, options.resolutions ?? {}, options.defaultResolution ?? null, t0, logger);
 };
 

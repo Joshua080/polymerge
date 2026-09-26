@@ -42,6 +42,7 @@ Usage:
       --resolve <side>       Resolve every conflict with ours | theirs | base
       --pick <id>=<side>     Resolve one conflict (repeatable), e.g. --pick 0=theirs
       --report <file>        Write the conflicts and statistics as JSON
+      --no-collision-check   Don't check the combined edits for surfaces passing through each other
       -q, --quiet            No report
   polymerge resolve <path> --pick <id>=<side> | --resolve <side>
                                              Finish a conflicted git merge of <path> (reads git's index stages)
@@ -130,6 +131,7 @@ async function main(argv: string[]): Promise<number> {
           pick: { type: 'string', multiple: true },
           report: { type: 'string' },
           quiet: { type: 'boolean', short: 'q' },
+          'no-collision-check': { type: 'boolean' },
         },
       });
       requirePositionals('merge', positionals, 3);
@@ -140,6 +142,7 @@ async function main(argv: string[]): Promise<number> {
         pick: values.pick,
         report: values.report,
         quiet: values.quiet,
+        collisionCheck: !values['no-collision-check'],
       });
     }
     case 'resolve': {
@@ -151,16 +154,27 @@ async function main(argv: string[]): Promise<number> {
           pick: { type: 'string', multiple: true },
           format: { type: 'string' },
           quiet: { type: 'boolean', short: 'q' },
+          'no-collision-check': { type: 'boolean' },
         },
       });
       requirePositionals('resolve', positionals, 1);
-      return runGitResolve(positionals[0], { resolve: values.resolve, pick: values.pick, format: values.format, quiet: values.quiet });
+      return runGitResolve(positionals[0], {
+        resolve: values.resolve,
+        pick: values.pick,
+        format: values.format,
+        quiet: values.quiet,
+        collisionCheck: !values['no-collision-check'],
+      });
     }
     case 'git-diff':
       return runGitDiff(rest);
     case 'git-merge': {
-      const { values, positionals } = parseArgs({ args: rest, allowPositionals: true, options: { resolve: { type: 'string' } } });
-      return runGitMerge(positionals, { resolve: values.resolve });
+      const { values, positionals } = parseArgs({
+        args: rest,
+        allowPositionals: true,
+        options: { resolve: { type: 'string' }, 'no-collision-check': { type: 'boolean' } },
+      });
+      return runGitMerge(positionals, { resolve: values.resolve, collisionCheck: !values['no-collision-check'] });
     }
     case 'git-setup':
       process.stdout.write(gitSetupText() + '\n');

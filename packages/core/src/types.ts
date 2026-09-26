@@ -455,7 +455,10 @@ export type MergeResolution = 'ours' | 'theirs' | 'base';
  *  - overlapping-additions: new geometry of both sides interpenetrates in space;
  *  - part-motion: both moved the same part, differently;
  *  - global-transform: both transformed the whole model, differently (not a pure unit conversion);
- *  - lineage: a side lost vertex identity (Tier 3 remesh) — vertex-level merging impossible.
+ *  - lineage: a side lost vertex identity (Tier 3 remesh) — vertex-level merging impossible;
+ *  - collision: edits that are fine on each side damage the model only when COMBINED — surfaces
+ *    now pass through each other, or faces fold over / collapse — where neither base, ours nor
+ *    theirs had that damage (checked on the merged mesh; docs/merge-design.md §4).
  */
 export type MergeConflictKind =
   | 'move-move'
@@ -465,7 +468,8 @@ export type MergeConflictKind =
   | 'overlapping-additions'
   | 'part-motion'
   | 'global-transform'
-  | 'lineage';
+  | 'lineage'
+  | 'collision';
 
 /** One conflict REGION (the mesh analogue of a conflict hunk): resolved as a unit. */
 export interface IMergeConflict {
@@ -534,6 +538,26 @@ export interface IMergeOptions {
   defaultResolution?: MergeResolution | null;
   /** Log sink (defaults to console); the two diffs log their tiers through it too. */
   logger?: IDiffLogger;
+  /**
+   * Check the combination of both sides' edits for surfaces passing through each other and
+   * folded faces that neither side had (`collision` conflicts, and warnings after
+   * resolution). Default true.
+   */
+  detectCollisions?: boolean;
+}
+
+/**
+ * Damage that only the chosen COMBINATION of resolutions creates (each resolution is fine on its
+ * own): e.g. one region resolved 'ours' pushes a wall into geometry another region took from
+ * 'theirs'. Reported, never auto-fixed: the resolutions were explicit choices.
+ */
+export interface IMergeWarning {
+  kind: 'collision';
+  message: string;
+  /** Faces of `merged` involved (crossing pairs and folded faces). */
+  mergedFaces: Uint32Array;
+  /** Conflicts whose resolutions meet here. */
+  conflicts: number[];
 }
 
 export interface IMergeResult {
@@ -546,6 +570,8 @@ export interface IMergeResult {
   /** Global frame of the merged model (base → merged). */
   frame: { source: 'base' | 'ours' | 'theirs' | 'both' | 'composed' | 'conflict'; transform: IRigidTransform };
   provenance: IMergeProvenance;
+  /** Problems created by the combination of chosen resolutions (empty when none / unresolved). */
+  warnings: IMergeWarning[];
   /** The correspondences the merge was computed from. */
   ours: IDiffResult;
   theirs: IDiffResult;
