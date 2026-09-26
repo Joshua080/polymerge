@@ -50,7 +50,7 @@ export function classify(ctx: DiffContext, outcome: ITierOutcome): IClassificati
   const surf = outcome.surfaceDistance;
   if (!surf) {
     const g = mat4ToRigid(outcome.alignment.matrix);
-    const r = g.r;
+    const r = g.r.map((v) => v * g.s); // s·R (the alignment may be a similarity)
     const tr = g.t;
     const bp = base.positions;
     const tp = target.positions;

@@ -4,6 +4,88 @@ A living log of milestones, architectural decisions, what works, what is stubbed
 
 ---
 
+## Session 2 — 2026-09-26 — correspondence fixes, then three-way merge
+
+Priorities set by the owner: (1) fix the two known correspondence bugs, with regression tests that would have caught them; (2) design and start three-way merge; (3) if time allows, move the browser diff into a Web Worker.
+
+Work happens on `claude/optimistic-franklin-u4oplc`, branched from `main`, with a PR into `main`.
+
+### Milestone 1 — Regression tests first (both bugs reproduced) ✅
+
+I wrote the tests before touching the engine, and all of them failed on the session-1 engine:
+
+- `packages/core/test/diff/parts.test.ts`: 8 scenarios.
+  - A small part rotated and moved while the file order is shuffled.
+  - A 50/50 two-part model where one half moved.
+  - Direct lineage.
+  - A whole-model Tier 3 move plus one part moved relative to it.
+  - Four identical parts with one moved.
+  - A moved part that was also edited locally.
+  - Two negative controls: a different part added, and an unchanged model.
+- `packages/core/test/diff/scale.test.ts`: 8 scenarios.
+  - in→mm with rotation, mm→in, m→mm, and a non-unit ×1.5.
+  - Units plus a real local edit.
+  - Same-lineage unit re-export.
+  - Whole-model translation.
+  - Scale must stay exactly 1 on a remesh.
+- Real symptoms measured on the session-1 engine:
+  - The knob in the assembly test: 0 moved; its 62 vertices read as removed + added.
+  - inch→mm with rotation: Tier 3 reported **481 of 482 vertices "added"**, none unchanged.
+  - The same file re-exported ×25.4: all 482 vertices "moved".
+- File-based fixtures: `moved-part` (OBJ↔OBJ), `units-inch-to-mm` (STL inches ↔ OBJ mm, rotated and shuffled) and `units-same-lineage` (STL↔STL). Run in a worktree of `main` against the **session-1 engine**, these three cases fail **13 checks**: tier, vertex/face counts, `mustMatch` correspondences and the alignment.
+
+### Milestone 2 — Moved parts are MOVED, not removed + added ✅
+
+New modules: `diff/components.ts` (connected components by union-find), `diff/parts.ts`, `diff/propagate.ts` (Tier 2's propagation extracted into a reusable class) and `diff/alignment.ts` (Tier 3's ICP extracted into a reusable estimator).
+
+- **Recovery:** components that the accepted matching leaves mostly unmatched are rigidly registered pairwise, with ICP on the two components.
+  - Candidate pairs must be isolated: whatever is matched in B maps only into T, and vice versa. Their vertex counts must be within ×3 and their RMS radii within ×1.5.
+  - Candidates are ranked by shape similarity, then by least motion, 3 per component, with at most 64 registrations per diff.
+  - **Tiers 1/2:** seeds come from mutual nearest neighbours under the part transform. Propagation then grows them, so vertices edited locally on the moved part are matched too.
+  - **Tier 3:** nearest-surface mapping runs under the part transform.
+  - A pair is accepted only when `gain ≥ max(3, 10% of the part)` and it explains ≥ 50% of the part. Accepted pairs are applied greedily (largest gain first, then least motion), and each component is used once.
+- **Where it runs:**
+  - Tier 2: inside the tier, before scoring, so a big moved part no longer pushes Tier 2 below its threshold.
+  - Tier 3: after the global alignment.
+  - Tier 1: as a post-pass.
+- **Matched-part analysis (Tiers 1/2):** already-matched parts that mostly moved are fitted with one trimmed rigid motion. The motion is reported when ≥ 90% of the part's pairs follow it.
+- **Contract:** new `IDiffResult.parts: IPartMotion[]`. Each record has the source (`registration` | `matched`), vertex lists, matched/deformed counts, the full transform, rotation, centroid shift relative to the alignment, rms, and group names. It can be switched off with `detectParts: false`. Every part gets an explicit log line: `[polymerge] ↳ moved part …`.
+- **Honest limits:**
+  - A part deleted at one place and an *identical* copy added elsewhere is indistinguishable from a move, so it is reported as one.
+  - A part that is part of a connected mesh, i.e. a region dragged far from its neighbours, is still matched by propagation only within ~3 edge lengths.
+
+### Milestone 3 — Uniform scale / unit mismatch ✅
+
+- **`linalg.ts`:** transforms are now similarities, `x ↦ s·R·x + t`. Horn's solver takes a free (Umeyama) or fixed scale, and the point-to-plane step has a 7-unknown variant with scale.
+- **`alignment.ts`, scale hypotheses:**
+  - The area-weighted moment ratio `s0 = √(tr Σ_target / tr Σ_base)` is exact for a scaled copy and independent of tessellation. It becomes a hypothesis when `|s0 − 1| > 1.5%`.
+  - If s0 is within 0.5% of a unit factor it is replaced by that factor. Otherwise the nearest unit factor within ×1.25 is added as a third hypothesis.
+  - Scaled guesses re-estimate the scale during ICP, clamped to ×1.5 of their hypothesis.
+  - Guesses are ranked by a **symmetric** trimmed surface distance, because a one-sided score rewards shrinking the base into a corner of the target.
+  - Least motion still wins among comparable fits, so an equally good rigid fit beats a scaled one.
+- **Snapping (`units.ts`):** a fitted scale within 0.5% of a factor between mm/cm/m/in/ft is snapped exactly and labelled in `alignment.units`, e.g. `{from:'in', to:'mm', factor:25.4}`. A scale within 1.5% of 1 becomes 1, because small scales such as shrink compensation are real edits that should read as moves and faceting noise must never become a fake scale. Rotation and translation are re-refined with the scale fixed.
+- **Tier 3 mapping:** base-space surface distances are multiplied by the scale.
+- **Global transform (`global.ts`, Tiers 1/2):** when one rigid or similarity motion explains ≥ 90% of matched pairs, it becomes the `alignment`. The same lineage re-exported in mm now reads as Tier 1 + "in → mm", all unchanged, instead of N moved vertices. It exits early when the identity already explains more than 50% of pairs. It can be switched off with `detectGlobalTransform: false`.
+- **Contract:**
+  - `IRigidTransform` gains `scale` and `units?`, and is documented as a similarity. Its semantics changed: Tiers 1/2 alignment is no longer always the identity (this supersedes D3's "identity for Tiers 1/2").
+  - `IDiffOptions` gains `detectScale`, `detectGlobalTransform` and `detectParts`.
+  - Serialisation handles `parts`, and older JSON is upgraded on read (`parts: []`, `scale: 1`).
+- **CLI and viewer:**
+  - The CLI report shows units or scale, a "Moved parts" list, and `decomposeRigid` now separates the scale.
+  - The viewer's alignment panel shows Units, is titled "Global transform" for Tiers 1/2, gains a Moved parts list, and rounds float32 noise to 0 for display.
+
+**Decisions**
+
+| # | Decision | Why |
+|---|----------|-----|
+| D9 | Moved parts are recovered by registering whole connected components, and a registration is accepted only when it explains clearly more than the current matching. | "Maximise explained vertices, then minimise motion": this never replaces a good matching with a speculative one, and it handles coincidental seeds (a part moved by exactly its own width). |
+| D10 | Uniform scale is modelled only when the moment ratio deviates by more than 1.5%, and snapped when within 0.5% of a length-unit factor. | Unit mismatch is the real-world case, and unit factors are far apart. Tiny scales are ambiguous with faceting, and treating them as moves keeps real edits visible. |
+| D11 | A whole-model motion in Tiers 1/2 is reported as one global alignment (when it explains ≥ 90% of the matched vertices). | "All 50,000 vertices moved" hides the actual story. This also matters for merge: a unit re-export on one side must not conflict with every local edit on the other. |
+
+**Verification:** `npm run typecheck` is clean. `npm test` passes **406** tests; the 100 skips are per-case `runIf` gates. The build succeeds. `npm run e2e` passes **21/21** browser cases plus the CLI → browser check. At 100k vertices (warm), Tier 1 takes ≈ 0.28 s and Tier 2 ≈ 0.9 s, about 10% more than before because of the component bookkeeping; Tier 3 takes ≈ 2.5 s.
+
+---
+
 ## Session 1 — 2026-09-25 — v1 MVP: end-to-end pipeline
 
 ### Milestone 0 — Plan & contract (orchestrator)

@@ -278,6 +278,7 @@ export function createMockPair(variant: 'tier2' | 'tier3' = 'tier2'): IMockPair 
     attempts,
     alignment: {
       matrix,
+      scale: 1,
       rmsError: variant === 'tier3' ? 0.004 : 0,
       iterations: variant === 'tier3' ? 23 : 0,
       isIdentity: variant !== 'tier3',
@@ -307,6 +308,7 @@ export function createMockPair(variant: 'tier2' | 'tier3' = 'tier2'): IMockPair 
       maxDisplacement: maxD,
       meanDisplacement: nMoved > 0 ? sumD / nMoved : 0,
     },
+    parts: [],
     durationMs: performance.now() - t0,
   };
   return { base, target, result };

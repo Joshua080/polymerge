@@ -22,7 +22,7 @@ import {
   type IFixtureManifest,
   type IMesh,
 } from '../packages/core/src/index.js';
-import { angleBetweenDeg, boundsDiagonal, decomposeRigid, distance } from './lib/math.js';
+import { angleBetweenDeg, boundsDiagonal, decomposeSimilarity, distance } from './lib/math.js';
 import { countCodes, faceStatusesByContract } from './lib/reference.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -145,20 +145,31 @@ describe.each(manifest.cases)('e2e $id', (fc: IFixtureCase) => {
     expect(wrong.slice(0, 10), `${wrong.length} of ${(fc.expect.mustMatch ?? []).length} pairs wrong`).toEqual([]);
   });
 
-  it.runIf(fc.expect.alignment !== undefined)('recovers the known rigid alignment', () => {
+  it.runIf(fc.expect.alignment !== undefined)('recovers the known alignment (rotation, translation, scale, units)', () => {
     const a = fc.expect.alignment!;
     const m = result.alignment.matrix;
     expect(m).toHaveLength(16);
-    const d = decomposeRigid(m);
+    const d = decomposeSimilarity(m);
     expect(d.orthonormalityError, 'rotation part is orthonormal').toBeLessThan(1e-6);
     expect(d.determinant, 'rotation is proper').toBeCloseTo(1, 6);
     const dt = distance(d.translation, a.translation);
     expect(dt, `translation ${d.translation.map((x) => x.toFixed(4))} vs ${a.translation}`).toBeLessThanOrEqual(a.tolerance);
     expect(Math.abs(d.angleDeg - a.rotationDeg), `angle ${d.angleDeg.toFixed(4)}° vs ${a.rotationDeg}°`).toBeLessThanOrEqual(a.tolerance);
-    expect(angleBetweenDeg(d.axis, a.rotationAxis), `axis ${d.axis.map((x) => x.toFixed(4))} vs ${a.rotationAxis}`).toBeLessThanOrEqual(
-      a.tolerance,
-    );
+    if (a.rotationDeg > a.tolerance) {
+      expect(angleBetweenDeg(d.axis, a.rotationAxis), `axis ${d.axis.map((x) => x.toFixed(4))} vs ${a.rotationAxis}`).toBeLessThanOrEqual(
+        a.tolerance,
+      );
+    }
+    const scale = a.scale ?? 1;
+    expect(Math.abs(d.scale / scale - 1), `scale ${d.scale} vs ${scale}`).toBeLessThanOrEqual(a.tolerance);
+    expect(Math.abs(result.alignment.scale / scale - 1), 'alignment.scale').toBeLessThanOrEqual(a.tolerance);
+    if (a.units) expect(result.alignment.units).toEqual(a.units);
+    else expect(result.alignment.units).toBeUndefined();
     expect(result.alignment.isIdentity).toBe(false);
+  });
+
+  it.runIf(fc.expect.parts !== undefined)('reports the expected number of moved parts', () => {
+    expectCount(result.parts.length, fc.expect.parts!, 'parts');
   });
 
   it('satisfies the IDiffResult structural invariants', () => {
@@ -267,20 +278,26 @@ describe.each(manifest.cases)('e2e $id', (fc: IFixtureCase) => {
     expect(Math.abs(r.stats.maxDisplacement - max), 'stats.maxDisplacement').toBeLessThanOrEqual(1e-6 * Math.max(1, max));
     expect(Math.abs(r.stats.meanDisplacement - mean), 'stats.meanDisplacement').toBeLessThanOrEqual(1e-6 * Math.max(1, mean));
 
-    // alignment: identity for Tiers 1/2, a proper rigid motion for Tier 3
+    // alignment: the identity, or (Tier 3 / a Tier 1-2 global transform) a proper similarity
     const m = r.alignment.matrix;
     expect(m).toHaveLength(16);
     expect(m.every((x) => Number.isFinite(x))).toBe(true);
     expect(Math.abs(m[3]) + Math.abs(m[7]) + Math.abs(m[11]) + Math.abs(m[15] - 1), 'affine bottom row').toBeLessThanOrEqual(1e-12);
-    if (tier !== 3) {
-      expect(r.alignment.isIdentity).toBe(true);
+    if (r.alignment.isIdentity && tier !== 3) {
       expect(Math.abs(r.alignment.rmsError)).toBe(0);
+      expect(r.alignment.scale).toBe(1);
       expect(m.map((x, i) => Math.abs(x - (i % 5 === 0 ? 1 : 0))).every((e) => e <= 1e-12)).toBe(true);
     } else {
-      const d = decomposeRigid(m);
+      const d = decomposeSimilarity(m);
       expect(d.orthonormalityError).toBeLessThan(1e-6);
       expect(d.determinant).toBeCloseTo(1, 6);
+      expect(d.scale / r.alignment.scale).toBeCloseTo(1, 9);
       expect(r.alignment.rmsError).toBeGreaterThanOrEqual(0);
+    }
+    for (const p of r.parts) {
+      expect(p.baseVertices.length + p.targetVertices.length).toBeGreaterThan(0);
+      expect(p.matchedVertices).toBeLessThanOrEqual(Math.min(p.baseVertices.length, p.targetVertices.length) + p.targetVertices.length);
+      expect(p.matrix).toHaveLength(16);
     }
   });
 

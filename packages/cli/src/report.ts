@@ -53,15 +53,26 @@ function describeMesh(label: string, s: IMeshSummary, name: string): string {
   return `  ${label.padEnd(6)} ${name}  ${s.format.toUpperCase()}  ${s.vertexCount} vertices · ${s.faceCount} faces`;
 }
 
-/** Rotation angle (deg), axis and translation of a column-major rigid 4x4. */
-export function decomposeRigid(m: Mat4): { angleDeg: number; axis: [number, number, number]; translation: [number, number, number] } {
-  const r = (row: number, col: number) => m[col * 4 + row];
+/**
+ * Rotation angle (deg), axis, uniform scale and translation of a column-major similarity
+ * 4x4 (3×3 block = scale·R).
+ */
+export function decomposeRigid(m: Mat4): {
+  angleDeg: number;
+  axis: [number, number, number];
+  scale: number;
+  translation: [number, number, number];
+} {
+  const det =
+    m[0] * (m[5] * m[10] - m[9] * m[6]) - m[4] * (m[1] * m[10] - m[9] * m[2]) + m[8] * (m[1] * m[6] - m[5] * m[2]);
+  const scale = det > 0 ? Math.cbrt(det) : Math.hypot(m[0], m[1], m[2]) || 1;
+  const r = (row: number, col: number) => m[col * 4 + row] / scale;
   const trace = r(0, 0) + r(1, 1) + r(2, 2);
   const angle = Math.acos(Math.min(1, Math.max(-1, (trace - 1) / 2)));
   let axis: [number, number, number] = [r(2, 1) - r(1, 2), r(0, 2) - r(2, 0), r(1, 0) - r(0, 1)];
   const len = Math.hypot(...axis);
   axis = len > 1e-12 ? [axis[0] / len, axis[1] / len, axis[2] / len] : [0, 0, 1];
-  return { angleDeg: (angle * 180) / Math.PI, axis, translation: [m[12], m[13], m[14]] };
+  return { angleDeg: (angle * 180) / Math.PI, axis, scale, translation: [m[12], m[13], m[14]] };
 }
 
 export interface ReportOptions {
@@ -100,10 +111,28 @@ export function formatDiffReport(result: IDiffResult, base: IMesh, target: IMesh
   }
   if (!result.alignment.isIdentity) {
     const { angleDeg, axis, translation } = decomposeRigid(result.alignment.matrix);
+    const a = result.alignment;
+    const scaleText = a.units
+      ? `units ${a.units.from} → ${a.units.to} (×${Number(a.units.factor.toPrecision(6))}), `
+      : a.scale !== undefined && a.scale !== 1
+        ? `uniform scale ×${Number(a.scale.toPrecision(6))}, `
+        : '';
     out.push(
-      `${c.bold('Alignment')}  rotation ${angleDeg.toFixed(2)}° about (${axis.map((x) => x.toFixed(3)).join(', ')}), ` +
-        `translation (${translation.map((x) => fmt(x)).join(', ')}), rms ${fmt(result.alignment.rmsError)}`,
+      `${c.bold('Alignment')}  ${scaleText}rotation ${angleDeg.toFixed(2)}° about (${axis.map((x) => x.toFixed(3)).join(', ')}), ` +
+        `translation (${translation.map((x) => fmt(x)).join(', ')}), rms ${fmt(a.rmsError)}`,
     );
+  }
+  const parts = result.parts ?? [];
+  if (parts.length > 0) {
+    out.push(c.bold(`Moved parts (${parts.length}):`));
+    for (const p of parts) {
+      const name = p.baseName ?? p.targetName ?? `${p.baseVertices.length}-vertex part`;
+      const how = p.source === 'registration' ? 're-matched (was removed + added)' : 'matched';
+      out.push(
+        `  ${c.modified('•')} "${name}": rotation ${p.rotationDeg.toFixed(2)}°, centroid shift (${p.centroidShift.map((x) => fmt(x)).join(', ')})` +
+          `${p.deformedVertices > 0 ? `, ${p.deformedVertices} vertex(es) also edited` : ''} ${c.dim(`[${how}]`)}`,
+      );
+    }
   }
   if (opts.topMoves > 0 && v.moved > 0) {
     const moved: number[] = [];

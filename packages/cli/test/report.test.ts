@@ -16,6 +16,16 @@ describe('decomposeRigid', () => {
     expect(r.translation).toEqual([1, 2, 3]);
   });
 
+  it('separates a uniform scale (unit conversion) from the rotation', () => {
+    const a = (90 * Math.PI) / 180;
+    const k = 25.4;
+    const m = [k * Math.cos(a), k * Math.sin(a), 0, 0, -k * Math.sin(a), k * Math.cos(a), 0, 0, 0, 0, k, 0, 5, 0, 0, 1];
+    const r = decomposeRigid(m);
+    expect(r.scale).toBeCloseTo(25.4, 12);
+    expect(r.angleDeg).toBeCloseTo(90, 9);
+    expect(r.axis[2]).toBeCloseTo(1, 9);
+  });
+
   it('handles the identity', () => {
     const r = decomposeRigid([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
     expect(r.angleDeg).toBe(0);

@@ -40,8 +40,9 @@ To get a global `polymerge` command, run `npm link -w @polymerge/cli`.
    |---|---|---|
    | 1 | Vertex index/order or internal IDs, validated by face agreement | Direct edits: moved vertices, appended or trimmed geometry |
    | 2 | Greedy geometric + adjacency propagation (inspired by MeshGit) | Re-ordered files, local topology edits, holes, new patches |
-   | 3 | ICP rigid alignment + nearest-surface mapping | Whole-model moves or rotations, re-meshing, lost index lineage |
+   | 3 | ICP alignment (rigid, or uniform scale) + nearest-surface mapping | Whole-model moves or rotations, unit mismatch (in ↔ mm ↔ cm ↔ m ↔ ft), re-meshing, lost index lineage |
 
+   After the accepted tier, parts (connected components) that moved rigidly on their own are re-matched by registration, so they read as *moved* instead of removed + added. A whole-model motion, such as the same file re-exported in millimetres, is reported as one global transform (with the unit conversion named) instead of every vertex "moving".
 3. **Classify.** Every vertex is marked *unchanged / moved / added / removed*, and every face *unchanged / modified / added / removed*. The CLI reports these and the viewer colours them.
 
 ## CLI

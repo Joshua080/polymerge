@@ -239,6 +239,23 @@ export interface IDiffOptions {
   thresholds?: { tier1?: number; tier2?: number };
   icp?: { maxIterations?: number; convergence?: number };
   /**
+   * Tier 3: also estimate a uniform scale (unit mismatch, resize). Default true. When the
+   * estimated scale is within 0.5% of a known length-unit factor it is snapped to it and
+   * reported in `alignment.units`.
+   */
+  detectScale?: boolean;
+  /**
+   * Tiers 1/2: explain a whole-model motion (rigid or uniformly scaled, e.g. the same
+   * lineage re-exported in other units) as ONE global `alignment` instead of N moved
+   * vertices. Default true.
+   */
+  detectGlobalTransform?: boolean;
+  /**
+   * Recover parts (connected components) that moved rigidly on their own as Moved rather
+   * than Removed + Added, and report every part motion in `IDiffResult.parts`. Default true.
+   */
+  detectParts?: boolean;
+  /**
    * Log sink. Defaults to `console`. Regardless of the sink, the engine ALWAYS
    * emits one info line per tier attempt and one line naming the accepted tier.
    */
@@ -260,13 +277,65 @@ export interface ITierAttempt {
   metrics: Record<string, number>;
 }
 
-/** Rigid transform mapping BASE space into TARGET space. Identity for Tiers 1 and 2. */
+/** Length units recognised by unit-mismatch detection. */
+export type LengthUnit = 'mm' | 'cm' | 'm' | 'in' | 'ft';
+
+/** A detected unit conversion: target = factor × base (e.g. in → mm, factor 25.4). */
+export interface IUnitConversion {
+  from: LengthUnit;
+  to: LengthUnit;
+  factor: number;
+}
+
+/**
+ * Global alignment mapping BASE space into TARGET space: the similarity transform
+ * x ↦ scale·R·x + t (rigid when scale = 1).
+ *  - Tier 3: the ICP solution (with uniform scale when the models differ in units/size).
+ *  - Tiers 1 & 2: the identity, unless one rigid/similarity transform explains ≥ 90% of the
+ *    matched vertices (a whole-model move or unit re-export) — then that transform, so a
+ *    global move reads as one alignment instead of N moved vertices.
+ */
 export interface IRigidTransform {
+  /** Column-major 4×4; its 3×3 block is scale·R. */
   matrix: Mat4;
-  /** RMS residual of the alignment. 0 for Tiers 1 and 2; real (possibly > 0) for Tier 3 even when it settles on the identity. */
+  /** Uniform scale factor (1 = rigid). */
+  scale: number;
+  /** Present when `scale` was snapped to a known length-unit conversion factor. */
+  units?: IUnitConversion;
+  /** RMS residual of the alignment. 0 when it is the identity of Tiers 1/2; real (possibly > 0) for Tier 3 even when it settles on the identity. */
   rmsError: number;
   iterations: number;
   isIdentity: boolean;
+}
+
+/**
+ * A part (connected component) that moved rigidly relative to the global alignment.
+ *  - source 'registration': the part had lost its correspondence (it would have read as
+ *    Removed + Added) and was re-matched by rigidly registering the two components.
+ *  - source 'matched': the part was already matched; its matched vertices are explained by
+ *    one rigid motion, which is reported for context (and for merging).
+ */
+export interface IPartMotion {
+  source: 'registration' | 'matched';
+  /** Vertices of the part's component in the base / target mesh (ascending). */
+  baseVertices: Uint32Array;
+  targetVertices: Uint32Array;
+  /** Matched vertex pairs inside the part. */
+  matchedVertices: number;
+  /** Matched vertices deviating from the part's rigid motion by more than moveEpsilon (local edits on the moved part). */
+  deformedVertices: number;
+  /** The part's full transform, base space → target space (column-major; includes the global alignment). */
+  matrix: Mat4;
+  /** Rotation of the part relative to the global alignment. */
+  rotationDeg: number;
+  rotationAxis: Vec3;
+  /** Displacement of the part's centroid relative to the global alignment (target space). */
+  centroidShift: Vec3;
+  /** RMS residual of the rigid fit over the part's non-deformed matched vertices. */
+  rmsError: number;
+  /** Group names (OBJ object, glTF node, ...) of the part's first face, when available. */
+  baseName?: string;
+  targetName?: string;
 }
 
 export interface IMeshSummary {
@@ -308,6 +377,8 @@ export interface IDiffStats {
  *    matched & > moveEpsilon → Moved, unmatched → Added / Removed.
  *  - Vertex (Tier 3): classified by nearest-SURFACE distance d in aligned space:
  *    d ≤ moveEpsilon → Unchanged, d ≤ surfaceTolerance → Moved, else Added/Removed.
+ *    Exception: vertices of a recovered moved part (see `parts`) are Moved, with
+ *    displacement = |alignment·base[match] − target[t]| (how far the part moved).
  *  - Target face: any vertex Added, or (Tiers 1 & 2) the mapped vertex triple is not a
  *    base face → Added; else any vertex Moved → Modified; else Unchanged.
  *  - Base face: any vertex Removed, or (Tiers 1 & 2) the mapped triple is not a target
@@ -346,6 +417,8 @@ export interface IDiffResult {
   /** FaceStatusCode per target face (Unchanged | Modified | Added). */
   targetFaceStatus: Uint8Array;
   stats: IDiffStats;
+  /** Parts that moved rigidly on their own (relative to `alignment`). Empty when none. */
+  parts: IPartMotion[];
   durationMs: number;
 }
 
@@ -382,7 +455,18 @@ export interface IFixtureExpectation {
   baseMesh?: { vertexCount: number; faceCount: number };
   targetMesh?: { vertexCount: number; faceCount: number };
   /** For rigid-motion cases: the known base→target transform. */
-  alignment?: { translation: Vec3; rotationAxis: Vec3; rotationDeg: number; tolerance: number };
+  alignment?: {
+    translation: Vec3;
+    rotationAxis: Vec3;
+    rotationDeg: number;
+    tolerance: number;
+    /** Expected uniform scale (default 1); compared with a relative tolerance of `tolerance`. */
+    scale?: number;
+    /** Expected unit conversion label, when the scale is a unit factor. */
+    units?: IUnitConversion;
+  };
+  /** Expected number of reported part motions (`IDiffResult.parts.length`). */
+  parts?: CountExpectation;
   /** Exact vertex-level correspondences that MUST hold: [baseIndex, targetIndex]. */
   mustMatch?: [base: number, target: number][];
 }

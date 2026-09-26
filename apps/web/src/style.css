@@ -442,6 +442,19 @@ table.meshes tbody th {
   margin-top: 6px;
 }
 
+.part-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  font-size: 12px;
+}
+
+.part-list li {
+  padding: 4px 0;
+  border-bottom: 1px solid var(--border);
+  word-break: break-word;
+}
+
 .attempts {
   list-style: none;
   margin: 0;
