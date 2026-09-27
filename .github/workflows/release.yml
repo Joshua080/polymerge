@@ -1,0 +1,67 @@
+# Publishes the npm packages — `@polymerge/core` (the engine) and `polymerge` (the CLI, with the
+# browser viewer bundled) — when a version tag is pushed:
+#
+#   git tag v0.1.0 && git push origin v0.1.0
+#
+# Needs the repository secret NPM_TOKEN (an npm automation / granular access token that can
+# publish both packages). The full `npm run verify` gate runs first; nothing is published unless
+# it passes. Packages are published with npm provenance (linked to this workflow run).
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+  id-token: write # npm provenance
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          registry-url: https://registry.npmjs.org
+
+      - name: Check the tag matches the package versions
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          core=$(node -p "require('./packages/core/package.json').version")
+          cli=$(node -p "require('./packages/cli/package.json').version")
+          dep=$(node -p "require('./packages/cli/package.json').dependencies['@polymerge/core']")
+          echo "tag $tag, @polymerge/core $core, polymerge $cli (depends on core $dep)"
+          [ "$tag" = "$core" ] && [ "$tag" = "$cli" ] && [ "$tag" = "$dep" ] || { echo "::error::tag and package versions differ"; exit 1; }
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: npm run verify
+        run: npm run verify
+
+      # Core first: the CLI depends on the exact core version. A version already on the registry
+      # is skipped, so a failed release can be re-run.
+      - name: Publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          for ws in @polymerge/core polymerge; do
+            v=$(npm pkg get version -w "$ws" | node -e "process.stdout.write(Object.values(JSON.parse(require('fs').readFileSync(0,'utf8')))[0])")
+            if npm view "$ws@$v" version >/dev/null 2>&1; then
+              echo "$ws@$v is already published — skipping"
+            else
+              npm publish -w "$ws" --provenance --access public
+            fi
+          done

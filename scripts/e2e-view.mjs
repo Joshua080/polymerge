@@ -6,6 +6,7 @@
  *
  *   node scripts/e2e-view.mjs [<base> <target>]
  *
+ * $POLYMERGE_CLI points it at another cli.js (e2e-pack uses it for the npm-installed package).
  * Needs `npm run build` first. Saves apps/web/e2e/screenshots/cli-view.png and exits
  * non-zero on failure.
  */
@@ -22,7 +23,8 @@ const [base, target] =
     ? process.argv.slice(2, 4)
     : ['fixtures/cases/mixed-topology-edit/base.obj', 'fixtures/cases/mixed-topology-edit/target.obj'];
 
-const cli = spawn(process.execPath, [path.join(root, 'packages/cli/dist/cli.js'), 'view', base, target, '--no-open', '--port', '0'], {
+const cliJs = process.env.POLYMERGE_CLI ?? path.join(root, 'packages/cli/dist/cli.js');
+const cli = spawn(process.execPath, [cliJs, 'view', base, target, '--no-open', '--port', '0'], {
   cwd: root,
   stdio: ['ignore', 'pipe', 'inherit'],
 });

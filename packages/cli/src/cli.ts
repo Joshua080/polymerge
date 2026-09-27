@@ -6,6 +6,7 @@
  *   polymerge view <base> <target> [--port N] [--no-open]
  *   polymerge view <base> <ours> <theirs> [--port N] [--no-open]
  *   polymerge review <path>              (merge review of a conflicted git merge)
+ *   polymerge demo [example]             (the viewer on a built-in example)
  *   polymerge info <file>
  *   polymerge merge <base> <ours> <theirs> [-o merged.stl] [--resolve ours|theirs|base] [--pick id=side]
  *   polymerge git-diff <git external-diff args...>
@@ -17,9 +18,10 @@ import { runDiff } from './commands/diff.js';
 import { gitSetupText, runGitDiff } from './commands/git.js';
 import { runInfo } from './commands/info.js';
 import { gitStage, runGitMerge, runGitResolve, runMerge } from './commands/merge.js';
-import { runReview, runView } from './commands/view.js';
+import { createRequire } from 'node:module';
+import { MERGE_DEMOS, runDemo, runReview, runView } from './commands/view.js';
 
-const VERSION = '0.1.0';
+const VERSION: string = (createRequire(import.meta.url)('../package.json') as { version: string }).version;
 
 const HELP = `polymerge ${VERSION} — structural (vertex-correspondence) diff for STL, OBJ, glTF/GLB
 
@@ -40,7 +42,7 @@ Usage:
       --host <addr>          Bind address (default 127.0.0.1)
       --name <file>          Display name for every side (git difftool passes $MERGED)
       --no-open              Do not launch a browser, just print the URL
-      --web-dist <dir>       Path to the built viewer (default: apps/web/dist)
+      --web-dist <dir>       Path to a built viewer (default: the one bundled with polymerge)
   polymerge merge <base> <ours> <theirs> [options]   Three-way merge (exit 1 = unresolved conflicts)
       -o, --output <file>    Write the merged model (.stl or .obj)
       --resolve <side>       Resolve every conflict with ours | theirs | base
@@ -52,6 +54,10 @@ Usage:
                                              Open the merge review on a conflicted git merge of <path>
   polymerge resolve <path> --pick <id>=<side> | --resolve <side>
                                              Finish a conflicted git merge of <path> (reads git's index stages)
+  polymerge demo [example] [--port N] [--no-open]
+                                             Open the viewer on a built-in example, no files needed
+                                             Merge review: ${MERGE_DEMOS.join(', ')} (default ${MERGE_DEMOS[0]})
+                                             Diff: e.g. moved-part, grid-bump, units-inch-to-mm, mixed-topology-edit
   polymerge info <file>                      Print the normalised mesh summary
   polymerge git-diff <7 git args>            git external diff driver (diff.<name>.command)
   polymerge git-merge %O %A %B %P            git merge driver (merge.<name>.driver)
@@ -121,6 +127,20 @@ async function main(argv: string[]): Promise<number> {
         webDist: values['web-dist'],
         name: values.name,
       });
+    }
+    case 'demo': {
+      const { values, positionals } = parseArgs({
+        args: rest,
+        allowPositionals: true,
+        options: {
+          port: { type: 'string' },
+          host: { type: 'string' },
+          'no-open': { type: 'boolean' },
+          'web-dist': { type: 'string' },
+        },
+      });
+      if (positionals.length > 1) throw new UsageError(`polymerge demo: expected at most 1 example name, got ${positionals.length}`);
+      return runDemo(positionals[0], { port: values.port, host: values.host, open: !values['no-open'], webDist: values['web-dist'] });
     }
     case 'info': {
       const { positionals } = parseArgs({ args: rest, allowPositionals: true, options: {} });

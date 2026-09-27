@@ -35,17 +35,21 @@ export interface ViewOptions {
   name?: string;
 }
 
-/** Locate the built viewer: --web-dist, $POLYMERGE_WEB_DIST, or the monorepo's apps/web/dist. */
+/**
+ * Locate the built viewer: --web-dist, $POLYMERGE_WEB_DIST, the monorepo's apps/web/dist (in a
+ * clone, so a rebuilt viewer is picked up), or the copy bundled into the npm package (dist/viewer).
+ */
 export function resolveWebDist(explicit?: string): string {
+  const here = path.dirname(fileURLToPath(import.meta.url));
   const candidates = [
     explicit,
     process.env.POLYMERGE_WEB_DIST,
-    path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../../apps/web/dist'),
-    path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../apps/web/dist'),
+    path.resolve(here, '../../../../apps/web/dist'),
+    path.resolve(here, '../viewer'),
   ].filter((p): p is string => !!p);
   for (const dir of candidates) if (existsSync(path.join(dir, 'index.html'))) return dir;
   throw new Error(
-    `Could not find the built web viewer (looked in: ${candidates.join(', ')}). Run "npm run build" first or pass --web-dist.`,
+    `Could not find the built web viewer (looked in: ${candidates.join(', ')}). In a clone, run "npm run build" first; otherwise pass --web-dist.`,
   );
 }
 
@@ -61,8 +65,15 @@ interface ServedModel {
  *  - three files (base, ours, theirs): the merge review, `/?mode=merge&base=…&ours=…&theirs=…`.
  * Model bytes are read up front, so git may delete its temp files while the viewer is open.
  */
-export async function startViewServer(files: string[], o: ViewOptions): Promise<{ server: http.Server; url: string }> {
-  if (files.length !== 2 && files.length !== 3) throw new Error(`view needs 2 files (diff) or 3 (merge), got ${files.length}`);
+export async function startViewServer(
+  files: string[],
+  o: ViewOptions,
+  /** With no files: the query the viewer opens with (a built-in example). */
+  landing: Record<string, string> = {},
+): Promise<{ server: http.Server; url: string }> {
+  if (files.length !== 0 && files.length !== 2 && files.length !== 3) {
+    throw new Error(`view needs 2 files (diff) or 3 (merge), got ${files.length}`);
+  }
   const webDist = resolveWebDist(o.webDist);
   const sides = files.length === 3 ? ['base', 'ours', 'theirs'] : ['base', 'target'];
   const model = async (side: string, filePath: string): Promise<ServedModel> => {
@@ -115,8 +126,8 @@ export async function startViewServer(files: string[], o: ViewOptions): Promise<
     });
   });
   const { port: actualPort } = server.address() as AddressInfo;
-  const query = new URLSearchParams(files.length === 3 ? { mode: 'merge' } : {});
-  sides.forEach((side, i) => query.set(side, models[i].urlPath));
+  const query = new URLSearchParams(files.length === 0 ? landing : files.length === 3 ? { mode: 'merge' } : {});
+  models.forEach((m, i) => query.set(sides[i], m.urlPath));
   if (files.length === 3 && o.name) query.set('path', o.name);
   return { server, url: `http://${host}:${actualPort}/?${query.toString()}` };
 }
@@ -156,9 +167,22 @@ export async function runReview(repoPath: string, o: ViewOptions, stage: (n: 1 |
   }
 }
 
+/** The merge review's built-in examples (apps/web/src/dev/merge-demos.ts). */
+export const MERGE_DEMOS = ['boss-height', 'thin-wall', 'parts', 'mixed-choices', 'clean'];
+
+/**
+ * `polymerge demo [example]` — open the viewer on a built-in example, no files needed: a merge
+ * review example (MERGE_DEMOS) or one of the diff fixture cases bundled with the viewer.
+ */
+export async function runDemo(example: string | undefined, o: ViewOptions): Promise<number> {
+  const id = example ?? MERGE_DEMOS[0];
+  const landing: Record<string, string> = MERGE_DEMOS.includes(id) ? { mode: 'merge', demo: id } : { case: id };
+  return runView([], o, landing);
+}
+
 /** `polymerge view <base> <target>` / `polymerge view <base> <ours> <theirs>` — serve until interrupted. */
-export async function runView(files: string[], o: ViewOptions): Promise<number> {
-  const { server, url } = await startViewServer(files, o);
+export async function runView(files: string[], o: ViewOptions, landing?: Record<string, string>): Promise<number> {
+  const { server, url } = await startViewServer(files, o, landing);
   process.stdout.write(`polymerge viewer running at ${url}\nPress Ctrl+C to stop.\n`);
   if (o.open !== false) openBrowser(url);
   await new Promise<void>((resolve) => {

@@ -4,6 +4,101 @@ A living log of milestones, architectural decisions, what works, what is stubbed
 
 ---
 
+## Session 4 — 2026-09-27 — README, npm packaging
+
+Priorities set by the owner:
+1. A proper README: what the tool does, a screenshot or GIF of the viewer, install instructions, and the basic diff/view/merge commands with real examples.
+2. Check whether polymerge can be installed from npm as a real package, not only cloned and run; if not, get it there.
+3. State honestly in the README what v1 does and doesn't handle.
+
+### Milestone 1 — Installable from npm ✅
+
+**What was wrong.** The packages had `files` and a `bin`, but a published CLI would not have worked:
+- **The viewer was not in the package.** `polymerge view` looked for the built viewer only at the monorepo's `apps/web/dist`. An installed `polymerge` would have failed with "Could not find the built web viewer".
+- **The name.** `@polymerge/cli` needs the npm org `polymerge`, and it is not what anyone would type. The command is `polymerge`, so the package should be too.
+- **Metadata:**
+  - no repository / homepage / bugs / keywords;
+  - no README or LICENSE inside either package;
+  - no `publishConfig.access`, and a scoped package is private by default;
+  - source maps pointing at sources that were never shipped.
+- The version was hard-coded in `cli.ts` apart from `package.json`.
+
+**Changes.**
+- **Package names.** The CLI is now the unscoped **`polymerge`** (`npm install -g polymerge`, `npx polymerge`). The engine stays **`@polymerge/core`**, with `publishConfig.access: public`. Both names are free on the registry (404 on 2026-09-27).
+- **The viewer is bundled at pack time.** `packages/cli/scripts/prepack.mjs` copies `apps/web/dist` into `dist/viewer`. It fails if the CLI or the viewer is not built, so a tarball can never ship without them. `resolveWebDist` looks in this order:
+  1. `--web-dist`;
+  2. `$POLYMERGE_WEB_DIST`;
+  3. the monorepo's `apps/web/dist`, so a clone always serves a freshly built viewer;
+  4. the bundled `dist/viewer`.
+- **The npm README.** `prepack` also copies the repository README in as the package README, with relative links made absolute (npmjs.com cannot resolve repository paths). `@polymerge/core` has its own short README.
+- **Package contents.** Metadata, LICENSE copies and `engines: node >= 20` for both packages. Source maps are excluded. The CLI reads its version from `package.json`.
+- **`polymerge demo [example]`** (new). It opens the viewer on a built-in example with no files: the merge examples, or any diff fixture bundled with the viewer. Someone who has just installed the package can see what it does in one command.
+
+**Proof: `scripts/e2e-pack.mjs`**, now part of `npm run e2e`, so CI runs it on every push.
+1. It runs `npm pack` for both packages and checks the tarball contents: the viewer, the fixtures manifest, the README and the LICENSE, with no sources and no source maps.
+2. It installs the two tarballs into an **empty project**.
+3. It uses the installed copy:
+   - `--version` matches the package;
+   - `diff` exits 1 on a moved part;
+   - the README's library example runs verbatim against the installed `@polymerge/core`;
+   - `merge` reports the conflict and resolves with `--pick`;
+   - `demo` serves the bundled viewer;
+   - `view` renders a real diff in headless Chromium, through `e2e-view` pointed at the installed `cli.js`.
+
+**Releasing.** `.github/workflows/release.yml` runs on a `v*` tag. It checks that the tag, both package versions and the CLI's core dependency agree, then runs the full `npm run verify`. After that it publishes `@polymerge/core` and then `polymerge`, with npm provenance. A version that is already on the registry is skipped, so a failed release can be re-run.
+
+**Not done: the actual publish.** It needs the owner's npm account (a repository secret `NPM_TOKEN`), and a publish cannot really be undone. Until then the README says plainly that the packages are not on npm yet, and gives the from-source install. `npm publish --dry-run` for `polymerge` succeeds.
+
+| # | Decision | Why |
+|---|----------|-----|
+| D22 | The CLI is published as the unscoped `polymerge`; the engine as `@polymerge/core`. | People install the command they type. Library users get a clearly separate engine package. |
+| D23 | The viewer is copied into the CLI package at `prepack`, not at build. A clone prefers its own `apps/web/dist`. | The tarball always carries the viewer it was built with, and development never serves a stale copy. |
+| D24 | Packaging is tested by installing the packed tarballs into an empty project on every CI run. | "Works from the clone" says nothing about the package. The one real bug here (the missing viewer) was exactly of that kind. |
+
+### Milestone 2 — README ✅
+
+The README was rewritten for someone who has never seen the project:
+- what the tool does and how it differs from a deviation heatmap;
+- a GIF of the merge review and a screenshot of the diff viewer;
+- install instructions, with the release status stated;
+- diff / view / merge / review / git / library usage.
+
+**Every command output in it is a real run**, lightly trimmed where marked with "…". It uses files in the repository: `fixtures/cases/*`, and the new `examples/plate/` (base / ours / theirs STL of the `boss-height` merge example: one move-move conflict and two automatic edits). The library example is the exact code `e2e-pack` runs against the installed package, so the README cannot silently drift from the API.
+
+While writing it, I found that `logger: null` does not silence the engine (it falls back to the console), so the README documents `logger: { info() {}, warn() {} }` instead.
+
+**"What v1 does and doesn't handle"** collects the limits in one place:
+- `docs/merge-design.md` §4.1 and §7: no judgement of contact, clearance or wall thickness; remeshed sides give a whole-model `lineage` conflict; split parts; no material/UV merge;
+- the diff's ambiguous cases: identical copy vs. move, symmetric shapes, lattice shift, far-dragged regions;
+- input formats that are not supported;
+- the viewer's Y-up camera, and the review not writing back to the repository.
+
+**Images.** `scripts/readme-images.mjs` regenerates them from the real viewer (headless Chromium + the built CLI's server), so they can be refreshed whenever the UI changes:
+- `docs/images/diff-viewer.png`: the `mixed-topology-edit` example.
+- `docs/images/merge-review.gif`: six frames, 124 kB. Select the conflict by clicking it in 3D, preview ours, preview theirs, click Theirs.
+  - The model is tilted slightly, so the plate reads as 3D.
+  - A drawn pointer shows what is being clicked (headless screenshots have none).
+  - One shared palette, with the merge colours pinned, keeps every colour exact across frames.
+
+### State at end of session 4
+
+**Verified.** `npm run verify` passes locally in 1m07s. It covers:
+- typecheck;
+- 458 unit / fixture / merge / web tests and 4 perf tests;
+- build;
+- smoke (21/21 browser cases), e2e-view, e2e-worker, e2e-merge, e2e-git, and the new e2e-pack.
+
+**Known limits / next steps** (carried over from session 3, minus npm packaging):
+1. **Publish v0.1.0.** Add the `NPM_TOKEN` secret and push the tag `v0.1.0`. If the `@polymerge` npm scope turns out to be unavailable, rename the engine package (e.g. `polymerge-core`) before the first release.
+2. Collision check scope (v1, by decision): coplanar contact, clearances, wall thickness and design intent are not judged (D16).
+3. Deformation transfer for `lineage` conflicts.
+4. Saving from the merge review straight into the repository (needs a write endpoint, with its own security review).
+5. A GLB/glTF writer, and merging materials/UVs.
+6. Parsing in the worker; chunked scene building for very large results.
+7. Z-up models: a per-model "up" choice in the viewer.
+
+---
+
 ## Session 3 — 2026-09-26 — CI, combined-edit collisions, merge review in the viewer
 
 Priorities set by the owner:
@@ -201,7 +296,7 @@ A hung case is still reported as a failure, never retried silently: an infrastru
 4. **GLB/glTF writer**, and merging materials/UVs. Carried over.
 5. **Parsing in the worker**, and chunked scene building for very large results. Carried over.
 6. **Z-up models:** the viewer's default camera assumes Y-up, so CAD/print models (Z-up) open side-on. A per-model "up" choice would help merge review too.
-7. npm publishing. Carried over.
+7. npm publishing. Carried over (done in session 4, except the publish itself).
 
 ---
 
