@@ -2,7 +2,7 @@
   "name": "polymerge-monorepo",
   "private": true,
   "version": "0.1.0",
-  "description": "Vertex-level correspondence diff (and future merge) for 3D models: STL, OBJ, glTF/GLB.",
+  "description": "Structural diff and three-way merge for 3D models: STL, OBJ, glTF/GLB.",
   "license": "MIT",
   "type": "module",
   "workspaces": [
@@ -13,15 +13,17 @@
     "node": ">=20"
   },
   "scripts": {
-    "build": "npm run build -w @polymerge/core && npm run build -w @polymerge/cli && npm run build -w @polymerge/web",
+    "build": "npm run build -w @polymerge/core && npm run build -w polymerge && npm run build -w @polymerge/web",
     "typecheck": "npm run build -w @polymerge/core && npm run typecheck --workspaces --if-present",
-    "test": "vitest run",
+    "test": "vitest run && vitest run -c vitest.perf.config.ts",
     "test:watch": "vitest",
     "dev": "npm run dev -w @polymerge/web",
     "fixtures": "tsx fixtures/generate.ts",
-    "e2e": "node apps/web/e2e/smoke.mjs && node scripts/e2e-view.mjs && node scripts/e2e-worker.mjs && node scripts/e2e-git.mjs",
+    "e2e": "node apps/web/e2e/smoke.mjs && node scripts/e2e-view.mjs && node scripts/e2e-worker.mjs && node scripts/e2e-merge.mjs && node scripts/e2e-git.mjs && node scripts/e2e-pack.mjs",
     "polymerge": "node packages/cli/dist/cli.js",
-    "verify": "npm run typecheck && npm test && npm run build && npm run e2e"
+    "verify": "npm run typecheck && npm test && npm run build && npm run e2e",
+    "test:perf": "vitest run -c vitest.perf.config.ts",
+    "e2e:pack": "node scripts/e2e-pack.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",

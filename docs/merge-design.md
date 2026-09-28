@@ -1,6 +1,6 @@
 # Three-way merge — design
 
-Status: design for session 2; the implementation in `packages/core/src/merge/` follows this document.
+Status: designed in session 2; `collision` (§4.1) was added in session 3. The implementation in `packages/core/src/merge/` follows this document.
 
 Given a common ancestor **O** (base) and two derived versions **A** (ours) and **B** (theirs), produce:
 
@@ -98,14 +98,54 @@ A conflict occurs when the two sides made **different, non-composable changes to
 | `part-motion` | Both moved the same part, differently. | Two different placements of one part. |
 | `global-transform` | Both transformed the whole model, differently, and neither is a pure unit conversion. | Order and intent are ambiguous. |
 | `lineage` | A side's correspondence is not one-to-one: Tier 3 with retessellation, i.e. a remesh. | Vertex-level merging needs vertex identity; transferring edits between tessellations is future work. |
+| `collision` | The merged mesh has damage that neither base, ours nor theirs has: surfaces passing through each other, or faces folded over or collapsed. The damage comes only from *combining* the two sides' edits. §4.1 has the details. | Each edit is fine on its own, so no other rule flags it. Applying both still breaks the model. |
 
 ### What deliberately does **not** conflict
 
-- **Edits to different vertices, even adjacent ones.** A vertex is a surface sample. Two nearby but disjoint sculpting edits compose. *Future:* detect when the composition creates a collision or a flipped/degenerate face that neither side had (`collision`).
+- **Edits to different vertices, even adjacent ones.** A vertex is a surface sample. Two nearby but disjoint sculpting edits compose. The exception is when the composition damages the surface (`collision`, §4.1).
 - **One side deletes faces (a hole); the other moves a rim vertex it kept.** The hole rim follows the move.
 - **One side re-triangulates a region; the other moves one of its vertices.** The new triangles use the moved vertex.
 - **Convergent changes:** the same vertex moved to the same place, the same faces or vertices deleted, the same geometry added. These are applied once, not twice.
 - **Additions that only share a single anchor vertex, with no shared edge and no interpenetration.** For example, two features meeting at a corner.
+
+### 4.1 Combined-edit damage (`collision`)
+
+Every rule above compares *edits*. Some damage exists only in the *result* of combining edits:
+- Both sides push the two faces of a thin wall towards each other, so they now pass through each other.
+- Two neighbouring vertices are pushed past each other, so the faces between them fold over.
+- Two parts are moved into the same space.
+- One side adds geometry exactly where the other side raises the surface.
+
+None of these touch the same vertex, edge, part or frame. So the merge inspects the merged mesh itself.
+
+**Versions.** Each merged face is compared with its three *versions*: base, ours and theirs. For each version the face gets one bit, set when the face differs from that version or does not exist in it:
+- A base vertex differs from a version when its residual or part frame differs, or when the version deleted it.
+- A face differs when a corner differs, or when the version lacks the face.
+
+Only geometry that differs from **all three** versions can be new damage. A face pair is examined only when its two faces together differ from all three versions. Anything else exists as-is in some version, and each version is taken to be sound. This also covers damage a side made on its own: a side that pushes a wall through the model itself is that side's problem, not the merge's.
+
+**Rules** (ε = the merge's move threshold, in base units):
+- **Fold.** A merged face whose shape differs from all three versions is flagged in either of two cases:
+  - its normal opposes the normal of every non-degenerate version of it;
+  - it collapses (height below ε) where every version was non-degenerate.
+  
+  Shapes are compared in the base frame, with frames removed; a rigid or uniformly scaled frame never changes a shape.
+- **Crossing.** Two merged faces are flagged when they cross properly and the same pair crosses in no version where both faces exist. A proper crossing means an edge of one face passes through the other: its endpoints lie more than ε on either side of that face's plane, and the hit point is inside the face.
+  
+  The test runs in *part space*: each version's global frame is removed and part frames are kept, so ε means the same length everywhere. Faces that share a vertex are handled by the same test. An edge through the shared vertex never has both endpoints more than ε off the plane, so it can never count.
+
+**Regions.** A collision joins every change unit under its faces into one region: each side's change components at the corners, the added faces, and the frames of the parts involved. As with every conflict, resolving 'ours' or 'theirs' gives back that side's own geometry there, which is sound.
+
+**Repeat until sound.** Leaving a region at the base state can expose new damage. For example, theirs dented a wall *and* lowered a block into the dent. Reverting the dent/bump collision leaves the block crossing the flat wall. So the check runs again on the new unresolved merge and adds any new collisions, until the merge is free of combined damage. Regions only grow, so this converges; a bound of 8 passes is logged if it is ever hit.
+
+**After resolution: warnings, not conflicts.** Chosen resolutions can still combine badly with each other. For example, a region resolved 'ours' may raise a wall into geometry that another region took from 'theirs', or into theirs' automatic changes. Those are explicit choices, so the merge does not re-open them. Instead, `IMergeResult.warnings` lists the damage, with the merged faces involved and the conflicts that meet there. The CLI prints the warnings. The git merge driver exits 1 on a warning when it resolves automatically (`--resolve`), so git never commits damaged geometry unseen.
+
+**Deliberately not detected (v1)**, because these are judgements about design, not damage:
+- surfaces that only touch, or overlap in the same plane (coplanar contact);
+- near misses: clearances, minimum wall thickness, tolerances;
+- anything a single version already has.
+
+**Cost.** Folds are one pass over the mixed faces. Crossings use a triangle BVH over faces near the candidates, and at most 5 M face pairs are tested (hitting the bound is logged). Measured at 100k vertices (a 50k-vertex part moved by ours plus 3000 local edits on it by theirs), the check adds about 25% to the whole merge: 0.96 s becomes 1.2 s.
 
 ## 5. Regions, which are the unit of resolution
 
@@ -113,7 +153,7 @@ Atomic conflicts are grouped into **regions**, the mesh analogue of a conflict h
 
 1. For each side, form **change components**. These are connected components, over base adjacency, of the base vertices that side changed: locally moved, deleted, incident to a face it deleted, or anchoring its additions. Each is joined with the added geometry attached to it. Floating additions are components of their own.
 2. A conflict region is the union of every change component, **from either side**, that touches an atomic conflict, closed under overlap. Overlapping regions merge until nothing changes.
-3. Part-motion conflicts cover the part's component. `global-transform` and `lineage` are whole-model conflicts.
+3. Part-motion conflicts cover the part's component. A collision involving a moved part adds that part's *frame* to the region. The region then decides the frame: ours' motion, theirs' motion, or none. `global-transform` and `lineage` are whole-model conflicts.
 
 Because a region contains *entire* change components of both sides, its boundary vertices are unchanged on both sides. So resolving the region one way can never leave half of an edit behind.
 
@@ -132,5 +172,5 @@ Because a region contains *entire* change components of both sides, its boundary
 
 - Materials, UVs and normals are not merged; only geometry and groups are. The loaders do not keep UVs or normals.
 - A side that split a base component and moved half of it is seen as local moves, not a part motion. Edits on that half by the other side then conflict.
-- `collision` (independent edits that intersect in space only after composition) is detected only between additions, not between moved geometry.
+- `collision` detects crossings and folds, not design intent. It does not flag coplanar contact, clearances or wall thickness (§4.1).
 - Tier 3 sides are usable only when their correspondence is one-to-one with every base face preserved: a reorder, re-export or unit conversion. A remesh produces a `lineage` conflict.

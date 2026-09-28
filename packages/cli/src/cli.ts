@@ -4,6 +4,9 @@
  *
  *   polymerge diff <base> <target> [--json <file|->] [--force-tier 1|2|3] ...
  *   polymerge view <base> <target> [--port N] [--no-open]
+ *   polymerge view <base> <ours> <theirs> [--port N] [--no-open]
+ *   polymerge review <path>              (merge review of a conflicted git merge)
+ *   polymerge demo [example]             (the viewer on a built-in example)
  *   polymerge info <file>
  *   polymerge merge <base> <ours> <theirs> [-o merged.stl] [--resolve ours|theirs|base] [--pick id=side]
  *   polymerge git-diff <git external-diff args...>
@@ -14,10 +17,11 @@ import { parseArgs } from 'node:util';
 import { runDiff } from './commands/diff.js';
 import { gitSetupText, runGitDiff } from './commands/git.js';
 import { runInfo } from './commands/info.js';
-import { runGitMerge, runGitResolve, runMerge } from './commands/merge.js';
-import { runView } from './commands/view.js';
+import { gitStage, runGitMerge, runGitResolve, runMerge } from './commands/merge.js';
+import { createRequire } from 'node:module';
+import { MERGE_DEMOS, runDemo, runReview, runView } from './commands/view.js';
 
-const VERSION = '0.1.0';
+const VERSION: string = (createRequire(import.meta.url)('../package.json') as { version: string }).version;
 
 const HELP = `polymerge ${VERSION} — structural (vertex-correspondence) diff for STL, OBJ, glTF/GLB
 
@@ -32,19 +36,28 @@ Usage:
       -q, --quiet            No report or engine log (useful with --json)
       -v, --verbose          Include engine debug logging
   polymerge view <base> <target> [options]   Open the interactive 3D diff in the browser
+  polymerge view <base> <ours> <theirs> [options]
+                                             Open the three-way merge review: see conflicts, resolve by clicking
       --port <n>             Port (default 5178, falls back to a free port)
       --host <addr>          Bind address (default 127.0.0.1)
-      --name <file>          Display name for both sides (git difftool passes $MERGED)
+      --name <file>          Display name for every side (git difftool passes $MERGED)
       --no-open              Do not launch a browser, just print the URL
-      --web-dist <dir>       Path to the built viewer (default: apps/web/dist)
+      --web-dist <dir>       Path to a built viewer (default: the one bundled with polymerge)
   polymerge merge <base> <ours> <theirs> [options]   Three-way merge (exit 1 = unresolved conflicts)
       -o, --output <file>    Write the merged model (.stl or .obj)
       --resolve <side>       Resolve every conflict with ours | theirs | base
       --pick <id>=<side>     Resolve one conflict (repeatable), e.g. --pick 0=theirs
       --report <file>        Write the conflicts and statistics as JSON
+      --no-collision-check   Don't check the combined edits for surfaces passing through each other
       -q, --quiet            No report
+  polymerge review <path> [--port N] [--no-open]
+                                             Open the merge review on a conflicted git merge of <path>
   polymerge resolve <path> --pick <id>=<side> | --resolve <side>
                                              Finish a conflicted git merge of <path> (reads git's index stages)
+  polymerge demo [example] [--port N] [--no-open]
+                                             Open the viewer on a built-in example, no files needed
+                                             Merge review: ${MERGE_DEMOS.join(', ')} (default ${MERGE_DEMOS[0]})
+                                             Diff: e.g. moved-part, grid-bump, units-inch-to-mm, mixed-topology-edit
   polymerge info <file>                      Print the normalised mesh summary
   polymerge git-diff <7 git args>            git external diff driver (diff.<name>.command)
   polymerge git-merge %O %A %B %P            git merge driver (merge.<name>.driver)
@@ -104,15 +117,30 @@ async function main(argv: string[]): Promise<number> {
           'web-dist': { type: 'string' },
         },
       });
-      requirePositionals('view', positionals, 2);
-      return runView(positionals[0], positionals[1], {
+      if (positionals.length !== 2 && positionals.length !== 3) {
+        throw new UsageError(`polymerge view: expected 2 files (diff) or 3 (merge: base ours theirs), got ${positionals.length}`);
+      }
+      return runView(positionals, {
         port: values.port,
         host: values.host,
         open: !values['no-open'],
         webDist: values['web-dist'],
-        baseName: values.name,
-        targetName: values.name,
+        name: values.name,
       });
+    }
+    case 'demo': {
+      const { values, positionals } = parseArgs({
+        args: rest,
+        allowPositionals: true,
+        options: {
+          port: { type: 'string' },
+          host: { type: 'string' },
+          'no-open': { type: 'boolean' },
+          'web-dist': { type: 'string' },
+        },
+      });
+      if (positionals.length > 1) throw new UsageError(`polymerge demo: expected at most 1 example name, got ${positionals.length}`);
+      return runDemo(positionals[0], { port: values.port, host: values.host, open: !values['no-open'], webDist: values['web-dist'] });
     }
     case 'info': {
       const { positionals } = parseArgs({ args: rest, allowPositionals: true, options: {} });
@@ -130,6 +158,7 @@ async function main(argv: string[]): Promise<number> {
           pick: { type: 'string', multiple: true },
           report: { type: 'string' },
           quiet: { type: 'boolean', short: 'q' },
+          'no-collision-check': { type: 'boolean' },
         },
       });
       requirePositionals('merge', positionals, 3);
@@ -140,7 +169,22 @@ async function main(argv: string[]): Promise<number> {
         pick: values.pick,
         report: values.report,
         quiet: values.quiet,
+        collisionCheck: !values['no-collision-check'],
       });
+    }
+    case 'review': {
+      const { values, positionals } = parseArgs({
+        args: rest,
+        allowPositionals: true,
+        options: {
+          port: { type: 'string' },
+          host: { type: 'string' },
+          'no-open': { type: 'boolean' },
+          'web-dist': { type: 'string' },
+        },
+      });
+      requirePositionals('review', positionals, 1);
+      return runReview(positionals[0], { port: values.port, host: values.host, open: !values['no-open'], webDist: values['web-dist'] }, gitStage);
     }
     case 'resolve': {
       const { values, positionals } = parseArgs({
@@ -151,16 +195,27 @@ async function main(argv: string[]): Promise<number> {
           pick: { type: 'string', multiple: true },
           format: { type: 'string' },
           quiet: { type: 'boolean', short: 'q' },
+          'no-collision-check': { type: 'boolean' },
         },
       });
       requirePositionals('resolve', positionals, 1);
-      return runGitResolve(positionals[0], { resolve: values.resolve, pick: values.pick, format: values.format, quiet: values.quiet });
+      return runGitResolve(positionals[0], {
+        resolve: values.resolve,
+        pick: values.pick,
+        format: values.format,
+        quiet: values.quiet,
+        collisionCheck: !values['no-collision-check'],
+      });
     }
     case 'git-diff':
       return runGitDiff(rest);
     case 'git-merge': {
-      const { values, positionals } = parseArgs({ args: rest, allowPositionals: true, options: { resolve: { type: 'string' } } });
-      return runGitMerge(positionals, { resolve: values.resolve });
+      const { values, positionals } = parseArgs({
+        args: rest,
+        allowPositionals: true,
+        options: { resolve: { type: 'string' }, 'no-collision-check': { type: 'boolean' } },
+      });
+      return runGitMerge(positionals, { resolve: values.resolve, collisionCheck: !values['no-collision-check'] });
     }
     case 'git-setup':
       process.stdout.write(gitSetupText() + '\n');

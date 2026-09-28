@@ -1,8 +1,29 @@
 {
   "name": "@polymerge/core",
   "version": "0.1.0",
-  "description": "Isomorphic mesh normalisation + tiered vertex-correspondence diff engine.",
+  "description": "polymerge engine: mesh loading and normalisation, vertex-correspondence diff and three-way merge for 3D models (Node and browser).",
+  "keywords": [
+    "3d",
+    "mesh",
+    "diff",
+    "merge",
+    "three-way-merge",
+    "stl",
+    "obj",
+    "gltf",
+    "glb",
+    "three"
+  ],
+  "author": "Joshua Hurley",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Joshua080/polymerge.git"
+  },
+  "homepage": "https://github.com/Joshua080/polymerge#readme",
+  "bugs": {
+    "url": "https://github.com/Joshua080/polymerge/issues"
+  },
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -12,8 +33,17 @@
       "import": "./dist/index.js"
     }
   },
-  "files": ["dist"],
+  "files": [
+    "dist",
+    "!dist/**/*.map"
+  ],
   "sideEffects": false,
+  "engines": {
+    "node": ">=20"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json"

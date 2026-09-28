@@ -22,6 +22,8 @@ export interface MergeCommandOptions {
   pick?: string[];
   report?: string;
   quiet?: boolean;
+  /** Check the combined edits for collisions (default true; --no-collision-check). */
+  collisionCheck?: boolean;
 }
 
 const RESOLUTIONS: readonly MergeResolution[] = ['ours', 'theirs', 'base'];
@@ -81,6 +83,7 @@ export function formatMergeReport(r: IMergeResult, names: { base: string; ours: 
       out.push(`      ${c.dim(where)}  ${state}`);
     }
   }
+  for (const w of r.warnings) out.push(c.modified(`WARNING: ${w.message}`));
   out.push(
     r.clean
       ? c.added(`Result: clean — ${r.merged.vertexCount} vertices · ${r.merged.faceCount} faces`)
@@ -107,6 +110,7 @@ export function mergeReportJson(r: IMergeResult): string {
         oursVertices: Array.from(c.oursVertices),
         theirsVertices: Array.from(c.theirsVertices),
       })),
+      warnings: r.warnings.map((w) => ({ ...w, mergedFaces: Array.from(w.mergedFaces) })),
       merged: { vertices: r.merged.vertexCount, faces: r.merged.faceCount },
     },
     null,
@@ -122,6 +126,7 @@ export async function runMerge(basePath: string, oursPath: string, theirsPath: s
     logger: o.quiet ? silentLogger : stderrLogger(false),
     defaultResolution: o.resolve ? parseResolution('--resolve', o.resolve) : null,
     resolutions: parsePicks(o.pick),
+    detectCollisions: o.collisionCheck !== false,
   });
   if (o.output && format) await writeFile(o.output, writeMesh(result.merged, format, { name: path.basename(o.output) }));
   if (o.report) await writeFile(o.report, mergeReportJson(result));
@@ -136,9 +141,11 @@ export async function runMerge(basePath: string, oursPath: string, theirsPath: s
  * git merge driver (merge.<name>.driver = "polymerge git-merge %O %A %B %P"):
  * merges ancestor %O, current %A and other %B, writes the result over %A in the format of
  * path %P, prints a summary to stderr and exits 0 (clean) or 1 (conflicts left in base state,
- * git marks the file as conflicted). Unwritable formats exit 2 without touching %A.
+ * git marks the file as conflicted). With --resolve, a combination that damages the model
+ * (a collision warning) also exits 1: an automatic merge must never commit it unseen.
+ * Unwritable formats exit 2 without touching %A.
  */
-export async function runGitMerge(args: string[], o: { resolve?: string } = {}): Promise<number> {
+export async function runGitMerge(args: string[], o: { resolve?: string; collisionCheck?: boolean } = {}): Promise<number> {
   if (args.length < 4) {
     process.stderr.write('polymerge git-merge: expected %O %A %B %P from git\n');
     return 2;
@@ -159,10 +166,11 @@ export async function runGitMerge(args: string[], o: { resolve?: string } = {}):
   const result = mergeMeshes(base.mesh, ours.mesh, theirs.mesh, {
     logger: silentLogger,
     defaultResolution: o.resolve ? parseResolution('--resolve', o.resolve) : null,
+    detectCollisions: o.collisionCheck !== false,
   });
   await writeFile(current, writeMesh(result.merged, format, { name: path.basename(repoPath) }));
   process.stderr.write(formatMergeReport(result, { base: `${repoPath} (ancestor)`, ours: `${repoPath} (ours)`, theirs: `${repoPath} (theirs)` }) + '\n');
-  return result.clean ? 0 : 1;
+  return result.clean && result.warnings.length === 0 ? 0 : 1;
 }
 
 /**
@@ -173,19 +181,13 @@ export async function runGitMerge(args: string[], o: { resolve?: string } = {}):
  */
 export async function runGitResolve(repoPath: string, o: MergeCommandOptions): Promise<number> {
   const format = outputFormat(repoPath, o.format);
-  const stage = (n: 1 | 2 | 3): Buffer => {
-    try {
-      return execFileSync('git', ['show', `:${n}:${repoPath}`], { maxBuffer: 1 << 30 });
-    } catch {
-      throw new Error(`git has no stage ${n} for ${repoPath} — is it an unresolved merge conflict? (git status)`);
-    }
-  };
-  const load = (n: 1 | 2 | 3) => loadMesh(new Uint8Array(stage(n)), { fileName: path.basename(repoPath) });
+  const load = (n: 1 | 2 | 3) => loadMesh(new Uint8Array(gitStage(n, repoPath)), { fileName: path.basename(repoPath) });
   const [base, ours, theirs] = await Promise.all([load(1), load(2), load(3)]);
   const result = mergeMeshes(base, ours, theirs, {
     logger: silentLogger,
     defaultResolution: o.resolve ? parseResolution('--resolve', o.resolve) : null,
     resolutions: parsePicks(o.pick),
+    detectCollisions: o.collisionCheck !== false,
   });
   await writeFile(repoPath, writeMesh(result.merged, format, { name: path.basename(repoPath) }));
   if (!o.quiet) {
@@ -193,4 +195,13 @@ export async function runGitResolve(repoPath: string, o: MergeCommandOptions): P
     process.stdout.write(result.clean ? `Wrote ${repoPath} — run "git add ${repoPath}" to mark it resolved.\n` : `Wrote ${repoPath} (still conflicted).\n`);
   }
   return result.clean ? 0 : 1;
+}
+
+/** One index stage of a conflicted file: 1 = common ancestor, 2 = ours, 3 = theirs. */
+export function gitStage(n: 1 | 2 | 3, repoPath: string): Buffer {
+  try {
+    return execFileSync('git', ['show', `:${n}:${repoPath}`], { maxBuffer: 1 << 30 });
+  } catch {
+    throw new Error(`git has no stage ${n} for ${repoPath} — is it an unresolved merge conflict? (git status)`);
+  }
 }

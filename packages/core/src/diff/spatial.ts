@@ -523,6 +523,39 @@ export class TriangleBvh {
   }
 
   /**
+   * Faces whose triangle bounding box overlaps the box [x0, y0, z0]–[x1, y1, z1] (inclusive).
+   * `out` is cleared, filled with face indices (in no particular order) and returned.
+   */
+  queryBox(x0: number, y0: number, z0: number, x1: number, y1: number, z1: number, out: number[]): number[] {
+    out.length = 0;
+    if (this.faceCount === 0) return out;
+    const b = this.box;
+    const tri = this.tri;
+    const stack = this.stack;
+    let sp = 0;
+    stack[sp++] = 0;
+    while (sp > 0) {
+      const node = stack[--sp];
+      const o = node * 6;
+      if (b[o] > x1 || b[o + 1] > y1 || b[o + 2] > z1 || b[o + 3] < x0 || b[o + 4] < y0 || b[o + 5] < z0) continue;
+      const l = this.left[node];
+      if (l >= 0) {
+        stack[sp++] = l;
+        stack[sp++] = this.right[node];
+        continue;
+      }
+      for (let i = this.start[node], e = this.end[node]; i < e; i++) {
+        const t = i * 9;
+        if (Math.min(tri[t], tri[t + 3], tri[t + 6]) > x1 || Math.max(tri[t], tri[t + 3], tri[t + 6]) < x0) continue;
+        if (Math.min(tri[t + 1], tri[t + 4], tri[t + 7]) > y1 || Math.max(tri[t + 1], tri[t + 4], tri[t + 7]) < y0) continue;
+        if (Math.min(tri[t + 2], tri[t + 5], tri[t + 8]) > z1 || Math.max(tri[t + 2], tri[t + 5], tri[t + 8]) < z0) continue;
+        out.push(this.triFace[i]);
+      }
+    }
+    return out;
+  }
+
+  /**
    * Closest surface point within squared distance maxDist2 (inclusive). Returns the face
    * index (ties → lowest index) or -1; distance and point land in lastDist2/lastPoint.
    */

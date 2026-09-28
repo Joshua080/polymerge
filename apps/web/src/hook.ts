@@ -3,7 +3,7 @@
  * snapshot of the viewer state, and `document.body.dataset.state` mirrors `state`
  * so tests can simply wait for `body[data-state="ready"]`.
  */
-import type { IDiffStats, IMeshSummary, ITierAttempt, IVertexChange, MatchTier } from '@polymerge/core';
+import type { IDiffStats, IMergeStats, IMeshSummary, ITierAttempt, IVertexChange, MatchTier, MergeResolution, Vec3 } from '@polymerge/core';
 
 export type ViewerState = 'idle' | 'loading' | 'ready' | 'error';
 
@@ -13,8 +13,35 @@ export interface ISelectionSnapshot extends IVertexChange {
   index: number;
 }
 
+/** Merge review state (mode 'merge'). */
+export interface IMergeHookState {
+  clean: boolean;
+  unresolved: number;
+  conflicts: {
+    id: number;
+    kinds: Record<string, number>;
+    resolution: MergeResolution | null;
+    baseVertices: number;
+    focus: Vec3;
+    /** Canvas position (CSS px) of a visible point of the region, for clicking it; null if off-screen. */
+    screen: [number, number] | null;
+  }[];
+  warnings: string[];
+  stats: IMergeStats;
+  merged: { vertices: number; faces: number };
+  tiers: { ours: MatchTier; theirs: MatchTier };
+  /** Merged faces per colour class. */
+  faceKinds: Record<string, number>;
+  selected: number | null;
+  /** The equivalent CLI command for the current resolutions. */
+  command: string;
+}
+
 export interface IPolymergeHook {
   state: ViewerState;
+  /** Which viewer is open: two-way diff (default) or three-way merge review. */
+  mode?: 'diff' | 'merge';
+  merge?: IMergeHookState;
   error?: string;
   tier?: MatchTier;
   tierName?: string;
@@ -28,6 +55,8 @@ export interface IPolymergeHook {
   engine?: 'worker' | 'main';
   /** Number of reported part motions in the result. */
   parts?: number;
+  /** When the last diff computed, epoch ms [start, end] (for responsiveness checks). */
+  diffWindow?: [number, number];
   /** The vertex currently shown in the inspector, if any. */
   selection?: ISelectionSnapshot;
 }

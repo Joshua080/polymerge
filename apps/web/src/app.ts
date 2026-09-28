@@ -102,7 +102,7 @@ export class App {
     this.buildLayout(root);
     this.viewer = new DiffViewer(this.el.viewport);
     this.viewer.onPick = (hit) => {
-      if (hit) this.inspect(hit.side, hit.vertex, hit);
+      if (hit && hit.side !== 'merged') this.inspect(hit.side, hit.vertex, hit);
       else this.clearSelection();
     };
     this.renderLayers();
@@ -197,6 +197,7 @@ export class App {
         { class: 'brand' },
         h('span', { class: 'logo' }, 'polymerge'),
         h('span', { class: 'tagline' }, 'vertex-level 3D diff'),
+        h('a', { class: 'mode-link', href: '?mode=merge', title: 'Review a three-way merge (base, ours, theirs)' }, 'Merge →'),
       ),
       h(
         'section',
@@ -770,6 +771,7 @@ export class App {
       hook.base = r.base;
       hook.target = r.target;
       hook.engine = this.engine.mode;
+      if (this.engine.lastWindow) hook.diffWindow = this.engine.lastWindow;
       hook.parts = r.parts?.length ?? 0;
     } else {
       if (this.base) hook.base = summarizeMesh(this.base.mesh);

@@ -4,6 +4,302 @@ A living log of milestones, architectural decisions, what works, what is stubbed
 
 ---
 
+## Session 4 — 2026-09-27 — README, npm packaging
+
+Priorities set by the owner:
+1. A proper README: what the tool does, a screenshot or GIF of the viewer, install instructions, and the basic diff/view/merge commands with real examples.
+2. Check whether polymerge can be installed from npm as a real package, not only cloned and run; if not, get it there.
+3. State honestly in the README what v1 does and doesn't handle.
+
+### Milestone 1 — Installable from npm ✅
+
+**What was wrong.** The packages had `files` and a `bin`, but a published CLI would not have worked:
+- **The viewer was not in the package.** `polymerge view` looked for the built viewer only at the monorepo's `apps/web/dist`. An installed `polymerge` would have failed with "Could not find the built web viewer".
+- **The name.** `@polymerge/cli` needs the npm org `polymerge`, and it is not what anyone would type. The command is `polymerge`, so the package should be too.
+- **Metadata:**
+  - no repository / homepage / bugs / keywords;
+  - no README or LICENSE inside either package;
+  - no `publishConfig.access`, and a scoped package is private by default;
+  - source maps pointing at sources that were never shipped.
+- The version was hard-coded in `cli.ts` apart from `package.json`.
+
+**Changes.**
+- **Package names.** The CLI is now the unscoped **`polymerge`** (`npm install -g polymerge`, `npx polymerge`). The engine stays **`@polymerge/core`**, with `publishConfig.access: public`. Both names are free on the registry (404 on 2026-09-27).
+- **The viewer is bundled at pack time.** `packages/cli/scripts/prepack.mjs` copies `apps/web/dist` into `dist/viewer`. It fails if the CLI or the viewer is not built, so a tarball can never ship without them. `resolveWebDist` looks in this order:
+  1. `--web-dist`;
+  2. `$POLYMERGE_WEB_DIST`;
+  3. the monorepo's `apps/web/dist`, so a clone always serves a freshly built viewer;
+  4. the bundled `dist/viewer`.
+- **The npm README.** `prepack` also copies the repository README in as the package README, with relative links made absolute (npmjs.com cannot resolve repository paths). `@polymerge/core` has its own short README.
+- **Package contents.** Metadata, LICENSE copies and `engines: node >= 20` for both packages. Source maps are excluded. The CLI reads its version from `package.json`.
+- **`polymerge demo [example]`** (new). It opens the viewer on a built-in example with no files: the merge examples, or any diff fixture bundled with the viewer. Someone who has just installed the package can see what it does in one command.
+
+**Proof: `scripts/e2e-pack.mjs`**, now part of `npm run e2e`, so CI runs it on every push.
+1. It runs `npm pack` for both packages and checks the tarball contents: the viewer, the fixtures manifest, the README and the LICENSE, with no sources and no source maps.
+2. It installs the two tarballs into an **empty project**.
+3. It uses the installed copy:
+   - `--version` matches the package;
+   - `diff` exits 1 on a moved part;
+   - the README's library example runs verbatim against the installed `@polymerge/core`;
+   - `merge` reports the conflict and resolves with `--pick`;
+   - `demo` serves the bundled viewer;
+   - `view` renders a real diff in headless Chromium, through `e2e-view` pointed at the installed `cli.js`.
+
+**Releasing.** `.github/workflows/release.yml` runs on a `v*` tag. It checks that the tag, both package versions and the CLI's core dependency agree, then runs the full `npm run verify`. After that it publishes `@polymerge/core` and then `polymerge`, with npm provenance. A version that is already on the registry is skipped, so a failed release can be re-run.
+
+**Not done: the actual publish.** It needs the owner's npm account (a repository secret `NPM_TOKEN`), and a publish cannot really be undone. Until then the README says plainly that the packages are not on npm yet, and gives the from-source install. `npm publish --dry-run` for `polymerge` succeeds.
+
+| # | Decision | Why |
+|---|----------|-----|
+| D22 | The CLI is published as the unscoped `polymerge`; the engine as `@polymerge/core`. | People install the command they type. Library users get a clearly separate engine package. |
+| D23 | The viewer is copied into the CLI package at `prepack`, not at build. A clone prefers its own `apps/web/dist`. | The tarball always carries the viewer it was built with, and development never serves a stale copy. |
+| D24 | Packaging is tested by installing the packed tarballs into an empty project on every CI run. | "Works from the clone" says nothing about the package. The one real bug here (the missing viewer) was exactly of that kind. |
+
+### Milestone 2 — README ✅
+
+The README was rewritten for someone who has never seen the project:
+- what the tool does and how it differs from a deviation heatmap;
+- a GIF of the merge review and a screenshot of the diff viewer;
+- install instructions, with the release status stated;
+- diff / view / merge / review / git / library usage.
+
+**Every command output in it is a real run**, lightly trimmed where marked with "…". It uses files in the repository: `fixtures/cases/*`, and the new `examples/plate/` (base / ours / theirs STL of the `boss-height` merge example: one move-move conflict and two automatic edits). The library example is the exact code `e2e-pack` runs against the installed package, so the README cannot silently drift from the API.
+
+While writing it, I found that `logger: null` does not silence the engine (it falls back to the console), so the README documents `logger: { info() {}, warn() {} }` instead.
+
+**"What v1 does and doesn't handle"** collects the limits in one place:
+- `docs/merge-design.md` §4.1 and §7: no judgement of contact, clearance or wall thickness; remeshed sides give a whole-model `lineage` conflict; split parts; no material/UV merge;
+- the diff's ambiguous cases: identical copy vs. move, symmetric shapes, lattice shift, far-dragged regions;
+- input formats that are not supported;
+- the viewer's Y-up camera, and the review not writing back to the repository.
+
+**Images.** `scripts/readme-images.mjs` regenerates them from the real viewer (headless Chromium + the built CLI's server), so they can be refreshed whenever the UI changes:
+- `docs/images/diff-viewer.png`: the `mixed-topology-edit` example.
+- `docs/images/merge-review.gif`: six frames, 124 kB. Select the conflict by clicking it in 3D, preview ours, preview theirs, click Theirs.
+  - The model is tilted slightly, so the plate reads as 3D.
+  - A drawn pointer shows what is being clicked (headless screenshots have none).
+  - One shared palette, with the merge colours pinned, keeps every colour exact across frames.
+
+### State at end of session 4
+
+**Verified.** `npm run verify` passes locally in 1m07s. It covers:
+- typecheck;
+- 458 unit / fixture / merge / web tests and 4 perf tests;
+- build;
+- smoke (21/21 browser cases), e2e-view, e2e-worker, e2e-merge, e2e-git, and the new e2e-pack.
+
+**Known limits / next steps** (carried over from session 3, minus npm packaging):
+1. **Publish v0.1.0.** Add the `NPM_TOKEN` secret and push the tag `v0.1.0`. If the `@polymerge` npm scope turns out to be unavailable, rename the engine package (e.g. `polymerge-core`) before the first release.
+2. Collision check scope (v1, by decision): coplanar contact, clearances, wall thickness and design intent are not judged (D16).
+3. Deformation transfer for `lineage` conflicts.
+4. Saving from the merge review straight into the repository (needs a write endpoint, with its own security review).
+5. A GLB/glTF writer, and merging materials/UVs.
+6. Parsing in the worker; chunked scene building for very large results.
+7. Z-up models: a per-model "up" choice in the viewer.
+
+---
+
+## Session 3 — 2026-09-26 — CI, combined-edit collisions, merge review in the viewer
+
+Priorities set by the owner:
+1. GitHub Actions CI running `npm run verify` on every push. Until now the project was verified on trust alone.
+2. Take a hard look at the "combined edits" gap: two edits that don't conflict individually but produce bad geometry together. Decide explicitly whether it is solvable now, then fix it or document it.
+3. Conflict display and click-to-resolve in the browser viewer.
+4. If time remains, investigate the 12-minute browser test stall properly.
+
+PR #1 was merged into `main` first (merge commit `557955a`). This session works on `claude/optimistic-franklin-u4oplc`, restarted from that `main`, with a new PR.
+
+### Milestone 1 — CI on every push ✅
+
+`.github/workflows/ci.yml` runs `npm run verify` on every push to any branch, and on pull requests from forks. That covers typecheck, unit/fixture/merge tests, perf tests, build, and every end-to-end suite: 21 browser cases, CLI → browser, worker responsiveness, real-git merge, and (since milestone 3) the merge review.
+- Runs on Ubuntu with Node 22, `npm ci`, and Playwright's Chromium plus its system dependencies.
+- Viewer screenshots are uploaded when a run fails.
+- A newer push cancels older runs of the same ref. The token is read-only.
+
+Two checks were rewritten first, because they would have been flaky on a shared runner:
+- **Perf tests run alone.** The three ~100k-vertex perf tests have absolute time bounds (1 s / 6 s / 15 s). Under the full parallel test run, one took 824 ms against its 1000 ms bound. That measured the scheduler, not the engine. They now run in a second vitest pass (`vitest.perf.config.ts`: no file parallelism, 120 s timeout) with the bounds unchanged. Locally they take 395 / 1159 / 2929 ms.
+- **The worker responsiveness check is scale-free.** It used to assert "no main-thread task > 250 ms during the diff". A runner twice as slow could break that absolute number.
+  - The app now publishes the diff's own timing window: epoch ms, measured where the diff ran (in the worker, or around the fallback call).
+  - The check measures the longest stretch of that window the main thread spent inside one long task. It must be < 25% with the worker, and ≥ 75% with `?worker=0`, which proves the measurement sees blocking.
+  - Locally: worker 0 ms of a 508 ms diff (0%); fallback 470 ms of 470 ms (100%).
+
+**Verified on GitHub.** Before the first push, a fresh clone ran `npm ci && npm run verify` and passed in 1m18s. The first Actions run ([run #1](https://github.com/Joshua080/polymerge/actions/runs/36242458833)) was green in 1m34s end to end, 58 s of it for `npm run verify`.
+- Perf tests on the runner: Tier 2 690 ms, Tier 3 1593 ms, against bounds of 6 s and 15 s.
+- Worker: 0% of a 324 ms diff. Fallback: 100% of 281 ms.
+- All 21 browser cases passed, plus e2e-view and e2e-git.
+
+### Milestone 2 — Combined edits: decided **solvable now**, and fixed for a stated class ✅
+
+**The gap.** Two edits that don't conflict under any rule, because they touch different vertices, edges, parts and frames, can still break the model once both are applied. Session 2 merged them silently.
+
+**Decision.** The gap splits into two classes, and I treated them differently:
+1. **Damage: solved now.** Surfaces passing through each other and faces folding over or collapsing are *objective* and *checkable*, and each one is attributable to specific edits. They are now a new conflict kind, **`collision`**.
+2. **Design judgement: a stated v1 limit.** Coplanar contact, clearances, minimum wall thickness and design intent in general are *not* judged. Deciding whether two parts may touch, or how thin a wall may be, needs knowledge of intent that a mesh does not carry. This is written down in `docs/merge-design.md` §4.1, the README, and here.
+
+**How it works** (`packages/core/src/merge/collide.ts`; details in the design doc):
+- **Versions.** Each merged face gets a bit per version (base / ours / theirs): set when the face differs from that version or is missing there. Only geometry that differs from all three can be new damage. This also means a side's *own* self-intersection is never blamed on the merge.
+- **Fold.** A face whose normal opposes every non-degenerate version of it, or that collapses below ε where none of its versions did.
+- **Crossing.** A face pair that properly crosses (an edge passes through the other face, with ε margins on both endpoints) in "part space", where the same pair crosses in no version.
+- **Regions.** A collision joins every change unit under its faces: both sides' change components at the corners, the added faces, and the frames of the parts involved. That needed two pieces of plumbing:
+  - Region building now reruns (`buildRegions` / `addAtomics`).
+  - A region can own a part *frame* even when the frame itself isn't in conflict.
+- **Repeat until sound.** A region left at base can expose damage that its edits had hidden. For example, theirs dented a wall and lowered a block into the dent; reverting the dent leaves the block through the flat wall. So the check → re-region loop repeats until clean. The regression test takes 3 passes (18 crossings, then 16, then 0).
+- **After resolution.** Picked resolutions can still combine badly. They are explicit choices, so they are not re-opened. They become `IMergeResult.warnings` instead: faces involved, and the conflicts that meet there. The CLI prints them. `polymerge git-merge --resolve` exits 1 on a warning, so git never auto-commits damaged geometry.
+- **Opt-out:** `detectCollisions: false` in the API, `--no-collision-check` on the CLI.
+
+**Tests.**
+- `packages/core/test/merge/collision.test.ts`, 10 scenarios:
+  - a thin wall pushed from both sides;
+  - neighbours pushed past each other (fold);
+  - two parts moved into the same space;
+  - an addition pierced by the other side's edit;
+  - the exposed-by-reversion case;
+  - mixed resolutions → warning;
+  - negative controls: near but not touching, and a side's own self-intersection;
+  - symmetry;
+  - the escape hatch.
+  
+  Each scenario checks that both sides are sound on their own and that each resolution gives back that side's geometry.
+- CLI: 2 more tests. One covers the collision conflict in `merge` and `--no-collision-check`; the other covers the git driver stopping on a warning.
+- The 25 existing merge tests are unchanged and all pass: no false positives on frame composition, additions or convergence.
+
+**Cost.** A new perf test, `packages/core/test/merge/perf.test.ts`, covers 100k vertices / 198k faces. Ours moves a 50k-vertex part, and theirs makes 3000 local edits on it. The merge is clean, and the check adds about 25% (0.96 s → 1.2 s).
+- On scattered edits over 99k faces it adds about 16%.
+- Two optimisations got it there: bit tagging without per-vertex closures, and a BVH only over faces near the candidates.
+- The final unresolved materialisation is also reused by `assemble`, instead of being computed twice.
+
+| # | Decision | Why |
+|---|----------|-----|
+| D16 | Combined-edit *damage* (crossings, folds) is a conflict (`collision`); combined *design judgement* (contact, clearance, thickness) is not checked in v1. | Damage is objective and attributable to edits; the other judgements need intent the mesh does not carry. |
+| D17 | Damage counts only when the geometry differs from all three versions (base, ours, theirs). | A side's own design, including its own self-intersections, is never blamed on the merge; it is also what makes the check cheap. |
+| D18 | Damage created by *chosen* resolutions is a warning, not a new conflict; the git driver stops on it when resolving automatically. | Re-opening explicit choices would make resolution unstable; silently committing damage would be worse. |
+
+### Milestone 3 — Merge review in the viewer: see conflicts, resolve by clicking ✅
+
+Conflicts used to show only through the CLI and git. Visual review is the premise of the tool, so the viewer now has a **merge mode**.
+
+**Opening it:**
+- `polymerge view base ours theirs`: three files, where two open the diff.
+- `polymerge review <path>`: reads git's index stages :1/:2/:3 during a conflicted `git merge`.
+- `?mode=merge&base=…&ours=…&theirs=…`: URLs.
+- Three drop zones.
+- Five built-in examples, built in the browser from code (`?mode=merge&demo=…`): `thin-wall`, `boss-height`, `parts`, `mixed-choices`, `clean`.
+
+**What you see.**
+- The merged model is coloured by *who shaped each face*, with new `MERGE_COLORS` in core:
+  - ours blue, theirs purple, the same change on both teal, untouched grey;
+  - **unresolved conflict regions orange**, and they stay in the base state.
+  
+  These are deliberately disjoint from the diff's green / red / yellow: a merge is about provenance, not added/removed/moved.
+- The provenance now counts part motions as "shaped by" their side. Before, a part moved by ours showed grey.
+- The panel shows:
+  - the merge status and what was auto-applied from each side;
+  - one card per conflict: kinds, message, and **Ours / Theirs / Base** buttons;
+  - "All …" buttons, collision warnings, downloads, and the equivalent CLI command.
+
+**Resolving by clicking.**
+- Click an orange region in 3D (the pick maps the merged face to its region through provenance), or its card. The region gets a white outline, and its three versions appear in place as outlines: ours blue, theirs purple, base grey (optional).
+- Hovering a resolution button shows that version filled: a live preview of the choice.
+- Buttons or keys `1`/`2`/`3` resolve, `0` undoes, and `n`/`p` step through conflicts.
+- Each choice re-materialises the merge in the Web Worker without recomputing the diffs. The worker keeps the unresolved merge and receives the *complete* set of choices each time, which is what makes undo possible. The camera stays put.
+- Choices that collide with each other show the core's collision warning.
+
+**Finishing.**
+- Download the result as STL/OBJ; unresolved regions are written in their base state, as the CLI does.
+- Or copy the command: `polymerge merge … --pick 0=theirs`, plus `polymerge resolve <path> --pick …` when opened via `review`.
+
+**Engine.** `DiffEngine` gained `merge()` / `resolve()` with the same worker / main-thread fallback. A superseded *resolve* is abandoned rather than killing the worker, because the worker holds the merge.
+
+**Tests.**
+- `scripts/e2e-merge.mjs` (in `npm run e2e`) runs the real CLI server with headless Chromium:
+  - Three files open the merge review, and the merge runs in the worker.
+  - Pixel classes show the orange region and the blue/purple automatic edits. Clicking "Theirs" turns orange (40 k px) into purple (47 k px); the command carries `--pick 0=theirs` and the resolve command for the repository path; the downloaded STL has theirs' boss height.
+  - A **3D click on the region** selects it, and the key `1` resolves it.
+  - Mixed choices raise a visible warning; "All ours" clears it.
+- `scripts/e2e-git.mjs` now runs `polymerge review` inside a real conflicted merge and checks that the three stages are served.
+- `apps/web/test/merge-review.test.ts` (7 tests): face classes unresolved and resolved, part-motion provenance, preview placement, and frame mapping.
+
+Two bugs came up while writing the e2e, both fixed:
+- Translucent ghost fills turned the orange region brown, which is unreadable. Ghosts are now outline-only, filled only on hover.
+- Selecting a card on hover re-rendered the card list and swallowed the click. Selection now only toggles a class.
+
+| # | Decision | Why |
+|---|----------|-----|
+| D19 | Merge review colours are provenance (ours / theirs / both / conflict), not diff status. | The question in a merge is *whose change is this*, and the diff colours would mean something else. |
+| D20 | Every resolve re-materialises the unresolved merge with the complete set of choices, in the worker that holds it. | Undo and "change my mind" are free. Nothing drifts between the viewer and the CLI: the same `--pick` set gives the same model. |
+
+### Milestone 4 — The 12-minute browser-test stall, investigated
+
+**What the evidence says.** I reread the session-2 transcript at the moment of the stall:
+- The previous case (`moved-part`) had printed PASS, so its context had closed.
+- The stalled case (`units-inch-to-mm`) never wrote its first screenshot. So it hung between creating its context and that screenshot.
+- In that stretch, `goto` (30 s default) and the ready-wait (120 s) have timeouts. Either would have *thrown* rather than hung.
+
+That leaves five calls with **no timeout at all** in Playwright:
+- `newContext` and `newPage`;
+- the hook read (`page.evaluate`) and the examples read (`$$eval`);
+- the two-frame wait, `requestAnimationFrame` ×2 inside `evaluate`.
+
+Each of them waits forever if the renderer's main thread blocks, or, for the frame wait, if the page simply stops producing frames. Also, "12 minutes" was not a delay that resolved itself. It was how long it took me to notice and kill the run, so the hang was unbounded.
+
+**Most likely mechanism.** WebGL here is software-rendered by SwiftShader inside one GPU process that every page shares; the process runs at ~165% CPU during the suite. three.js makes synchronous GL calls (parameter queries, shader and program status). If that GPU process wedges or starves, the renderer's main thread blocks on the next synchronous call and frames stop. From then on, every no-timeout call above waits forever. This fits all the evidence:
+- it depended on what ran before, i.e. GPU-process state (the case passed in 0.8 s alone);
+- it vanished on rerun;
+- a browser relaunch, which starts a new GPU process, is the recovery.
+
+**Changes (`apps/web/e2e/smoke.mjs`):**
+- **Every browser call goes through `trace.step(name, …)`**, which records its name and duration. The per-case hard deadline now reports *which call is stuck and for how long*: `hung: … stuck in "read hook" for 149870 ms`. It also reports whether the browser is still connected and the steps completed so far. The next occurrence will name its cause instead of being a mystery.
+- **The frame wait is bounded in the page** (two rAFs, or 3 s, whichever comes first). A page that stops producing frames can no longer hang that step; a blocked main thread is still caught by the deadline.
+- **A context-wide default timeout** for every action that accepts one (screenshots, bounding boxes, waits), and a `crash` listener that fails the case with "renderer crashed" instead of letting it hang.
+- **`--trace`** prints every step's timing per case plus a per-step summary (count / mean / max @ case). **`--repeat n`** reruns the target list n times, for stress runs.
+- **`--simulate-hang <step>`** is a self-test of the deadline path: that step never finishes. Verified with `--simulate-hang frames`:
+  - Each case failed at its deadline with `stuck in "frames" for 6692 ms (browser connected: true; steps done: newContext 13ms, newPage 119ms, goto 374ms, …)`.
+  - The browser was relaunched, and the next case ran.
+- The other browser suites (`e2e-view`, `e2e-worker`, `e2e-merge`) had the same unbounded calls. A hang there would have stalled CI until the 30-minute job timeout. They now use `scripts/watchdog.mjs`: fail within 3–5 minutes, name the stage, and kill the CLI server they spawned.
+
+**Trying to reproduce it:**
+- **Plain stress**, `smoke.mjs --trace --repeat 12`: 252 cases in one browser, no relaunch, 6m21s. **252/252 passed, no hang.** The slowest single call in the whole run was a 1.04 s screenshot; means are 7–364 ms per step. So there is no slow tail that grows into a hang, and no accumulation across 252 contexts in one browser.
+- **CPU contention**: `--repeat 6` with four busy-loop processes pinning all 4 cores, 4m41s. **126/126 passed, no hang.** Screenshots slowed 2–3× (max 1.5 s); everything else barely moved.
+- **Fault injection**: freeze the shared GPU process (SIGSTOP) the moment the hook read starts. This is exactly the stage where session 2 stalled: after "ready", before the first screenshot. The result reproduced the failure mode deterministically:
+  - The hook read took 18 ms and the examples read 22 ms: **the page's JavaScript stays responsive**.
+  - The two-frame wait took **3003 ms**: frames stopped, and it returned only through the new 3 s bound.
+  - The screenshot hit its 20 s timeout. The error-path screenshot hung until the deadline, which reported `stuck in "screenshot (after error)"` and relaunched the browser. The next two cases passed in 0.9 s and 0.5 s.
+  
+  The old harness waited for two frames with no bound at that exact point, so it would have waited forever: the session-2 symptom.
+
+- **Permanent freeze** (nobody unfreezes the GPU process): the case fails at its deadline, naming the step. `browser.close()` cannot finish, so after 5 s the harness kills the stuck browser's whole process group (Playwright starts each browser in its own group) and relaunches. The next case passed, and nothing was left running. Before this, a stuck browser would have lingered for the rest of the run.
+
+**Conclusion.** The mechanism is identified and reproduced on demand. When Chromium's shared GPU process stalls (SwiftShader, headless), the page stops producing frames while its JavaScript stays alive. The harness's unbounded frame wait turned that into an infinite hang. *Why* the GPU process stalled once is inside Chromium/SwiftShader and did not recur in 378 stressed runs; it is not in polymerge's code. The harness now:
+- bounds that wait and every action;
+- names the stuck call if anything still hangs;
+- recovers with a fresh browser, which means a fresh GPU process.
+
+A hung case is still reported as a failure, never retried silently: an infrastructure stall should be seen, not hidden.
+
+| # | Decision | Why |
+|---|----------|-----|
+| D21 | Every browser wait in the e2e suites is bounded, and a hang names its step and discards the browser (process-group kill). Hangs fail the run and are never retried. | The session-2 stall was a Chromium GPU-process stall turned into an infinite hang by one unbounded frame wait. Fault injection shows the new harness diagnoses and recovers from exactly that. |
+
+### State at end of session 3
+
+**Verified.** `npm run verify` is green locally and on GitHub Actions for every push of this session, in about 1.5 min. It covers:
+- typecheck;
+- 458 unit / fixture / merge / web tests;
+- 4 perf tests;
+- build;
+- smoke (21 browser cases), e2e-view, e2e-worker, e2e-merge and e2e-git.
+
+**Known limits / next steps**
+1. **Collision check scope (v1, by decision):** coplanar contact, clearances, wall thickness and design intent are not judged (D16).
+2. **Deformation transfer for `lineage` conflicts:** apply an edit made on one tessellation to a remeshed other side. Carried over.
+3. **Saving from the merge review:** the viewer downloads the result or gives the exact command. A `polymerge review` session could write the file back and `git add` it directly. That needs a write endpoint on the local server, so it deserves its own security look (token, 127.0.0.1 only).
+4. **GLB/glTF writer**, and merging materials/UVs. Carried over.
+5. **Parsing in the worker**, and chunked scene building for very large results. Carried over.
+6. **Z-up models:** the viewer's default camera assumes Y-up, so CAD/print models (Z-up) open side-on. A per-model "up" choice would help merge review too.
+7. npm publishing. Carried over (done in session 4, except the publish itself).
+
+---
+
 ## Session 2 — 2026-09-26 — correspondence fixes, then three-way merge
 
 Priorities set by the owner: (1) fix the two known correspondence bugs, with regression tests that would have caught them; (2) design and start three-way merge; (3) if time allows, move the browser diff into a Web Worker.

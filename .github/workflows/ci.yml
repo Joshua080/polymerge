@@ -1,0 +1,49 @@
+# Runs the full local gate — `npm run verify` (typecheck, unit + perf tests, build, browser and
+# git end-to-end tests) — on every push to any branch, and on pull requests from forks (a
+# same-repo PR is already covered by the push of its branch).
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: npm run verify
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Headless Chromium (software WebGL via SwiftShader) for the viewer end-to-end tests.
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: npm run verify
+        run: npm run verify
+
+      - name: Upload viewer screenshots
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-screenshots
+          path: apps/web/e2e/screenshots
+          if-no-files-found: ignore
+          retention-days: 7

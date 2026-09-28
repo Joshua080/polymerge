@@ -1,16 +1,46 @@
 {
-  "name": "@polymerge/cli",
+  "name": "polymerge",
   "version": "0.1.0",
-  "description": "polymerge command line: diff, view (browser), info, and git external-diff driver.",
+  "description": "Structural diff and three-way merge for 3D models (STL, OBJ, glTF/GLB), with a browser viewer and git drivers.",
+  "keywords": [
+    "3d",
+    "mesh",
+    "diff",
+    "merge",
+    "three-way-merge",
+    "stl",
+    "obj",
+    "gltf",
+    "glb",
+    "git",
+    "cli",
+    "viewer"
+  ],
+  "author": "Joshua Hurley",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Joshua080/polymerge.git"
+  },
+  "homepage": "https://github.com/Joshua080/polymerge#readme",
+  "bugs": {
+    "url": "https://github.com/Joshua080/polymerge/issues"
+  },
   "type": "module",
   "bin": {
     "polymerge": "./dist/cli.js"
   },
-  "files": ["dist"],
+  "files": [
+    "dist",
+    "!dist/**/*.map"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "prepack": "node scripts/prepack.mjs"
   },
   "dependencies": {
     "@polymerge/core": "0.1.0"
