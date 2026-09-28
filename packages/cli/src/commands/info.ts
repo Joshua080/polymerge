@@ -1,4 +1,4 @@
-import { boundsDiagonal } from '@polymerge/core';
+import { boundsDiagonal } from 'polymerge-core';
 import { loadMeshFile } from '../io.js';
 import { fmt, palette } from '../report.js';
 

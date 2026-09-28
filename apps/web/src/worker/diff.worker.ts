@@ -7,7 +7,7 @@
  * recomputing its two diffs, and always starts from the unresolved merge, so the viewer sends
  * the complete set of resolutions each time (which also lets it un-resolve a conflict).
  */
-import { diffMeshes, mergeMeshes, resolveMerge, type IDiffLogger, type IMergeResult } from '@polymerge/core';
+import { diffMeshes, mergeMeshes, resolveMerge, type IDiffLogger, type IMergeResult } from 'polymerge-core';
 import { mergeView, resultTransferables, type WorkerMessage, type WorkerRequest } from './protocol.js';
 
 const post = (msg: WorkerMessage, transfer: Transferable[] = []): void => {

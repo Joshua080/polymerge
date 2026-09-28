@@ -13,8 +13,8 @@
     "node": ">=20"
   },
   "scripts": {
-    "build": "npm run build -w @polymerge/core && npm run build -w polymerge && npm run build -w @polymerge/web",
-    "typecheck": "npm run build -w @polymerge/core && npm run typecheck --workspaces --if-present",
+    "build": "npm run build -w polymerge-core && npm run build -w polymerge && npm run build -w @polymerge/web",
+    "typecheck": "npm run build -w polymerge-core && npm run typecheck --workspaces --if-present",
     "test": "vitest run && vitest run -c vitest.perf.config.ts",
     "test:watch": "vitest",
     "dev": "npm run dev -w @polymerge/web",

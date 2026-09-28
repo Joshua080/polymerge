@@ -1,5 +1,5 @@
 import { writeFile } from 'node:fs/promises';
-import { diffMeshes, serializeDiff, type IDiffOptions, type MatchTier } from '@polymerge/core';
+import { diffMeshes, serializeDiff, type IDiffOptions, type MatchTier } from 'polymerge-core';
 import { loadMeshFile } from '../io.js';
 import { formatDiffReport, hasChanges, silentLogger, stderrLogger } from '../report.js';
 

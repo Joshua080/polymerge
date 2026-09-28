@@ -12,7 +12,7 @@ import {
   type IMergeResult,
   type IMesh,
   type MergeResolution,
-} from '@polymerge/core';
+} from 'polymerge-core';
 import {
   mergeView,
   type IMergeView,

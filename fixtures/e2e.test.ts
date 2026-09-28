@@ -1,5 +1,5 @@
 /**
- * End-to-end validation of @polymerge/core against the known-answer fixtures.
+ * End-to-end validation of polymerge-core against the known-answer fixtures.
  *
  * For every case in fixtures/manifest.json: load both files with `loadMesh`, diff
  * them with `diffMeshes` (default options, capturing logger), and check the result

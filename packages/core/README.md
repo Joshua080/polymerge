@@ -1,16 +1,16 @@
-# @polymerge/core
+# polymerge-core
 
 The engine behind [polymerge](https://github.com/Joshua080/polymerge): loading and normalising 3D models (STL, OBJ, glTF/GLB), a tiered vertex-correspondence **diff**, and a region-based **three-way merge** with collision detection. It runs in Node and in the browser.
 
 For the command line and the browser viewer, install [`polymerge`](https://www.npmjs.com/package/polymerge) instead.
 
 ```bash
-npm install @polymerge/core
+npm install polymerge-core
 ```
 
 ```js
 import { readFile, writeFile } from 'node:fs/promises';
-import { loadMesh, diffMeshes, mergeMeshes, resolveMerge, writeStl } from '@polymerge/core';
+import { loadMesh, diffMeshes, mergeMeshes, resolveMerge, writeStl } from 'polymerge-core';
 
 const load = async (file) => loadMesh(await readFile(file), { fileName: file });
 const [base, ours, theirs] = await Promise.all(['base.stl', 'ours.stl', 'theirs.stl'].map(load));

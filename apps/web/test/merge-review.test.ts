@@ -4,7 +4,7 @@
  * built-in merge examples, unresolved and resolved.
  */
 import { describe, expect, it } from 'vitest';
-import { mergeMeshes, resolveMerge, type IMergeResult } from '@polymerge/core';
+import { mergeMeshes, resolveMerge, type IMergeResult } from 'polymerge-core';
 import * as THREE from 'three';
 import { findMergeDemo, MERGE_DEMOS, type IMergeTriple } from '../src/dev/merge-demos.js';
 import { conflictGhosts, faceConflicts, mergeFaceKinds, sideToMerged } from '../src/scene/merge-layers.js';

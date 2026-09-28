@@ -1,5 +1,5 @@
 {
-  "name": "@polymerge/core",
+  "name": "polymerge-core",
   "version": "0.1.0",
   "description": "polymerge engine: mesh loading and normalisation, vertex-correspondence diff and three-way merge for 3D models (Node and browser).",
   "keywords": [

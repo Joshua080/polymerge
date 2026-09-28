@@ -1,5 +1,5 @@
 /** Where meshes come from: local files, URLs (`?base=&target=`) and the fixture manifest. */
-import { SOURCE_FORMATS, loadMesh, type IFixtureManifest, type IMesh, type SourceFormat } from '@polymerge/core';
+import { SOURCE_FORMATS, loadMesh, type IFixtureManifest, type IMesh, type SourceFormat } from 'polymerge-core';
 
 export const ACCEPTED_EXTENSIONS = SOURCE_FORMATS.map((f) => `.${f}`);
 

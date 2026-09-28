@@ -18,7 +18,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
-import { createMesh, loadMesh, writeStl } from '@polymerge/core';
+import { createMesh, loadMesh, writeStl } from 'polymerge-core';
 import { watchdog } from './watchdog.mjs';
 
 const dog = watchdog('e2e-merge', 5 * 60_000);

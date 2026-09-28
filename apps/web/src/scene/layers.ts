@@ -12,7 +12,7 @@ import {
   type IMesh,
   type FaceStatusCode,
   type Mat4,
-} from '@polymerge/core';
+} from 'polymerge-core';
 
 export type RGB = [r: number, g: number, b: number];
 

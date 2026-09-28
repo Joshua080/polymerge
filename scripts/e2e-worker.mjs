@@ -23,7 +23,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
-import { createMesh, writeStl } from '@polymerge/core';
+import { createMesh, writeStl } from 'polymerge-core';
 import { watchdog } from './watchdog.mjs';
 
 /** Fractions of the diff window spent inside one main-thread long task. */

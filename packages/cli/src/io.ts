@@ -1,6 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
-import { loadMesh, type ILoadOptions, type IMesh } from '@polymerge/core';
+import { loadMesh, type ILoadOptions, type IMesh } from 'polymerge-core';
 
 export interface LoadedFile {
   /** Path as given on the command line. */

@@ -9,7 +9,7 @@ import {
   type ITierAttempt,
   type IVertexChange,
   type Vec3,
-} from '@polymerge/core';
+} from 'polymerge-core';
 import { h, swatch } from './dom.js';
 import { fmtBytes, fmtInt, fmtMs, fmtNum, fmtVec } from './format.js';
 import type { ILoadedMesh } from './sources.js';

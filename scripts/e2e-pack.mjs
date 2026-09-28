@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 /**
  * End-to-end check of the npm packages as a user gets them — not the monorepo:
- *   npm pack @polymerge/core + polymerge  →  npm install the two tarballs into an empty project
+ *   npm pack polymerge-core + polymerge  →  npm install the two tarballs into an empty project
  *   →  the installed `polymerge` bin: --version, diff, merge, demo, and `view` in headless Chromium
- *   (served from the viewer bundled in the package), plus `import '@polymerge/core'`.
+ *   (served from the viewer bundled in the package), plus `import 'polymerge-core'`.
  *
  *   node scripts/e2e-pack.mjs
  *
@@ -31,7 +31,7 @@ const run = (cmd, args, opts = {}) => execFileSync(cmd, args, { encoding: 'utf8'
 
 try {
   dog.mark('pack');
-  const packed = JSON.parse(run(npm, ['pack', '-w', '@polymerge/core', '-w', 'polymerge', '--json', '--pack-destination', tmp], { cwd: root }));
+  const packed = JSON.parse(run(npm, ['pack', '-w', 'polymerge-core', '-w', 'polymerge', '--json', '--pack-destination', tmp], { cwd: root }));
   const tarballs = packed.map((p) => path.join(tmp, p.filename));
   const cliPack = packed.find((p) => p.name === 'polymerge');
   const files = cliPack.files.map((f) => f.path);
@@ -64,12 +64,12 @@ try {
   if (diff.code !== 1 || !/moved/.test(diff.out)) fail(`diff: exit ${diff.code}\n${diff.out}`);
 
   dog.mark('library');
-  // The README's library example, verbatim, against the installed @polymerge/core.
+  // The README's library example, verbatim, against the installed polymerge-core.
   for (const side of ['base', 'ours', 'theirs']) fs.copyFileSync(path.join(root, 'examples/plate', `${side}.stl`), path.join(app, `${side}.stl`));
   fs.writeFileSync(
     path.join(app, 'library.mjs'),
     `import { readFile, writeFile } from 'node:fs/promises';
-import { loadMesh, diffMeshes, mergeMeshes, resolveMerge, writeStl } from '@polymerge/core';
+import { loadMesh, diffMeshes, mergeMeshes, resolveMerge, writeStl } from 'polymerge-core';
 
 const load = async (file) => loadMesh(await readFile(file), { fileName: file });
 const [base, ours, theirs] = await Promise.all(['base.stl', 'ours.stl', 'theirs.stl'].map(load));

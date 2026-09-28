@@ -1,7 +1,7 @@
 import { defineConfig, configDefaults } from 'vitest/config';
 import { fileURLToPath } from 'node:url';
 
-export const coreAlias = { '@polymerge/core': fileURLToPath(new URL('./packages/core/src/index.ts', import.meta.url)) };
+export const coreAlias = { 'polymerge-core': fileURLToPath(new URL('./packages/core/src/index.ts', import.meta.url)) };
 
 export default defineConfig({
   resolve: {

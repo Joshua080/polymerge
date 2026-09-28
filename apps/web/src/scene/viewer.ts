@@ -9,7 +9,7 @@
  */
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { DIFF_COLORS, FaceStatus, type IDiffResult, type IMesh, type Vec3 } from '@polymerge/core';
+import { DIFF_COLORS, FaceStatus, type IDiffResult, type IMesh, type Vec3 } from 'polymerge-core';
 import {
   BASE_ACCENT,
   alignPositions,

@@ -1,5 +1,5 @@
 /**
- * @polymerge/core — SHARED TYPE CONTRACT
+ * polymerge-core — SHARED TYPE CONTRACT
  * =====================================
  *
  * Every module in the monorepo (parsers, diff engine, CLI, web viewer, fixtures)

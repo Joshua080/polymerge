@@ -9,7 +9,7 @@ import {
   type IMergeResult,
   type MergeResolution,
   type SourceFormat,
-} from '@polymerge/core';
+} from 'polymerge-core';
 import { loadMeshFile } from '../io.js';
 import { fmt, palette, silentLogger, stderrLogger } from '../report.js';
 

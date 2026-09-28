@@ -2,7 +2,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import { createMesh, loadMesh, writeObj, writeStl } from '@polymerge/core';
+import { createMesh, loadMesh, writeObj, writeStl } from 'polymerge-core';
 import { outputFormat, parsePicks, runGitMerge, runMerge } from '../src/commands/merge.js';
 
 /** 6×6 vertex grid (spacing 1) with optional vertex moves. */
