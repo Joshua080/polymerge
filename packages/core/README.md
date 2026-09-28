@@ -2,7 +2,7 @@
 
 The engine behind [polymerge](https://github.com/Joshua080/polymerge): loading and normalising 3D models (STL, OBJ, glTF/GLB), a tiered vertex-correspondence **diff**, and a region-based **three-way merge** with collision detection. It runs in Node and in the browser.
 
-For the command line and the browser viewer, install [`polymerge`](https://www.npmjs.com/package/polymerge) instead.
+For the command line and the browser viewer, install [`@joshuahurley/polymerge`](https://www.npmjs.com/package/@joshuahurley/polymerge) instead; it provides the `polymerge` command.
 
 ```bash
 npm install polymerge-core

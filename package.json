@@ -1,7 +1,7 @@
 {
   "name": "polymerge-monorepo",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Structural diff and three-way merge for 3D models: STL, OBJ, glTF/GLB.",
   "license": "MIT",
   "type": "module",
@@ -13,7 +13,7 @@
     "node": ">=20"
   },
   "scripts": {
-    "build": "npm run build -w polymerge-core && npm run build -w polymerge && npm run build -w @polymerge/web",
+    "build": "npm run build -w polymerge-core && npm run build -w @joshuahurley/polymerge && npm run build -w @polymerge/web",
     "typecheck": "npm run build -w polymerge-core && npm run typecheck --workspaces --if-present",
     "test": "vitest run && vitest run -c vitest.perf.config.ts",
     "test:watch": "vitest",

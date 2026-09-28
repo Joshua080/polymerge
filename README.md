@@ -27,18 +27,18 @@ Most 3D "diff" tools paint a heatmap of how far two surfaces are apart. polymerg
 polymerge needs **Node.js 20 or newer**.
 
 ```bash
-npm install -g polymerge
+npm install -g @joshuahurley/polymerge
 polymerge demo            # opens the merge review on a built-in example — no files needed
 ```
 
-Or run it without installing: `npx polymerge demo`.
+The package is `@joshuahurley/polymerge`; the command it installs is `polymerge`. To run it without installing: `npx @joshuahurley/polymerge demo`.
 
 > **Release status:** the packages are ready to publish (see [Releasing](#releasing)) but **not on npm yet**. Until the first release, install from source:
 >
 > ```bash
 > git clone https://github.com/Joshua080/polymerge.git && cd polymerge
 > npm install && npm run build
-> npm link -w polymerge          # puts `polymerge` on your PATH
+> npm link -w @joshuahurley/polymerge   # puts `polymerge` on your PATH
 > ```
 
 `polymerge view`, `review` and `demo` start a small local web server (bound to 127.0.0.1) and open your browser. The viewer is bundled in the package. It uses WebGL and runs entirely on your machine; nothing is uploaded.
@@ -338,12 +338,16 @@ CI runs `npm run verify` on every push. One of its checks, `scripts/e2e-pack.mjs
 
 ### Releasing
 
-Publishing is done by `.github/workflows/release.yml` when a version tag is pushed. It needs a repository secret `NPM_TOKEN` that can publish `polymerge` and `polymerge-core`.
+Publishing is done by `.github/workflows/release.yml` when a version tag is pushed. It needs a repository secret `NPM_TOKEN` that can publish `@joshuahurley/polymerge` and `polymerge-core`.
 
 1. Bump the version in `packages/core/package.json` and `packages/cli/package.json`, and set the CLI's `polymerge-core` dependency to the same version.
-2. Commit, then `git tag v0.1.0 && git push origin v0.1.0`.
+2. Commit, then `git tag v0.1.1 && git push origin v0.1.1`.
 
-The workflow runs the full `npm run verify`, then publishes `polymerge-core` followed by `polymerge`, with npm provenance.
+The workflow:
+1. runs the full `npm run verify`;
+2. publishes `polymerge-core`, then `@joshuahurley/polymerge`, with npm provenance.
+
+A package whose exact version is already on npm is skipped, so a release that failed halfway can be re-run with the same tag.
 
 The README images are regenerated with `node scripts/readme-images.mjs`.
 
