@@ -18,7 +18,7 @@ import type {
   IRigidTransform,
   MatchTier,
   MergeResolution,
-} from '@polymerge/core';
+} from 'polymerge-core';
 
 /** Diff options minus the logger (functions cannot cross threads; logs are streamed instead). */
 export type WorkerDiffOptions = Omit<IDiffOptions, 'logger'>;

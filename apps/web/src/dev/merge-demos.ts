@@ -3,7 +3,7 @@
  * show each kind of merge outcome. Opened with `?mode=merge&demo=<id>` or the examples list.
  * Deterministic, so the end-to-end tests can rely on their conflicts.
  */
-import { createMesh, type IMesh } from '@polymerge/core';
+import { createMesh, type IMesh } from 'polymerge-core';
 
 export interface IMergeTriple {
   base: IMesh;

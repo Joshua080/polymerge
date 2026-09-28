@@ -1,5 +1,5 @@
 /**
- * @polymerge/core public API. Isomorphic: runs in Node ≥ 20 and modern browsers
+ * polymerge-core public API. Isomorphic: runs in Node ≥ 20 and modern browsers
  * (no fs / DOM access in this package; callers pass bytes in).
  */
 export * from './types.js';

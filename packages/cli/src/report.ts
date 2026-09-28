@@ -6,7 +6,7 @@ import {
   type IMesh,
   type IMeshSummary,
   type Mat4,
-} from '@polymerge/core';
+} from 'polymerge-core';
 
 const useColor = (stream: NodeJS.WriteStream) => stream.isTTY === true && !process.env.NO_COLOR;
 

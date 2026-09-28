@@ -43,6 +43,6 @@
     "prepack": "node scripts/prepack.mjs"
   },
   "dependencies": {
-    "@polymerge/core": "0.1.0"
+    "polymerge-core": "0.1.0"
   }
 }

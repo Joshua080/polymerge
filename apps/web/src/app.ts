@@ -12,7 +12,7 @@ import {
   type IFixtureCase,
   type MatchTier,
   type Vec3,
-} from '@polymerge/core';
+} from 'polymerge-core';
 import { h, nextFrame, setChildren, swatch } from './dom.js';
 import { DiffEngine } from './engine.js';
 import { patch, publish, snapshot, type IPolymergeHook } from './hook.js';

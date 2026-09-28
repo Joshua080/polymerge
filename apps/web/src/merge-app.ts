@@ -13,7 +13,7 @@ import {
   type IMergeConflict,
   type MergeResolution,
   type Vec3,
-} from '@polymerge/core';
+} from 'polymerge-core';
 import * as THREE from 'three';
 import { findMergeDemo, MERGE_DEMOS } from './dev/merge-demos.js';
 import { h, nextFrame, setChildren, swatch } from './dom.js';

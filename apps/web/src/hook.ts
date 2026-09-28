@@ -3,7 +3,7 @@
  * snapshot of the viewer state, and `document.body.dataset.state` mirrors `state`
  * so tests can simply wait for `body[data-state="ready"]`.
  */
-import type { IDiffStats, IMergeStats, IMeshSummary, ITierAttempt, IVertexChange, MatchTier, MergeResolution, Vec3 } from '@polymerge/core';
+import type { IDiffStats, IMergeStats, IMeshSummary, ITierAttempt, IVertexChange, MatchTier, MergeResolution, Vec3 } from 'polymerge-core';
 
 export type ViewerState = 'idle' | 'loading' | 'ready' | 'error';
 

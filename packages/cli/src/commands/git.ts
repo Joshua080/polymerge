@@ -1,4 +1,4 @@
-import { diffMeshes, type IDiffLogger } from '@polymerge/core';
+import { diffMeshes, type IDiffLogger } from 'polymerge-core';
 import { loadMeshFile } from '../io.js';
 import { formatDiffReport } from '../report.js';
 

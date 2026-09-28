@@ -6,7 +6,7 @@
     "noEmit": true,
     "types": ["vite/client"],
     "paths": {
-      "@polymerge/core": ["../../packages/core/src/index.ts"]
+      "polymerge-core": ["../../packages/core/src/index.ts"]
     }
   },
   "include": ["src/**/*.ts", "vite.config.ts"]

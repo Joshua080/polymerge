@@ -1,5 +1,5 @@
 /** Number formatting helpers for the side panel. */
-import type { Vec3 } from '@polymerge/core';
+import type { Vec3 } from 'polymerge-core';
 
 export function fmtInt(n: number): string {
   return n.toLocaleString('en-US');

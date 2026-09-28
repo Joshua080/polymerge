@@ -4,7 +4,7 @@
  * Positions are merged-frame world coordinates minus `origin` (see layers.ts).
  */
 import * as THREE from 'three';
-import { MERGE_COLORS, type IMergeConflict, type IMesh, type Mat4 } from '@polymerge/core';
+import { MERGE_COLORS, type IMergeConflict, type IMesh, type Mat4 } from 'polymerge-core';
 import type { IMergeView } from '../worker/protocol.js';
 import { linearColor, type RGB } from './layers.js';
 

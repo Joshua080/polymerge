@@ -210,11 +210,11 @@ polymerge resolve part.stl --pick 0=theirs && git add part.stl
 
 ### Use it as a library
 
-The engine is a separate package, `@polymerge/core`. It runs in Node and in the browser.
+The engine is a separate package, `polymerge-core`. It runs in Node and in the browser.
 
 ```js
 import { readFile, writeFile } from 'node:fs/promises';
-import { loadMesh, diffMeshes, mergeMeshes, resolveMerge, writeStl } from '@polymerge/core';
+import { loadMesh, diffMeshes, mergeMeshes, resolveMerge, writeStl } from 'polymerge-core';
 
 const load = async (file) => loadMesh(await readFile(file), { fileName: file });
 const [base, ours, theirs] = await Promise.all(['base.stl', 'ours.stl', 'theirs.stl'].map(load));
@@ -325,7 +325,7 @@ npm run dev            # viewer dev server with the built-in examples
 ```
 
 ```
-packages/core   @polymerge/core — parsers, tiered diff engine, three-way merge, writers (Node + browser)
+packages/core   polymerge-core — parsers, tiered diff engine, three-way merge, writers (Node + browser)
 packages/cli    polymerge — the command line, with the web viewer bundled at publish time
 apps/web        the Vite + three.js viewer
 fixtures/       known-answer model pairs and their generator
@@ -338,12 +338,12 @@ CI runs `npm run verify` on every push. One of its checks, `scripts/e2e-pack.mjs
 
 ### Releasing
 
-Publishing is done by `.github/workflows/release.yml` when a version tag is pushed. It needs a repository secret `NPM_TOKEN` that can publish `polymerge` and the `@polymerge` scope.
+Publishing is done by `.github/workflows/release.yml` when a version tag is pushed. It needs a repository secret `NPM_TOKEN` that can publish `polymerge` and `polymerge-core`.
 
-1. Bump the version in `packages/core/package.json` and `packages/cli/package.json`, and set the CLI's `@polymerge/core` dependency to the same version.
+1. Bump the version in `packages/core/package.json` and `packages/cli/package.json`, and set the CLI's `polymerge-core` dependency to the same version.
 2. Commit, then `git tag v0.1.0 && git push origin v0.1.0`.
 
-The workflow runs the full `npm run verify`, then publishes `@polymerge/core` followed by `polymerge`, with npm provenance.
+The workflow runs the full `npm run verify`, then publishes `polymerge-core` followed by `polymerge`, with npm provenance.
 
 The README images are regenerated with `node scripts/readme-images.mjs`.
 

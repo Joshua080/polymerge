@@ -122,8 +122,8 @@ export default defineConfig({
   // Relative asset URLs so dist/ can be served from any path (e.g. by `polymerge view`).
   base: './',
   resolve: {
-    // Consume @polymerge/core straight from source so the viewer never needs a core build.
-    alias: { '@polymerge/core': path.join(repoRoot, 'packages/core/src/index.ts') },
+    // Consume polymerge-core straight from source so the viewer never needs a core build.
+    alias: { 'polymerge-core': path.join(repoRoot, 'packages/core/src/index.ts') },
   },
   plugins: [polymergeFixtures()],
   server: { fs: { allow: [repoRoot] } },

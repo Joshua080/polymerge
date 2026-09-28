@@ -21,7 +21,7 @@ import {
   type IMesh,
   type ITierAttempt,
   type Mat4,
-} from '@polymerge/core';
+} from 'polymerge-core';
 import * as THREE from 'three';
 
 export interface IMockPair {

@@ -4,6 +4,22 @@ A living log of milestones, architectural decisions, what works, what is stubbed
 
 ---
 
+## Session 5 — 2026-09-28 — engine package renamed to `polymerge-core`
+
+The npm org `polymerge` is taken by someone else, so `@polymerge/core` could never be published.
+- **The rename.** The engine is now the unscoped **`polymerge-core`** everywhere:
+  - package.json files and the lockfile;
+  - every import (core, CLI, viewer, tests, e2e scripts);
+  - the vite/vitest source aliases;
+  - the README and its library example, and `packages/core/README.md`;
+  - the pack/install check (`scripts/e2e-pack.mjs`) and the release workflow.
+- **Name check.** `npm view polymerge` and `npm view polymerge-core` both return 404 on 2026-09-28, so both names are free.
+- **Unchanged.** The private workspace `@polymerge/web` keeps its scope; it is never published.
+- **Session 4 entries.** They still say `@polymerge/core`, as the record of what was true then; D22 now reads "the engine as `polymerge-core`".
+- **Not done.** Nothing is tagged or published yet.
+
+---
+
 ## Session 4 — 2026-09-27 — README, npm packaging
 
 Priorities set by the owner:
@@ -51,7 +67,7 @@ Priorities set by the owner:
 
 | # | Decision | Why |
 |---|----------|-----|
-| D22 | The CLI is published as the unscoped `polymerge`; the engine as `@polymerge/core`. | People install the command they type. Library users get a clearly separate engine package. |
+| D22 | The CLI is published as the unscoped `polymerge`; the engine as `polymerge-core` (renamed from `@polymerge/core` in session 5: the npm org was taken). | People install the command they type. Library users get a clearly separate engine package. |
 | D23 | The viewer is copied into the CLI package at `prepack`, not at build. A clone prefers its own `apps/web/dist`. | The tarball always carries the viewer it was built with, and development never serves a stale copy. |
 | D24 | Packaging is tested by installing the packed tarballs into an empty project on every CI run. | "Works from the clone" says nothing about the package. The one real bug here (the missing viewer) was exactly of that kind. |
 

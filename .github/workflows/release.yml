@@ -1,4 +1,4 @@
-# Publishes the npm packages — `@polymerge/core` (the engine) and `polymerge` (the CLI, with the
+# Publishes the npm packages — `polymerge-core` (the engine) and `polymerge` (the CLI, with the
 # browser viewer bundled) — when a version tag is pushed:
 #
 #   git tag v0.1.0 && git push origin v0.1.0
@@ -38,8 +38,8 @@ jobs:
           tag="${GITHUB_REF_NAME#v}"
           core=$(node -p "require('./packages/core/package.json').version")
           cli=$(node -p "require('./packages/cli/package.json').version")
-          dep=$(node -p "require('./packages/cli/package.json').dependencies['@polymerge/core']")
-          echo "tag $tag, @polymerge/core $core, polymerge $cli (depends on core $dep)"
+          dep=$(node -p "require('./packages/cli/package.json').dependencies['polymerge-core']")
+          echo "tag $tag, polymerge-core $core, polymerge $cli (depends on core $dep)"
           [ "$tag" = "$core" ] && [ "$tag" = "$cli" ] && [ "$tag" = "$dep" ] || { echo "::error::tag and package versions differ"; exit 1; }
 
       - name: Install dependencies
@@ -57,7 +57,7 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
-          for ws in @polymerge/core polymerge; do
+          for ws in polymerge-core polymerge; do
             v=$(npm pkg get version -w "$ws" | node -e "process.stdout.write(Object.values(JSON.parse(require('fs').readFileSync(0,'utf8')))[0])")
             if npm view "$ws@$v" version >/dev/null 2>&1; then
               echo "$ws@$v is already published — skipping"
