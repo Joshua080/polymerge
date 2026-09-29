@@ -165,9 +165,17 @@ This is the review in the GIF at the top. The merged model is coloured by who sh
 To resolve:
 1. Click an orange region in 3D, or its card. Hover **Ours / Theirs / Base** to preview that version in place.
 2. Click a button, or press `1` / `2` / `3`, to choose. `0` undoes the choice, and `n` / `p` step between conflicts.
-3. Download the result (STL/OBJ), or copy the equivalent `polymerge merge … --pick …` command.
+3. Finish:
+   - Opened with `polymerge review <path>` during a conflicted `git merge`? Click **Save to repository**. It writes the resolved model to `<path>` and stages it (`git add`); then run `git commit`. Save is enabled once every conflict has a choice.
+   - Or download the result, or copy the equivalent `polymerge merge … --pick …` / `polymerge resolve <path> --pick …` command.
 
-A warning appears if your choices combine into a collision.
+A warning appears if your choices combine into a collision. Saving a result with a collision warning needs one more confirmation.
+
+Saving is locked down (details in [docs/write-back-security.md](docs/write-back-security.md)):
+- It works only for the file you named, only from the tab `polymerge review` opened (its URL carries a one-time token), and only while the server listens on 127.0.0.1.
+- The browser sends only your choices. polymerge recomputes the file from git's conflict stages, exactly as `polymerge resolve` would.
+- It refuses to overwrite the file if it changed since the review started.
+- On a shared machine, use `--no-open` and paste the URL yourself: the token is visible in process listings while the browser launcher runs.
 
 `polymerge demo` opens built-in examples in the review. The merge examples are `boss-height`, `thin-wall`, `parts`, `mixed-choices` and `clean`, e.g. `polymerge demo thin-wall`. Diff examples open the same way: `polymerge demo moved-part`.
 
@@ -196,8 +204,8 @@ git diff -- part.stl                              # structural report instead of
 git log -p --ext-diff -- part.stl                 # history
 git difftool -y -t polymerge HEAD~1 -- part.stl   # visual diff in the browser
 git merge feature                                 # STL/OBJ merged three-way; a real conflict marks the file as conflicted
-polymerge review part.stl                         # see the conflicts in the browser, pick by clicking
-polymerge resolve part.stl --pick 0=theirs && git add part.stl
+polymerge review part.stl                         # see the conflicts in the browser, pick by clicking, "Save to repository"
+git commit                                        # after saving; or: polymerge resolve part.stl --pick 0=theirs && git add part.stl
 ```
 
 ### Use it as a library
@@ -230,7 +238,7 @@ polymerge view <base> <target> [--port N] [--no-open]
 polymerge view <base> <ours> <theirs>            merge review: see conflicts, resolve by clicking
 polymerge merge <base> <ours> <theirs> [-o out.stl|obj] [--resolve ours|theirs|base] [--pick id=side]
                 [--report x.json] [--no-collision-check]
-polymerge review <path>                          merge review of a conflicted git merge
+polymerge review <path>                          merge review of a conflicted git merge; saves and stages <path>
 polymerge resolve <path> --pick <id>=<side>      finish a conflicted git merge of a model
 polymerge demo [example]                         the viewer on a built-in example
 polymerge info <file>                            the normalised mesh summary
@@ -301,7 +309,8 @@ polymerge git-diff | git-merge | git-setup       git drivers, and the config to 
   - A region dragged far from its connected neighbours is followed only within about 3 edge lengths.
 - **Viewer:**
   - The camera assumes Y-up, so Z-up CAD/print models open side-on; orbit to fix it.
-  - The merge review can't write the result back into your repository. It downloads the file or gives you the `polymerge resolve` command.
+  - Saving into the repository works only from `polymerge review` (a conflicted `git merge`), for that one file, and only while the server listens on 127.0.0.1. `view` with three files and `demo` stay read-only: download the result or use `polymerge merge -o`.
+  - The viewer's server answers only requests addressed to `localhost` or an IP address. Reaching it through another host name (a reverse proxy, `myhost.local`) is refused.
 
 The full list of known limits and next steps is kept in [DEVLOG.md](DEVLOG.md).
 

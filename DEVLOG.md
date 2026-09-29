@@ -16,6 +16,77 @@ Priorities set by the owner:
 
 Items 1–4 were built by four agents in parallel, each in its own git worktree, then integrated here. Items 3 and 4 share the glTF parser, the mesh types and the new writer, so item 4 wrote its design, parsing and merge rules in parallel, and added its data to item 3's writer only once that writer had landed. I wrote the two investigations while the agents worked.
 
+### Milestone 2 — Saving from the merge review, security design first ✅
+
+**The threat model came first.** `docs/write-back-security.md` was committed on its own before any feature code. It covers:
+- the assets;
+- seven attackers: other origins, DNS rebinding, other local accounts, same-user processes, the network, hostile repository content, and the user's own mistakes;
+- every entry point, the mitigations per threat, a status-code contract, the residual risks accepted, and a threat → test map.
+
+Writing it found three existing problems:
+- **DNS rebinding could already read the served models** in any `view` / `review` / difftool session, because nothing checked the Host header.
+- `view a.html …` served repository bytes as `text/html` on the viewer's origin.
+- Without `--literal-pathspecs`, a file named `*.stl` is a glob: `git add -- '*.stl'` stages every STL in the repository (checked against real git).
+
+**What was built: "Save to repository" in `polymerge review`** (`packages/cli/src/write-back.ts`, `review-api.ts`, `serve-guard.ts`):
+- **Two routes.** `GET /api/review/session` and `POST /api/review/save` exist only in `review` sessions bound to loopback. Everywhere else they are a 404.
+- **Checks, in order:**
+  1. a loopback Host and peer;
+  2. the method;
+  3. `Sec-Fetch-Site`;
+  4. `Origin`;
+  5. `X-Polymerge-Token`: 32 random bytes, delivered in the URL fragment, compared in constant time;
+  6. JSON only, at most 64 KiB.
+  
+  No route ever sends a CORS header, so a cross-site preflight always fails.
+- **The browser sends choices only:** `{picks, acknowledgeWarnings, expect}`. Any other field is a 400.
+  - The server recomputes the file from the conflict stages it read at startup, using the same code as `polymerge resolve` (`resolveStages`, extracted from `runGitResolve`).
+  - It writes only if the result's SHA-256 equals the viewer's `expect`.
+  - So a stolen token can only choose between versions already in the index. It can never supply bytes or name a path.
+- **The path is fixed at startup.** It must be an unmerged index entry with stages 1/2/3 inside the work tree (realpath, literal pathspecs, no case folding).
+  - The write goes to an exclusive (`wx`, 0600) temp file, followed by an atomic rename. Just before the rename, the server rechecks the parent's realpath, the file type (`lstat`), the content hash (so the user's own edits are never overwritten) and the index stages.
+  - `git add` runs through `execFile` with `--literal-pathspecs --`. A failure after the write is reported as "written, not staged" and can be retried. polymerge never commits.
+- **Meaning of a save.** Every conflict needs an explicit choice. Collision warnings need a "save anyway" acknowledgement, tied to the exact result by the digest (D18).
+- **Hardening for every session**, not just review:
+  - the Host header is checked on every request;
+  - static files are served from an allowlist built at startup, so no path traversal is possible;
+  - models are served only with model content types, under a random URL segment per session;
+  - `nosniff`, `no-referrer`, CORP `same-origin` and `frame-ancestors 'none'` on every response.
+- **Viewer.** A Save block at the top of the Result panel.
+  - It is disabled until every conflict has a choice. A warning checkbox appears when needed and resets on every new choice.
+  - It shows saving, saved (suggesting `git commit`) and failed states.
+  - The token is removed from the address bar at once.
+  - Downloads and the CLI command stay.
+
+**Tests:**
+- **Attacks.** `packages/cli/test/write-back.test.ts` runs 25 tests against the real server and real git. Every attack gets 403/400/404/409/413/415/422, with the file byte-identical, the index still unmerged and no temp files. Covered:
+  - a missing token, or one sent in the query, body, cookie or `Authorization`;
+  - a hostile Host on POST and GET;
+  - a cross-origin, `null` or missing Origin; form posts; the preflight;
+  - bodies that name a path or carry bytes;
+  - a symlinked target or parent;
+  - the file edited on disk, or resolved elsewhere;
+  - an unresolved merge, or warnings without acknowledgement;
+  - `demo` and `view`; a non-loopback bind;
+  - a writer that throws; a held `index.lock`, then a retry.
+- **Mutation check.** Each of 14 defences was disabled in turn, and every one made at least one test fail. The first run showed the loopback-only Host rule was untested, so a test was added.
+- **`e2e-git`**, in real git and headless Chromium: a conflicted merge → `polymerge review` → "Theirs" → Save. The file is byte-identical to `polymerge resolve --pick 0=theirs`, it is staged (`UU` → `M `), and it commits.
+- **`e2e-merge`** checks that a plain three-file `view` gets no token and no Save.
+
+| # | Decision | Why |
+|---|----------|-----|
+| D26 | The browser sends resolution choices only. The server recomputes the file through `resolveStages` and writes only if it hashes to the viewer's digest. | A leaked token can only choose between versions already in the index, and the file written is exactly the one the reviewer saw. |
+| D27 | The token travels in the URL fragment and a custom header: no cookie, and no CORS headers anywhere. | Nothing reaches logs or `Referer`, and a cross-site request needs a preflight that never succeeds. |
+| D28 | The Host header is checked on every route. Writes need a loopback Host, peer and bind, with no override. | Rebinding could already read models, and the network must never get a write endpoint. |
+| D29 | The writable path comes only from the command line and must be the unmerged index entry. The write is an atomic rename after rechecking parent, type, content and stages. | Nothing else on disk is reachable, and the user's own edits are never overwritten. |
+| D30 | An unresolved merge is never saved; collision warnings need an explicit acknowledgement. | Staging regions left at base would record an unreviewed merge as resolved (D18). |
+| D31 | `view` and `demo` stay read-only. | There is no git conflict state to cross-check, and `polymerge merge -o` already covers that case. |
+
+**Limits found:**
+- **Windows.** The browser launcher `cmd /c start` probably cuts the URL at `&` (untested). For `review`, that means no token reaches the page, so there is no Save button: it fails safe.
+- **Other browsers.** One not using Chromium's `Math` could compute a Tier 3 merge slightly differently from Node. Save then refuses with a digest mismatch and points to `polymerge resolve`.
+- **Other host names.** The viewer's server now refuses requests addressed to anything other than `localhost` or an IP address (a reverse proxy, `myhost.local`). This is deliberate.
+
 ### Investigation — shareable links (`polymerge share`): options, not built
 
 **The need.** Someone without polymerge installed opens a link and sees the interactive diff or merge review.
