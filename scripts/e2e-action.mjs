@@ -415,6 +415,7 @@ try {
     GITHUB_API_URL: apiUrl,
     GITHUB_SERVER_URL: `file://${remoteRoot}`,
     GITHUB_OUTPUT: path.join(tmp, 'post-output.txt'),
+    GITHUB_STEP_SUMMARY: path.join(tmp, 'post-summary.md'), // never the real job summary when CI runs this
     POLYMERGE_TOKEN: TOKEN,
     POLYMERGE_RESULT: resultDir,
   });
