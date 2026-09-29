@@ -1,15 +1,19 @@
 /**
- * Mesh WRITERS (used to save merge results): Wavefront OBJ (keeps groups) and STL (binary or
- * ASCII). Isomorphic: they return bytes; the caller writes files.
+ * Mesh WRITERS (used to save merge results): Wavefront OBJ (keeps groups), STL (binary or
+ * ASCII), and glTF 2.0 as GLB or self-contained .gltf (keeps the source's node structure: gltf.ts).
+ * Isomorphic: they return bytes; the caller writes files.
  *
  * Numbers are written as the SHORTEST decimal that reads back to the same float32 — every
  * loader stores positions as float32, so this round-trips exactly and keeps files compact.
  */
 import type { IMesh, SourceFormat } from '../types.js';
 import { groupIndexOfFace } from '../mesh.js';
+import { writeGlb, writeGltf } from './gltf.js';
 
-export type WritableFormat = 'stl' | 'obj';
-export const WRITABLE_FORMATS: readonly WritableFormat[] = ['stl', 'obj'];
+export { buildGltfDocument, gltfMaterial, writeGlb, writeGltf, type IGltfDocument, type IGltfWriteOptions } from './gltf.js';
+
+export type WritableFormat = 'stl' | 'obj' | 'glb' | 'gltf';
+export const WRITABLE_FORMATS: readonly WritableFormat[] = ['stl', 'obj', 'glb', 'gltf'];
 
 /** Shortest decimal representation that round-trips through float32. */
 export function formatFloat32(x: number): string {
@@ -96,11 +100,14 @@ export function writeStl(mesh: IMesh, opts: { binary?: boolean; name?: string } 
   return bytes;
 }
 
-/** Write a mesh in `format`. GLB/glTF output is not supported yet. */
+/** Write a mesh in `format` (glTF / GLB keep the scene structure of `mesh.scene`, see gltf.ts). */
 export function writeMesh(mesh: IMesh, format: SourceFormat, opts: { name?: string; asciiStl?: boolean } = {}): Uint8Array {
   if (format === 'obj') return writeObj(mesh, { comment: opts.name ? `${opts.name} — written by polymerge` : undefined });
   if (format === 'stl') return writeStl(mesh, { binary: !opts.asciiStl, name: opts.name });
-  throw new Error(`writing ${format.toUpperCase()} is not supported yet (supported: ${WRITABLE_FORMATS.join(', ')})`);
+  if (format === 'glb') return writeGlb(mesh);
+  if (format === 'gltf') return writeGltf(mesh);
+  // Unreachable for a SourceFormat; guards untyped callers.
+  throw new Error(`writing ${String(format).toUpperCase()} is not supported (supported: ${WRITABLE_FORMATS.join(', ')})`);
 }
 
 /** Group names in face order (useful for tests / tools). */
