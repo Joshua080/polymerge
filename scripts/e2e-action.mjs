@@ -66,9 +66,16 @@ function run(script, args, env) {
   });
 }
 
+/**
+ * git for building the fixture repository. Where git-lfs is installed (GitHub's runners), its
+ * smudge filter would try to download the pointer files this test commits on purpose and fail
+ * the checkout, so the fixture's own git leaves pointers as they are. The action's scripts run
+ * with the normal environment: their `git lfs smudge` fallback is exercised for real there.
+ */
 function git(cwd, ...args) {
   return new Promise((resolve, reject) => {
-    const child = spawn('git', ['-c', 'commit.gpgsign=false', ...args], { cwd, stdio: ['ignore', 'pipe', 'pipe'] });
+    const env = { ...process.env, GIT_LFS_SKIP_SMUDGE: '1' };
+    const child = spawn('git', ['-c', 'commit.gpgsign=false', ...args], { cwd, env, stdio: ['ignore', 'pipe', 'pipe'] });
     let out = '';
     let err = '';
     child.stdout.on('data', (d) => (out += d));

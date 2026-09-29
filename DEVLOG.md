@@ -87,8 +87,14 @@ Items 1–4 were built by four agents in parallel, each in its own git worktree,
 **Not verified here** (no push to GitHub from the agent's worktree):
 - the composite steps, `actions/cache`, the artifact round trip and `workflow_run` on real GitHub Actions;
 - that commit-pinned `raw` image URLs render for signed-in readers of a **private** repository;
-- the `git lfs smudge` path, since git-lfs isn't installed here;
+- `git lfs smudge` actually downloading an object from a remote;
 - macOS and Windows runners.
+
+**Found by the first CI run: GitHub's runners have git-lfs, this sandbox didn't.**
+- `e2e-action` commits LFS pointer files on purpose. On the runner, the fixture's own `git checkout` ran the LFS smudge filter, which tried to download an object from a repository with no remote, and the checkout failed.
+- The action's code was fine: its `git lfs smudge` fallback failed cleanly, into the "stored in Git LFS" row.
+- **Fix.** The fixture's git now runs with `GIT_LFS_SKIP_SMUDGE=1`. The action's scripts keep the normal environment, so their smudge fallback runs for real wherever git-lfs is installed.
+- Reproduced locally by installing git-lfs with `git lfs install`, as the runner image has it. The e2e and the full `npm run verify` then pass with LFS active.
 
 The first real run is this PR's own `Model diff` render job. The comment half needs `main`.
 
