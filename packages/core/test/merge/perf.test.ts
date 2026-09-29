@@ -84,13 +84,22 @@ describe('merge performance (~100k vertices)', () => {
 describe('scene structure at ~100k vertices', () => {
   it('carrying glTF structure through the same merge costs O(faces); the move is carried as a transform; GLB written in seconds', () => {
     const { base, ours, theirs } = scenario();
-    let t0 = performance.now();
-    const plain = mergeMeshes(base, ours, theirs, { logger: silent });
-    const plainMs = performance.now() - t0;
-    t0 = performance.now();
-    const r = mergeMeshes(withScene(base), withScene(ours, [3, 2, 0.5]), withScene(theirs), { logger: silent });
-    const ms = performance.now() - t0;
-    t0 = performance.now();
+    const structured = [withScene(base), withScene(ours, [3, 2, 0.5]), withScene(theirs)] as const;
+    // Alternating runs, best of two each: a single pair mostly measures garbage collection and
+    // warm-up order, not the (one) structure pass.
+    let plainMs = Infinity;
+    let ms = Infinity;
+    let plain = mergeMeshes(base, ours, theirs, { logger: silent });
+    let r = plain;
+    for (let k = 0; k < 2; k++) {
+      let t0 = performance.now();
+      plain = mergeMeshes(base, ours, theirs, { logger: silent });
+      plainMs = Math.min(plainMs, performance.now() - t0);
+      t0 = performance.now();
+      r = mergeMeshes(...structured, { logger: silent });
+      ms = Math.min(ms, performance.now() - t0);
+    }
+    const t0 = performance.now();
     const bytes = writeGlb(r.merged);
     const writeMs = performance.now() - t0;
     console.info(`[perf] merge without / with scene structure: ${plainMs.toFixed(0)} / ${ms.toFixed(0)} ms; GLB write ${writeMs.toFixed(0)} ms (${(bytes.length / 1e6).toFixed(1)} MB)`);
