@@ -212,9 +212,9 @@ No third-party service and no secret beyond `GITHUB_TOKEN` is involved.
   `branches-ignore: [polymerge-images]` to workflows triggered by `push`.
 
 Other options considered: uploading as comment attachments (no API for it), release assets (a
-release per image, and private repositories need a token to view them), GitHub Pages (must be
-enabled, public, and deploys lag), a gist (needs a personal token), or an external image host
-(needs an account and a secret).
+release per push would flood the Releases page), GitHub Pages (must be enabled, is public on most
+plans, and deploys lag), a gist (needs a personal token), or an external image host (needs an
+account and a secret).
 
 ## Security
 
@@ -248,7 +248,7 @@ enabled, public, and deploys lag), a gist (needs a personal token), or an extern
 
 ## Limits
 
-- Linux runners (`ubuntu-latest`) are what the action is built and tested for.
+- The action targets Linux runners (`ubuntu-latest`); macOS and Windows runners are untested.
 - At most `max-files` models are rendered per comment (10), each up to `max-triangles` (200,000)
   and `max-file-size` (50 MB); the rest are listed. A comment is kept under GitHub's 65,536
   character limit by dropping per-file details first.
