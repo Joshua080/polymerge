@@ -963,3 +963,97 @@ table.merge-applied td:first-child {
 .merge-stage .hud-busy {
   top: 48px;
 }
+
+/* ---------------------------------------------------------------- capture card (?capture=1) */
+
+.capture {
+  width: 100%;
+  background: var(--bg);
+}
+
+.cap-panels {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 2px;
+  background: var(--border);
+}
+
+.cap-panel {
+  position: relative;
+  aspect-ratio: 4 / 3;
+  overflow: hidden;
+  background: #0f141d;
+}
+
+.cap-viewport {
+  position: absolute;
+  inset: 0;
+}
+
+.cap-viewport .viewer-canvas {
+  cursor: default;
+}
+
+.cap-title {
+  position: absolute;
+  top: 10px;
+  left: 12px;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  pointer-events: none;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.7);
+}
+
+.cap-title strong {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+
+.cap-label {
+  color: var(--muted);
+  font: 12px var(--mono);
+}
+
+.cap-empty {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.cap-legend {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 9px 12px 10px;
+  border-top: 1px solid var(--border);
+  font-size: 13px;
+}
+
+.cap-key {
+  white-space: nowrap;
+}
+
+.cap-note {
+  color: var(--muted);
+}
+
+.cap-brand {
+  margin-left: auto;
+  color: var(--muted);
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.cap-error {
+  padding: 10px 12px;
+  border-top: 1px solid var(--danger);
+  color: #fca5a5;
+  font: 12px/1.45 var(--mono);
+  white-space: pre-wrap;
+}
