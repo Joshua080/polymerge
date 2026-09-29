@@ -212,10 +212,16 @@ export async function resolveStages(
   return { result, bytes: writeMesh(result.merged, format, { name: path.basename(repoPath) }) };
 }
 
-/** One index stage of a conflicted file: 1 = common ancestor, 2 = ours, 3 = theirs. */
-export function gitStage(n: 1 | 2 | 3, repoPath: string): Buffer {
+/**
+ * One index stage of a conflicted file: 1 = common ancestor, 2 = ours, 3 = theirs. `repoPath`
+ * is relative to `cwd` (or absolute), as the user typed it. `git show :n:<path>` reads a bare
+ * path from the repository root, so it is anchored with ./ to mean "from here".
+ */
+export function gitStage(n: 1 | 2 | 3, repoPath: string, cwd = process.cwd()): Buffer {
+  const rel = (path.isAbsolute(repoPath) ? path.relative(cwd, repoPath) : repoPath).split(path.sep).join('/');
+  const anchored = rel === '..' || rel.startsWith('./') || rel.startsWith('../') ? rel : `./${rel}`;
   try {
-    return execFileSync('git', ['show', `:${n}:${repoPath}`], { maxBuffer: 1 << 30 });
+    return execFileSync('git', ['show', `:${n}:${anchored}`], { cwd, maxBuffer: 1 << 30 });
   } catch {
     throw new Error(`git has no stage ${n} for ${repoPath} — is it an unresolved merge conflict? (git status)`);
   }

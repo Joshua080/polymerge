@@ -82,6 +82,10 @@ Writing it found three existing problems:
 | D30 | An unresolved merge is never saved; collision warnings need an explicit acknowledgement. | Staging regions left at base would record an unreviewed merge as resolved (D18). |
 | D31 | `view` and `demo` stay read-only. | There is no git conflict state to cross-check, and `polymerge merge -o` already covers that case. |
 
+**Also fixed: `polymerge resolve` from a subdirectory** (this predates the session, and the write-back agent found it). `git show :n:<path>` reads a bare path from the repository *root*, so `cd sub && polymerge resolve part.obj` failed with "no stage 1".
+- `gitStage` now anchors the path to the working directory (`./`), and absolute paths work too.
+- `packages/cli/test/git-stage.test.ts` checks this against real git index stages: a path from the root, a path from a subdirectory (with a same-named decoy at the root), an absolute path, and the error for a missing stage. It failed 3 of 4 before the fix.
+
 **Limits found:**
 - **Windows.** The browser launcher `cmd /c start` probably cuts the URL at `&` (untested). For `review`, that means no token reaches the page, so there is no Save button: it fails safe.
 - **Other browsers.** One not using Chromium's `Math` could compute a Tier 3 merge slightly differently from Node. Save then refuses with a digest mismatch and points to `polymerge resolve`.
