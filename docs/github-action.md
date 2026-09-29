@@ -233,6 +233,10 @@ enabled, public, and deploys lag), a gist (needs a personal token), or an extern
   - generates all wording itself. Text from the pull request (file names, part names, parser
     messages) appears only inside markdown code spans, where it cannot become HTML, links,
     mentions or formatting; invisible and direction-changing characters are shown as escapes.
+
+  What remains possible is inherent to rendering someone's pull request: its author, who
+  controls their own render run, can make the comment on *their own* pull request show any
+  PNG within the limits. They cannot post to another pull request, or anything but that comment.
 - **No code from the pull request runs.** Model files are only read from git and parsed. File
   names never reach a shell: git runs with argument arrays, inputs reach the scripts as
   environment variables, and the page is given the models under fixed names. Untrusted text is
