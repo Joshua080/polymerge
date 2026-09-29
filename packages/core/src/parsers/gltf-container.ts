@@ -12,7 +12,8 @@
  *     EXT_meshopt_compression, KHR_meshopt_compression) with MeshLoadError; drop
  *     optional (non-required) uses so the loader reads the uncompressed fallback data.
  *  3. Strip `images`, `textures`, `samplers` and every `*Texture` reference inside
- *     materials (core and extensions), with one warning.
+ *     materials (core and extensions), with one warning. (The appearance reader,
+ *     gltf-appearance.ts, copies them first: they are kept as references, never decoded.)
  *  4. Resolve every buffer to bytes (GLB BIN chunk for a uri-less buffer 0, decoded
  *     `data:` URIs; any other URI → MeshLoadError "external resources not supported in
  *     v1"), concatenate them into ONE binary blob (each buffer 4-byte aligned) and
@@ -228,8 +229,8 @@ export function prepareGltf(container: GltfContainer, warnings: string[]): Prepa
   const refs = stripTextureRefs(json.materials);
   if (images + textures + refs > 0) {
     warnings.push(
-      `textures ignored (${images} image(s), ${textures} texture(s), ${refs} material texture reference(s)); ` +
-        'polymerge compares geometry only',
+      `textures ignored (${images} image(s), ${textures} texture(s), ${refs} material texture reference(s)) by the geometry loader: ` +
+        'images are never decoded, texture references are kept for merging materials',
     );
   }
 

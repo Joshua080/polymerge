@@ -7,4 +7,13 @@ export * from './mesh.js';
 export { detectFormat, loadMesh } from './parsers/index.js';
 export { diffMeshes, serializeDiff, deserializeDiff } from './diff/index.js';
 export { mergeMeshes, resolveMerge } from './merge/index.js';
+export {
+  defaultMaterialDefinition,
+  hashBytes,
+  materialSummary,
+  TEXTURE_SLOTS,
+  textureRefsOf,
+  textureRefUvSet,
+  type TextureSlot,
+} from './appearance.js';
 export { writeMesh, writeObj, writeStl, formatFloat32, WRITABLE_FORMATS, type WritableFormat } from './writers/index.js';
