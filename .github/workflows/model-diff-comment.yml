@@ -1,0 +1,37 @@
+# Posts the Model diff workflow's renders as one comment on the pull request, updated in place on
+# every push. Triggered by workflow_run, so it runs this repository's DEFAULT-branch code with a
+# write token, and never checks out or runs the pull request's code. The artifact it downloads was
+# made by a run of the pull request's code, so the action treats it as untrusted: every field is
+# validated, the pull request it names must be at the commit the triggering run built, and all
+# text is escaped (docs/github-action.md, "Security").
+name: Model diff comment
+
+on:
+  workflow_run:
+    workflows: [Model diff]
+    types: [completed]
+
+permissions: {}
+
+jobs:
+  comment:
+    if: github.event.workflow_run.event == 'pull_request' && github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: read # download the render run's artifact
+      contents: write # commit the images to the polymerge-images branch
+      pull-requests: write # create / update the comment
+    concurrency:
+      group: model-diff-comment-${{ github.event.workflow_run.head_repository.full_name }}-${{ github.event.workflow_run.head_branch }}
+      cancel-in-progress: false
+    steps:
+      # The action's own code, from the default branch (other repositories use
+      # Joshua080/polymerge@<ref> and need no checkout here).
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - uses: ./
+        with:
+          mode: post

@@ -81,6 +81,8 @@ export interface WeldInput {
    * the kept materials (in the same order as `IMesh.materials`) and the parts' UVs per face corner.
    */
   appearance?: { materials: readonly IMaterialDefinition[]; images: readonly ITextureImage[] };
+  /** Output, when given: filled with the index into `parts` of each group of the result, in group order. */
+  groupParts?: number[];
 }
 
 // ---------------------------------------------------------------------------
@@ -466,7 +468,7 @@ export function buildWeldedMesh(input: WeldInput): IMesh {
   // Per-corner UVs of the kept triangles (NaN where a part lacks the set).
   const uvOut: Float32Array[] = [];
   for (let k = 0; k < uvSets; k++) uvOut.push(new Float32Array(totalTris * 6).fill(NaN));
-  const ranges: { name: string; start: number; count: number }[] = [];
+  const ranges: { name: string; start: number; count: number; part: number }[] = [];
 
   const f = new Float32Array(9);
   const u = new Uint32Array(f.buffer);
@@ -475,6 +477,7 @@ export function buildWeldedMesh(input: WeldInput): IMesh {
   let degenerate = 0;
   let invalid = 0;
   let srcBase = 0;
+  let partIndex = 0;
 
   // Pass 1: weld, drop invalid / degenerate triangles.
   for (const part of parts) {
@@ -546,8 +549,9 @@ export function buildWeldedMesh(input: WeldInput): IMesh {
       }
       nf++;
     }
-    if (nf > start) ranges.push({ name: part.name, start, count: nf - start });
+    if (nf > start) ranges.push({ name: part.name, start, count: nf - start, part: partIndex });
     srcBase += nv;
+    partIndex++;
   }
 
   if (nf === 0) {
@@ -612,6 +616,7 @@ export function buildWeldedMesh(input: WeldInput): IMesh {
     }
   }
 
+  if (input.groupParts) for (const r of ranges) input.groupParts.push(r.part);
   const groups: IMeshGroup[] = ranges.map((r) => {
     const g: IMeshGroup = { name: r.name, faceStart: r.start, faceCount: r.count };
     if (anyMaterial) {

@@ -92,6 +92,11 @@ export interface IMesh {
    * Semantics: docs/appearance-merge-design.md.
    */
   appearance?: IMeshAppearance;
+  /**
+   * Scene structure of a glTF source (nodes, local transforms, meshes, and the node each face
+   * came from). Absent for STL / OBJ. Positions stay baked in world space; see IMeshScene.
+   */
+  scene?: IMeshScene;
 }
 
 export interface IMeshGroup {
@@ -227,6 +232,66 @@ export interface IMeshMetadata {
   warnings: string[];
   /** Format-specific extras (glTF asset.generator, STL header, OBJ material libs, ...). */
   extras?: Record<string, unknown>;
+}
+
+/**
+ * Scene structure of a glTF source (additive; `IMesh.scene`). Positions are still baked in world
+ * space (NORMALISATION CONTRACT); this records how they were baked, so that a glTF writer can
+ * rebuild the node hierarchy and un-bake each node's geometry into its local space instead of
+ * writing one flat mesh (writers/gltf.ts). Set by the glTF loader (parsers/gltf-scene.ts) and
+ * carried through merges (merge/structure.ts). Every index is into this object's own arrays.
+ *
+ * In a freshly loaded mesh `sources[g]` describes `groups[g]` (one group per glTF primitive
+ * instance). A merge regroups faces by name, so consumers must go through `faceSources`.
+ */
+export interface IMeshScene {
+  /** Scene name, if the file gives one. */
+  name?: string;
+  /** The loaded scene's nodes, in file order (for a single-scene file: the glTF node indices). */
+  nodes: ISceneNode[];
+  /** Root nodes, in scene order. */
+  roots: number[];
+  /** glTF meshes the nodes reference, in file order. */
+  meshes: ISceneMesh[];
+  /** Distinct (node, primitive) origins of faces. */
+  sources: ISceneSource[];
+  /** Per face: index into `sources`, or -1 when the face belongs to no node. Length = faceCount. */
+  faceSources: Int32Array;
+}
+
+export interface ISceneNode {
+  /** Node name as written in the file (unsanitised). */
+  name?: string;
+  /** Child nodes, in file order. */
+  children: number[];
+  /** Local transform exactly as the file states it: `matrix` (column-major), or any of T / R / S. */
+  matrix?: Mat4;
+  translation?: Vec3;
+  /** Unit quaternion. */
+  rotation?: [x: number, y: number, z: number, w: number];
+  scale?: Vec3;
+  /** Index into `IMeshScene.meshes`. */
+  mesh?: number;
+  /** World matrix (column-major) the node's geometry is baked with: parent world × local, computed as three.js does. */
+  world: Mat4;
+  /**
+   * What else was baked into the node's geometry: 'skin' (posed by its skeleton), 'morph' (default
+   * morph weights applied), 'instances' (EXT_mesh_gpu_instancing copies). Writers emit that
+   * geometry as static triangles in the baked shape.
+   */
+  baked?: ('skin' | 'morph' | 'instances')[];
+}
+
+export interface ISceneMesh {
+  /** Mesh name as written in the file (unsanitised). */
+  name?: string;
+}
+
+export interface ISceneSource {
+  /** Index into `IMeshScene.nodes`. */
+  node: number;
+  /** Primitive index within the node's mesh (-1 = none: faces a merge attached to the node). */
+  primitive: number;
 }
 
 /** Object view of a single vertex (for reporting / UI; see `getVertex` in mesh.ts). */

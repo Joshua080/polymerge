@@ -160,9 +160,10 @@ export async function runMerge(basePath: string, oursPath: string, theirsPath: s
 /**
  * git merge driver (merge.<name>.driver = "polymerge git-merge %O %A %B %P"):
  * merges ancestor %O, current %A and other %B, writes the result over %A in the format of
- * path %P, prints a summary to stderr and exits 0 (clean) or 1 (conflicts left in base state,
- * git marks the file as conflicted). With --resolve, a combination that damages the model
- * (a collision warning) also exits 1: an automatic merge must never commit it unseen.
+ * path %P (STL, OBJ, GLB or .gltf; glTF keeps the inputs' nodes), prints a summary to stderr
+ * and exits 0 (clean) or 1 (conflicts left in base state, git marks the file as conflicted).
+ * With --resolve, a combination that damages the model (a collision warning) also exits 1:
+ * an automatic merge must never commit it unseen.
  * Unwritable formats exit 2 without touching %A.
  */
 export async function runGitMerge(args: string[], o: { resolve?: string; collisionCheck?: boolean } = {}): Promise<number> {

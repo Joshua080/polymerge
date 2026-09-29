@@ -16,6 +16,82 @@ Priorities set by the owner:
 
 Items 1–4 were built by four agents in parallel, each in its own git worktree, then integrated here. Items 3 and 4 share the glTF parser, the mesh types and the new writer, so item 4 wrote its design, parsing and merge rules in parallel, and added its data to item 3's writer only once that writer had landed. I wrote the two investigations while the agents worked.
 
+### Milestone 1 — A pull-request comment with before/after renders ✅
+
+**What it does.** When a pull request changes an STL, OBJ, glTF or GLB file (any letter case), the action posts **one comment** and updates it on every push. Each changed model gets:
+- a before/after image from one shared camera, in the diff colours (moved yellow, added green, removed red, unchanged grey);
+- a legend in the image and again in the text, so it still reads on a phone;
+- a short structural summary: tier, vertex and face counts, moved parts, unit or scale change;
+- a footer linking to the project, with the command to explore the diff locally.
+
+![Before/after card](docs/images/action-card.png)
+
+**Pieces:**
+- `action.yml` at the repository root is a composite action, usable as `Joshua080/polymerge@<ref>`, with three modes: `all`, `render` and `post`. The code is in `action/`: `render.mjs`, `post.mjs`, `cache-key.mjs` and `lib/`.
+- **Self-contained.** It builds polymerge from its own checkout, with `node_modules` + `dist` cached under a hash of the sources and Playwright's headless shell cached too, so it needs no published npm package. System libraries are installed only if a launch probe fails.
+- **Rendering reuses the README pipeline.** `scripts/viewer-capture.mjs` is the one module that starts the built CLI's server and drives headless Chromium with bounded waits; `readme-images.mjs` now uses it too.
+  - The viewer gained a capture mode (`?capture=1`): two `DiffViewer`s of the same size, given the same box and view direction, so their cameras are identical.
+  - The view is the default 3/4 view, mirrored per axis toward where the changes are, so a change on the far side isn't hidden half the time.
+  - The card is 800 CSS px at 2× (≈1600 × 678), 33–47 kB per model, on a dark background that reads in both GitHub themes.
+- **Model bytes never reach a URL or a temp file name.** Playwright serves them to the page under fixed names from one `polymerge demo` server. The summary is computed in Node before any browser starts, so a parse error or a cap shows as a row even if rendering fails.
+
+**Changed-file handling:**
+- **Diff base.** The action diffs from the merge base of the PR's base and head. It prefers the first parent of `refs/pull/N/merge` over the event's `base.sha`, which can be stale: on a branch that had merged main, main's own files showed up as PR changes. The e2e covers this and fails without the fix.
+- Added, deleted, renamed and same-content files each get a row. A rename with identical geometry gets a reason instead of an image. An unreadable file gets an error row, never a failed comment.
+- **Git LFS pointers** are resolved from the local LFS store, then `git lfs smudge`, else shown as "not fetched" with the `lfs: true` hint.
+- **Caps:** 10 files, 200 k triangles, 50 MB per file; the rest are listed.
+- **No `paths:` filter.** Without model changes, the run stops after one `git diff`, and a push that removes every model change rewrites the comment to say so.
+
+**Images in a comment.** GitHub comments don't render `data:` URIs, workflow artifacts aren't inline, and comment attachments have no API.
+- So the PNGs are committed, with git plumbing (no checkout), to a `polymerge-images` branch of the same repository.
+- They are linked by commit-pinned `…/raw/<commit>/pr-N/<head>/<n>.png` URLs.
+- Each commit holds only that run's images, parented on the branch tip; a rejected push is rebuilt on the new tip. Older comments keep working, and the branch can be deleted at any time to reclaim the space.
+
+**Security:**
+- **Fork PRs.** `render` runs in the unprivileged `pull_request` job (read-only token) and uploads an artifact. `post` runs in a `workflow_run` job from the default branch: it never checks out or runs the PR's code, and it installs nothing. Nothing uses `pull_request_target`.
+- **The artifact is untrusted.**
+  - The result is rebuilt from known fields only, each checked for type, length and allowed values.
+  - Images must have our own names, be regular files and real PNGs within size limits.
+  - The PR the artifact names must be at exactly the commit the triggering run built.
+- **Escaping.** All comment wording comes from our code. Paths, part names and parser messages appear only inside code spans, with bidi and invisible characters shown as escapes.
+- **No shell interpolation.** Inputs arrive as environment variables, and a test checks that no `run:` block contains `${{`. The token reaches git through `GIT_CONFIG_*` environment variables (an extra header), never in a URL or argument.
+- **The comment is found by marker *and* author**, since anyone can paste the marker into a comment.
+- **Permissions:** `contents: read` to render; `contents: write`, `pull-requests: write` and `actions: read` to post.
+- **Inherent limit:** a fork's author controls what their own PR's images show (any valid PNG). They cannot reach another PR.
+
+**Dogfood.** This repository uses both halves: `.github/workflows/model-diff.yml` (render) and `model-diff-comment.yml` (post). A `workflow_run` workflow runs from the default branch, so comments start once this is merged into `main`. Adopter docs: `docs/github-action.md`.
+
+**Tests:**
+- **Unit.** `action/test`: 65 tests covering change detection, LFS, markdown and escaping, artifact validation, summaries, the GitHub client, the image branch (against a local bare repo) and a lint of `action.yml` and the workflows. The action's JS is type-checked (`checkJs`) in `npm run typecheck`.
+- **End to end.** `scripts/e2e-action.mjs`, in `npm run e2e`: 73 checks on a real git repository with:
+  - a moved part, an added `.STL`, a deletion, an unchanged rename;
+  - an unreadable OBJ, an LFS pointer (and one resolvable from the local store);
+  - the caps and a `max-files` cut;
+  - a hostile file name (HTML, a pipe, a `javascript:` link, a mention, `$(…)`, U+202E, a newline);
+  - `main` advancing after the branch point.
+  
+  It checks that the images aren't blank and have the right colour classes, and that the two cameras are identical. The unchanged plate is pixel-identical in both panels: **80,125 of 80,366 grey pixels (99.7%)**.
+- **Posting,** against a mock GitHub API and a local bare repository as the image remote:
+  - the first run creates the comment; the `workflow_run` run updates the same one (found past page 1); a push with no model changes rewrites it;
+  - an artifact naming another PR, a wrong commit, an image path traversal, a fake PNG and a fork on `pull_request` are all rejected;
+  - a comment where another user pasted the marker is left alone.
+- **From a fresh copy.** From a clean `git archive`, `npm ci` + build took 11 s with a warm npm cache, and the e2e passed from that copy.
+- **GitHub's markdown.** Rendering the e2e comment with cmark-gfm gave only our images and link, with nothing hostile outside `<code>`.
+
+| # | Decision | Why |
+|---|----------|-----|
+| D26 | Images for PR comments live on a `polymerge-images` branch of the same repository, linked by commit-pinned `raw` URLs. | No third-party service and no secret beyond `GITHUB_TOKEN`; comments can't show `data:` URIs, artifacts or API uploads. |
+| D27 | Rendering (read-only `pull_request`) and posting (`workflow_run`, default-branch code) are separate jobs, and posting treats the artifact as untrusted. | Fork PRs get read-only tokens, and `pull_request_target` would run fork code with a write token. |
+| D28 | Before and after share one camera: the same box, direction and size, with the base drawn in the head's frame. | The eye can only compare two images if unchanged geometry lands on the same pixels. The e2e measures it. |
+
+**Not verified here** (no push to GitHub from the agent's worktree):
+- the composite steps, `actions/cache`, the artifact round trip and `workflow_run` on real GitHub Actions;
+- that commit-pinned `raw` image URLs render for signed-in readers of a **private** repository;
+- the `git lfs smudge` path, since git-lfs isn't installed here;
+- macOS and Windows runners.
+
+The first real run is this PR's own `Model diff` render job. The comment half needs `main`.
+
 ### Milestone 2 — Saving from the merge review, security design first ✅
 
 **The threat model came first.** `docs/write-back-security.md` was committed on its own before any feature code. It covers:
@@ -75,12 +151,12 @@ Writing it found three existing problems:
 
 | # | Decision | Why |
 |---|----------|-----|
-| D26 | The browser sends resolution choices only. The server recomputes the file through `resolveStages` and writes only if it hashes to the viewer's digest. | A leaked token can only choose between versions already in the index, and the file written is exactly the one the reviewer saw. |
-| D27 | The token travels in the URL fragment and a custom header: no cookie, and no CORS headers anywhere. | Nothing reaches logs or `Referer`, and a cross-site request needs a preflight that never succeeds. |
-| D28 | The Host header is checked on every route. Writes need a loopback Host, peer and bind, with no override. | Rebinding could already read models, and the network must never get a write endpoint. |
-| D29 | The writable path comes only from the command line and must be the unmerged index entry. The write is an atomic rename after rechecking parent, type, content and stages. | Nothing else on disk is reachable, and the user's own edits are never overwritten. |
-| D30 | An unresolved merge is never saved; collision warnings need an explicit acknowledgement. | Staging regions left at base would record an unreviewed merge as resolved (D18). |
-| D31 | `view` and `demo` stay read-only. | There is no git conflict state to cross-check, and `polymerge merge -o` already covers that case. |
+| D29 | The browser sends resolution choices only. The server recomputes the file through `resolveStages` and writes only if it hashes to the viewer's digest. | A leaked token can only choose between versions already in the index, and the file written is exactly the one the reviewer saw. |
+| D30 | The token travels in the URL fragment and a custom header: no cookie, and no CORS headers anywhere. | Nothing reaches logs or `Referer`, and a cross-site request needs a preflight that never succeeds. |
+| D31 | The Host header is checked on every route. Writes need a loopback Host, peer and bind, with no override. | Rebinding could already read models, and the network must never get a write endpoint. |
+| D32 | The writable path comes only from the command line and must be the unmerged index entry. The write is an atomic rename after rechecking parent, type, content and stages. | Nothing else on disk is reachable, and the user's own edits are never overwritten. |
+| D33 | An unresolved merge is never saved; collision warnings need an explicit acknowledgement. | Staging regions left at base would record an unreviewed merge as resolved (D18). |
+| D34 | `view` and `demo` stay read-only. | There is no git conflict state to cross-check, and `polymerge merge -o` already covers that case. |
 
 **Also fixed: `polymerge resolve` from a subdirectory** (this predates the session, and the write-back agent found it). `git show :n:<path>` reads a bare path from the repository *root*, so `cd sub && polymerge resolve part.obj` failed with "no stage 1".
 - `gitStage` now anchors the path to the working directory (`./`), and absolute paths work too.
