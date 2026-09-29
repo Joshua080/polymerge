@@ -8,7 +8,7 @@
  *   polymerge review <path>              (merge review of a conflicted git merge)
  *   polymerge demo [example]             (the viewer on a built-in example)
  *   polymerge info <file>
- *   polymerge merge <base> <ours> <theirs> [-o merged.stl] [--resolve ours|theirs|base] [--pick id=side]
+ *   polymerge merge <base> <ours> <theirs> [-o merged.stl|obj|glb|gltf] [--resolve ours|theirs|base] [--pick id=side]
  *   polymerge git-diff <git external-diff args...>
  *   polymerge git-merge %O %A %B %P
  *   polymerge git-setup
@@ -44,7 +44,7 @@ Usage:
       --no-open              Do not launch a browser, just print the URL
       --web-dist <dir>       Path to a built viewer (default: the one bundled with polymerge)
   polymerge merge <base> <ours> <theirs> [options]   Three-way merge (exit 1 = unresolved conflicts)
-      -o, --output <file>    Write the merged model (.stl or .obj)
+      -o, --output <file>    Write the merged model: .stl, .obj, .glb or .gltf (glTF keeps the nodes)
       --resolve <side>       Resolve every conflict with ours | theirs | base
       --pick <id>=<side>     Resolve one conflict (repeatable), e.g. --pick 0=theirs
       --report <file>        Write the conflicts and statistics as JSON

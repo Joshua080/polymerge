@@ -52,7 +52,7 @@ export function gitSetupText(): string {
   const exts = ['stl', 'obj', 'gltf', 'glb'];
   return [
     '# 1) Tell git which files polymerge should diff and merge — add to .gitattributes:',
-    ...exts.map((e) => `*.${e} diff=polymerge${e === 'stl' || e === 'obj' ? ' merge=polymerge' : ''}`),
+    ...exts.map((e) => `*.${e} diff=polymerge merge=polymerge`),
     '',
     '# 2) Register the drivers (drop --global to scope them to one repo):',
     'git config --global diff.polymerge.command "polymerge git-diff"',
@@ -64,7 +64,7 @@ export function gitSetupText(): string {
     'git diff -- model.stl                      # structural summary in the terminal',
     'git log -p --ext-diff -- model.stl         # history (log/show need --ext-diff)',
     'git difftool -y -t polymerge HEAD~1 -- model.stl   # visual diff in the browser',
-    'git merge other-branch                     # STL/OBJ merged three-way; conflicts keep the base geometry',
+    'git merge other-branch                     # models merged three-way; conflicts keep the base geometry',
     'polymerge resolve model.stl --pick 0=theirs && git add model.stl   # settle a conflicted model',
     '',
     `# (polymerge must be on PATH: "npm install -g @joshuahurley/polymerge", or in a clone "npm run build && npm link -w @joshuahurley/polymerge")`,
