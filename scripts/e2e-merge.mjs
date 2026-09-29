@@ -174,6 +174,7 @@ try {
     check(h.merge?.conflicts.length === 1 && h.merge.conflicts[0].kinds['move-move'] > 0, 'one move-move conflict (the boss)');
     check(h.merge?.stats.movedFromOurs === 1 && h.merge.stats.movedFromTheirs === 1, 'the two corner edits merged automatically');
     check(h.merge?.selected === 0, 'the first conflict is selected on open');
+    check(!url.includes('#token=') && h.merge?.save === undefined && (await page.locator('[data-save]').count()) === 0, 'a plain three-file view is read-only: no token, no "Save to repository"');
     let px = await colours(page, 'merge-cli-unresolved.png');
     console.log(`   pixels unresolved: conflict ${px.conflict}, ours ${px.ours}, theirs ${px.theirs}`);
     check(px.conflict > 200, 'the conflict region is highlighted (orange)');
