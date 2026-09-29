@@ -964,6 +964,60 @@ table.merge-applied td:first-child {
   top: 48px;
 }
 
+/* "Save to repository" (polymerge review) */
+.save-repo {
+  margin-bottom: 12px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius);
+  background: var(--panel-2);
+}
+
+.save-repo p {
+  margin: 4px 0;
+}
+
+.save-repo code {
+  font-family: var(--mono);
+  font-size: 11.5px;
+}
+
+.save-title {
+  font-weight: 600;
+}
+
+.save-button:not(:disabled) {
+  border-color: var(--accent);
+  font-weight: 600;
+}
+
+.save-ack {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 6px 0;
+  color: #fcd34d;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.save-ack input {
+  margin-top: 2px;
+}
+
+.save-status {
+  font-size: 12px;
+}
+
+.save-status.ok {
+  color: #86efac;
+}
+
+.save-status.bad {
+  color: #fdba74;
+}
+
 /* ---------------------------------------------------------------- capture card (?capture=1) */
 
 .capture {
