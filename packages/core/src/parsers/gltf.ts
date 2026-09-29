@@ -22,14 +22,18 @@
  * opacity), metalness, roughness }. Primitives without a material get -1.
  *
  * Vertex ids: the custom attribute `_VERTEX_ID` (three lowercases it to `_vertex_id`).
+ *
+ * Scene structure (nodes, local transforms, meshes, the node + primitive of every face) is
+ * recorded as `IMesh.scene` by gltf-scene.ts, for the glTF writer.
  */
 import type { Material, Mesh, Object3D } from 'three';
 import { Group } from 'three';
 import { GLTFLoader, type GLTF } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { defaultGroupName } from '../mesh.js';
-import { MeshLoadError, type IMaterial, type IMesh } from '../types.js';
+import { MeshLoadError, type IMaterial, type IMesh, type ISceneSource } from '../types.js';
 import { namePrefix, toMeshLoadError, type FormatLoadContext } from './bytes.js';
 import { prepareGltf, readGltfContainer } from './gltf-container.js';
+import { SceneCapture } from './gltf-scene.js';
 import { meshToPart } from './three-mesh.js';
 import { buildWeldedMesh, type TrianglePart } from './weld.js';
 
@@ -91,6 +95,7 @@ export async function loadGltf(buffer: ArrayBuffer, ctx: FormatLoadContext): Pro
     warnings.push(`glTF has ${sceneCount} scenes; only the default scene (#${index}) was loaded`);
   }
   root.updateMatrixWorld(true);
+  const capture = gltf.scene ? new SceneCapture(json, parser, root, typeof json.scene === 'number' ? json.scene : 0) : null;
 
   const materials: IMaterial[] = [];
   const materialByGltfIndex = new Map<number, number>();
@@ -126,6 +131,7 @@ export async function loadGltf(buffer: ArrayBuffer, ctx: FormatLoadContext): Pro
   };
 
   const parts: TrianglePart[] = [];
+  const partSources: (ISceneSource | null)[] = [];
   const skipped: string[] = [];
   const skinned: string[] = [];
   const morphed: string[] = [];
@@ -137,6 +143,7 @@ export async function loadGltf(buffer: ArrayBuffer, ctx: FormatLoadContext): Pro
       const info = meshToPart(mesh, { name, resolveMaterial, idAttribute: VERTEX_ID_ATTRIBUTE });
       if (!info) return;
       parts.push(info.part);
+      partSources.push(capture ? capture.sourceOf(mesh, info) : null);
       if (info.skinned) skinned.push(name);
       if (info.morphed) morphed.push(name);
       if (info.part.vertexIds) withIds++;
@@ -171,7 +178,8 @@ export async function loadGltf(buffer: ArrayBuffer, ctx: FormatLoadContext): Pro
   if (json.extensionsUsed?.length) extras.extensionsUsed = [...json.extensionsUsed];
   if (json.extensionsRequired?.length) extras.extensionsRequired = [...json.extensionsRequired];
 
-  return buildWeldedMesh({
+  const groupParts: number[] = [];
+  const mesh = buildWeldedMesh({
     format,
     parts,
     materials,
@@ -179,5 +187,8 @@ export async function loadGltf(buffer: ArrayBuffer, ctx: FormatLoadContext): Pro
     weldEpsilon: ctx.weldEpsilon,
     warnings,
     extras,
+    groupParts,
   });
+  capture?.attach(mesh, partSources, groupParts);
+  return mesh;
 }

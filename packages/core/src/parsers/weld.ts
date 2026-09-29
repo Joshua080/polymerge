@@ -58,6 +58,8 @@ export interface WeldInput {
   warnings?: readonly string[];
   /** Format-specific metadata extras. */
   extras?: Record<string, unknown>;
+  /** Output, when given: filled with the index into `parts` of each group of the result, in group order. */
+  groupParts?: number[];
 }
 
 // ---------------------------------------------------------------------------
@@ -438,7 +440,7 @@ export function buildWeldedMesh(input: WeldInput): IMesh {
   const faceMat = new Int32Array(totalTris);
   // Global source-vertex index of each kept corner (only needed to resolve vertex ids).
   const cornerSrc = hasIds ? new Int32Array(totalTris * 3) : null;
-  const ranges: { name: string; start: number; count: number }[] = [];
+  const ranges: { name: string; start: number; count: number; part: number }[] = [];
 
   const f = new Float32Array(9);
   const u = new Uint32Array(f.buffer);
@@ -447,6 +449,7 @@ export function buildWeldedMesh(input: WeldInput): IMesh {
   let degenerate = 0;
   let invalid = 0;
   let srcBase = 0;
+  let partIndex = 0;
 
   // Pass 1: weld, drop invalid / degenerate triangles.
   for (const part of parts) {
@@ -505,8 +508,9 @@ export function buildWeldedMesh(input: WeldInput): IMesh {
       faceMat[nf] = perFace ? (perFace[t] ?? -1) : partMat;
       nf++;
     }
-    if (nf > start) ranges.push({ name: part.name, start, count: nf - start });
+    if (nf > start) ranges.push({ name: part.name, start, count: nf - start, part: partIndex });
     srcBase += nv;
+    partIndex++;
   }
 
   if (nf === 0) {
@@ -569,6 +573,7 @@ export function buildWeldedMesh(input: WeldInput): IMesh {
     }
   }
 
+  if (input.groupParts) for (const r of ranges) input.groupParts.push(r.part);
   const groups: IMeshGroup[] = ranges.map((r) => {
     const g: IMeshGroup = { name: r.name, faceStart: r.start, faceCount: r.count };
     if (anyMaterial) {
