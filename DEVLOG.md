@@ -167,6 +167,75 @@ Writing it found three existing problems:
 - **Other browsers.** One not using Chromium's `Math` could compute a Tier 3 merge slightly differently from Node. Save then refuses with a digest mismatch and points to `polymerge resolve`.
 - **Other host names.** The viewer's server now refuses requests addressed to anything other than `localhost` or an IP address (a reverse proxy, `myhost.local`). This is deliberate.
 
+### Milestone 3 — glTF/GLB output for merges, keeping the node structure ✅
+
+**What was missing.** A glTF merge came out as STL or OBJ: one flat, world-space mesh with no nodes. The git driver exited 2 on `.glb` / `.gltf` paths and left them to be merged by hand.
+
+**Output.**
+- `writeGlb` and `writeGltf` in core. A `.gltf` is one self-contained file, with the buffer as a base64 data URI. `writeMesh` / `WRITABLE_FORMATS` cover both.
+- These all write glTF now: `polymerge merge … -o out.glb|out.gltf`, the git driver on `.glb` / `.gltf` paths, `polymerge resolve`, and the review's **Save to repository**. The format follows the extension, as before. `git-setup` prints `merge=polymerge` for glTF too.
+
+**Structure is recorded, not reconstructed.** The loader still bakes positions into world space, so the engine's contract is unchanged. It now also records the scene alongside, as an optional `IMesh.scene`:
+- the default scene's nodes: name, children, the local transform exactly as written (matrix or T/R/S), the mesh link, and the world matrix three.js baked with;
+- mesh names;
+- for every face, the node and primitive it came from. This is per face, not per group, because the merge regroups faces by name.
+
+`IMeshGroup` and `IMaterial` are unchanged, and every existing parser test passes as it was.
+
+**Un-baking is exact.** The writer rebuilds the hierarchy and writes each node's geometry in its local space.
+- World matrices are recomputed with three.js' own code from the transforms as written, which is the matrix the loader will bake with on re-read.
+- Each local float32 point is chosen so that the loader's arithmetic gives the world point back bit for bit: first the rounded inverse, then its 26 float32 neighbours, then a bounded lattice search over the thin preimage cell.
+- A plain inverse is not enough. Under an anisotropic scale the original point can lie 100+ ulps from it along a contracting axis; a ±2-ulp box left 33 of 36,480 vertices inexact.
+- **Measured** on 40 random 16-node scenes per regime:
+  - rigid, with ±1e5 translations: 0 of 32,447 vertices inexact;
+  - uniform scale 0.01: 0 of 31,123;
+  - per-axis scale 0.1–10: 0 of 36,480;
+  - only nested per-axis scales from 1e-3 to 1e3 leave some: 586 of 35,041 (1.7%), within a few float32 steps, counted and noted.
+- So glTF → IMesh → glTF → IMesh reproduces positions, faces, groups, materials, ids and the whole scene, in both containers.
+
+**Structure through the merge** (`merge/structure.ts`, one call in `materialize`). Positions are never touched; only the representation is chosen.
+- Every face keeps its source face's node, through the provenance.
+- **A moved node keeps the moving side's transform** when that transform carries more of the node's base vertices onto their merged position than the base transform does. Otherwise the base transform stays and the local data moves. A part-motion conflict left at base keeps the base transform; resolving it picks that side's.
+- **Other cases:**
+  - a node a side added comes along under its parent;
+  - faces an STL/OBJ side added next to a node join that node;
+  - faces with no node at all get one root node per group name;
+  - a node a side deleted, with no faces left, is dropped;
+  - a non-glTF base takes ours' structure.
+- Vertex ids are carried through, with fresh ids where both sides used one, so Tier 1 ID mode matches the merged file. They are written as a FLOAT `_VERTEX_ID`, since the spec forbids integer custom attributes.
+- **Instancing.** A mesh used by several nodes stays one mesh while one set of local data re-bakes exactly for every instance, solved jointly. An instance the merge edited gets its own copy.
+- **Written static, by design.** Skinned, morphed and GPU-instanced meshes are written as static triangles in the baked pose, with a note: the posed shape is what polymerge diffed and merged.
+- **Normals** are not written; clients compute flat normals. Materials, UVs and textures went in through this writer's appearance seams in milestone 4.
+
+**Tests.**
+- Every file written in the writer and merge tests passes the Khronos glTF-Validator (`gltf-validator` 2.0.0-dev.3.10, a new devDependency) with **0 errors and 0 warnings**. All 9 glTF/OBJ/STL fixtures, written as both GLB and `.gltf`, also validate cleanly and re-read bit-identically.
+- **25 new tests:**
+  - writer (9): nested TRS + matrix assemblies, shared meshes, ids, random transforms, skin/morph/instancing, loose faces, flat OBJ/STL;
+  - scene capture (4);
+  - merge structure (8): a clean merge re-reads identical; a transform move plus a local edit; a part-motion conflict under all three resolutions; a node added mid-file; a node deleted; an OBJ base; an STL side's addition; ids with Tier 1 ID mode;
+  - perf (1);
+  - CLI (3).
+- Three existing assertions pinned "GLB is unwritable" and now use `.ply` as the unwritable format.
+- **`e2e-git`** merges a real `.glb` with a nested, rotated and scaled hierarchy: clean through the driver, with both edits and the nodes kept. A conflict stops as `UU`. `polymerge resolve --pick 0=theirs` keeps the nodes, and **Save to repository** from `polymerge review` in headless Chromium writes a byte-identical file and stages it.
+- **Cost at 100k vertices / 198k faces:** the structure pass takes 40–65 ms per materialisation. The whole merge is unchanged within noise: 890 ms without structure, 853 ms with it (best of two). Writing the 2.4 MB GLB takes 59–111 ms.
+
+**Still not kept in glTF output:**
+- normals, tangents and vertex colours;
+- skins, morph targets, animations and GPU instancing (flattened into static geometry);
+- cameras, lights, `extras`, most extensions, non-default scenes, points/lines;
+- quantized or compressed data, which is written as plain float32.
+
+**Structure is not three-way merged as such.** Base names and hierarchy win: renames and re-parenting on a branch are not merged, and nodes a side added *without* geometry are not brought in. Added faces are regrouped into their node's primitive, so a merge with additions re-reads as the same model in a different face order.
+
+| # | Decision | Why |
+|---|----------|-----|
+| D35 | Scene structure is an optional `IMesh.scene` with a per-face node/primitive index; positions stay baked. | Nothing in the engine or existing tests changes; per-face survives the merge's regrouping; O(faces). |
+| D36 | The writer un-bakes with the loader's own matrices and arithmetic, choosing float32 local points that re-bake exactly. | The glTF round trip is bit-exact without storing the original local data. |
+| D37 | A moved node keeps the side's transform when it explains the merged geometry better than the base's; otherwise the base transform plus moved local data. | World positions are the merge result either way; this keeps a move where its author put it, with no separate transform merge. |
+| D38 | Geometry with no base node: a side's new node comes along; STL/OBJ additions join the adjacent node; floating faces get a root node per group name. | Nothing is dropped, and a side's structure survives. |
+| D39 | Shared meshes stay shared only while one local dataset fits every instance exactly. | Instancing is kept where it is honest, never at the cost of geometry. |
+| D40 | Normals are not written; skin, morph and GPU instances are written static in the baked pose. | IMesh carries no normals, and invented smooth normals would change shading; the posed shape is what polymerge diffed and merged. |
+
 ### Investigation — shareable links (`polymerge share`): options, not built
 
 **The need.** Someone without polymerge installed opens a link and sees the interactive diff or merge review.
