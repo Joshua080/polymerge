@@ -74,10 +74,26 @@ export function formatMergeReport(r: IMergeResult, names: { base: string; ours: 
   out.push(`${c.bold('Applied')}    ours: ${side(s.movedFromOurs, s.deletedFromOurs, s.facesAddedFromOurs, s.partMotionsFromOurs)}`);
   out.push(`           theirs: ${side(s.movedFromTheirs, s.deletedFromTheirs, s.facesAddedFromTheirs, s.partMotionsFromTheirs)}`);
   out.push(`           identical on both: ${s.movedConvergent + s.deletedConvergent + s.facesAddedConvergent} change(s)`);
+  if (r.appearance) {
+    // glTF: materials, material assignment and UVs (docs/appearance-merge-design.md).
+    const a = r.appearance.stats;
+    const look = (props: number, faces: number, uvFaces: number): string =>
+      `${props} material propert(ies), ${faces} re-assigned face(s), ${uvFaces} re-UV'd face(s)`;
+    out.push(`${c.bold('Appearance')} ours: ${look(a.propertiesFromOurs, a.facesReassignedFromOurs, a.uvFacesFromOurs)}`);
+    out.push(`           theirs: ${look(a.propertiesFromTheirs, a.facesReassignedFromTheirs, a.uvFacesFromTheirs)}`);
+    out.push(`           identical on both: ${a.propertiesConvergent + a.facesReassignedConvergent + a.uvFacesConvergent} change(s) · ${a.materials} material(s) in the result`);
+  }
   if (r.conflicts.length > 0) {
     out.push(c.bold(`Conflicts (${r.conflicts.length}):`));
     for (const k of r.conflicts) {
-      const where = k.wholeModel ? 'whole model' : `${k.baseVertices.length} base vertex(es) near (${k.focus.map((x) => fmt(x, 3)).join(', ')})`;
+      const near = `near (${k.focus.map((x) => fmt(x, 3)).join(', ')})`;
+      const where = k.wholeModel
+        ? 'whole model'
+        : k.appearance?.material !== undefined
+          ? `material "${k.appearance.material}": ${(k.appearance.properties ?? []).join(', ')}`
+          : k.appearance
+            ? `${k.appearance.faces} face(s)${k.appearance.uvSet !== undefined ? ` in UV set ${k.appearance.uvSet}` : ''} ${near}`
+            : `${k.baseVertices.length} base vertex(es) ${near}`;
       const state = k.resolution ? c.added(`→ ${k.resolution}`) : c.removed('unresolved (base kept)');
       out.push(`  ${c.removed(`#${k.id}`)} [${Object.keys(k.kinds).join(', ')}] ${k.message}`);
       out.push(`      ${c.dim(where)}  ${state}`);
@@ -88,7 +104,7 @@ export function formatMergeReport(r: IMergeResult, names: { base: string; ours: 
     r.clean
       ? c.added(`Result: clean — ${r.merged.vertexCount} vertices · ${r.merged.faceCount} faces`)
       : c.removed(
-          `Result: ${s.unresolved} unresolved conflict(s) — those regions keep the BASE geometry. ` +
+          `Result: ${s.unresolved} unresolved conflict(s) — those regions keep the BASE ${r.appearance ? 'geometry and appearance' : 'geometry'}. ` +
             `Resolve with --resolve ours|theirs or --pick <id>=ours|theirs.`,
         ),
   );
@@ -111,7 +127,8 @@ export function mergeReportJson(r: IMergeResult): string {
         theirsVertices: Array.from(c.theirsVertices),
       })),
       warnings: r.warnings.map((w) => ({ ...w, mergedFaces: Array.from(w.mergedFaces) })),
-      merged: { vertices: r.merged.vertexCount, faces: r.merged.faceCount },
+      appearance: r.appearance ? { stats: r.appearance.stats } : undefined,
+      merged: { vertices: r.merged.vertexCount, faces: r.merged.faceCount, materials: r.merged.materials.length },
     },
     null,
     2,
@@ -133,6 +150,9 @@ export async function runMerge(basePath: string, oursPath: string, theirsPath: s
   if (!o.quiet) {
     process.stdout.write(formatMergeReport(result, { base: base.fileName, ours: ours.fileName, theirs: theirs.fileName }) + '\n');
     if (o.output) process.stdout.write(`Wrote ${o.output}\n`);
+    if (o.output && format && result.appearance && format !== 'gltf' && format !== 'glb') {
+      process.stdout.write(`Note: ${format.toUpperCase()} carries geometry only; the merged materials, UVs and textures are not in ${o.output}.\n`);
+    }
   }
   return result.clean ? 0 : 1;
 }
