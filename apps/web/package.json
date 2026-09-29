@@ -1,6 +1,6 @@
 {
   "name": "@polymerge/web",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "Three.js browser viewer for polymerge diffs.",
   "license": "MIT",
@@ -13,7 +13,7 @@
     "smoke": "node e2e/smoke.mjs"
   },
   "dependencies": {
-    "polymerge-core": "0.1.0",
+    "polymerge-core": "0.1.1",
     "three": "0.186.1"
   },
   "devDependencies": {

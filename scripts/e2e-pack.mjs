@@ -31,9 +31,9 @@ const run = (cmd, args, opts = {}) => execFileSync(cmd, args, { encoding: 'utf8'
 
 try {
   dog.mark('pack');
-  const packed = JSON.parse(run(npm, ['pack', '-w', 'polymerge-core', '-w', 'polymerge', '--json', '--pack-destination', tmp], { cwd: root }));
+  const packed = JSON.parse(run(npm, ['pack', '-w', 'polymerge-core', '-w', '@joshuahurley/polymerge', '--json', '--pack-destination', tmp], { cwd: root }));
   const tarballs = packed.map((p) => path.join(tmp, p.filename));
-  const cliPack = packed.find((p) => p.name === 'polymerge');
+  const cliPack = packed.find((p) => p.name === '@joshuahurley/polymerge');
   const files = cliPack.files.map((f) => f.path);
   for (const must of ['dist/cli.js', 'dist/viewer/index.html', 'dist/viewer/fixtures/manifest.json', 'README.md', 'LICENSE']) if (!files.includes(must)) fail(`polymerge tarball lacks ${must}`);
   if (files.some((f) => f.startsWith('src/') || f.endsWith('.map'))) fail('polymerge tarball ships sources or source maps');
@@ -45,7 +45,7 @@ try {
   fs.writeFileSync(path.join(app, 'package.json'), JSON.stringify({ name: 'pack-check', private: true, type: 'module' }));
   run(npm, ['install', '--no-audit', '--no-fund', '--prefer-offline', ...tarballs], { cwd: app });
   const bin = path.join(app, 'node_modules/.bin', process.platform === 'win32' ? 'polymerge.cmd' : 'polymerge');
-  const cliJs = path.join(app, 'node_modules/polymerge/dist/cli.js');
+  const cliJs = path.join(app, 'node_modules/@joshuahurley/polymerge/dist/cli.js');
   const polymerge = (args, opts = {}) => {
     try {
       return { code: 0, out: run(bin, args, { cwd: app, ...opts }) };

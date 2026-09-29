@@ -67,6 +67,6 @@ export function gitSetupText(): string {
     'git merge other-branch                     # STL/OBJ merged three-way; conflicts keep the base geometry',
     'polymerge resolve model.stl --pick 0=theirs && git add model.stl   # settle a conflicted model',
     '',
-    `# (polymerge must be on PATH: "npm install -g polymerge", or in a clone "npm run build && npm link -w polymerge")`,
+    `# (polymerge must be on PATH: "npm install -g @joshuahurley/polymerge", or in a clone "npm run build && npm link -w @joshuahurley/polymerge")`,
   ].join('\n');
 }

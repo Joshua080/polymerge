@@ -4,6 +4,30 @@ A living log of milestones, architectural decisions, what works, what is stubbed
 
 ---
 
+## Session 6 — 2026-09-28 — CLI package renamed to `@joshuahurley/polymerge`, version 0.1.1
+
+npm refused to publish the CLI as `polymerge`: E403, too similar to the existing package `poly-merge`. `polymerge-core@0.1.0` did get published before that failure.
+- **The rename.** The CLI package is now **`@joshuahurley/polymerge`**, with `publishConfig.access: public`, since scoped packages are private by default. Its `bin` is still `polymerge`, so the command people type is unchanged.
+- **Updated references:**
+  - the root build script;
+  - the README install lines: `npm install -g @joshuahurley/polymerge`, `npx @joshuahurley/polymerge demo`, `npm link -w @joshuahurley/polymerge`;
+  - the README release section and `polymerge git-setup`'s hint;
+  - the pointer in `packages/core/README.md`;
+  - `scripts/e2e-pack.mjs` (pack, find and install the scoped package);
+  - the release workflow.
+- **Version 0.1.1 everywhere.** Both published packages, their dependency on each other, the viewer workspace and the root. 0.1.0 of `polymerge-core` is already taken, and npm never allows reusing a version.
+- **Safe re-runs.** The release workflow skips any package whose exact version is already on npm, and publishes the rest.
+  - The old check trusted `npm view`'s exit code. Depending on the npm version, a missing version either exits non-zero or prints nothing with exit 0, and the second would have been read as "already published".
+  - The check now compares the printed version with the one being released.
+  - Checked locally: `polymerge-core@0.1.0` → skip (already on npm); `polymerge-core@0.1.1` and `@joshuahurley/polymerge@0.1.1` → publish.
+- **Not done.** Nothing is tagged or published.
+
+| # | Decision | Why |
+|---|----------|-----|
+| D25 | The CLI is published as `@joshuahurley/polymerge`, with the `polymerge` bin (supersedes the unscoped name in D22). | npm's name-similarity rule rejects `polymerge`; a personal scope can't collide, and the command is unchanged. |
+
+---
+
 ## Session 5 — 2026-09-28 — engine package renamed to `polymerge-core`
 
 The npm org `polymerge` is taken by someone else, so `@polymerge/core` could never be published.
