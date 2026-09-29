@@ -4,10 +4,12 @@
  *   1. diff driver:  `git diff` on a model prints the structural report;
  *   2. merge driver: a clean three-way merge commits with both edits;
  *   3. merge driver: a conflicting merge stops (UU), keeps the base geometry in the conflict
- *      region; `polymerge review` serves git's three stages to the merge review, and
- *      `polymerge resolve --pick 0=theirs` + `git add` finishes it.
- *   4. the same for a .glb with a node hierarchy: the driver writes GLB, keeps the nodes, and
- *      `polymerge resolve` settles a conflict in it.
+ *      region; `polymerge resolve --pick 0=theirs` computes the resolution (then the file is put
+ *      back as the driver left it); `polymerge review` serves git's three stages to the merge
+ *      review, and in headless Chromium "Theirs" + "Save to repository" writes exactly the
+ *      resolve output and stages it (no longer UU); `git commit` finishes it.
+ *   4. the same for a .glb with a node hierarchy: the driver writes GLB and keeps the nodes; a
+ *      conflict is saved from the review exactly as `polymerge resolve` writes it.
  *
  *   node scripts/e2e-git.mjs        (needs `npm run build` first)
  */
@@ -16,7 +18,10 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { chromium } from 'playwright';
+import { watchdog } from './watchdog.mjs';
 
+const dog = watchdog('e2e-git', 5 * 60_000);
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const cli = path.join(root, 'packages/cli/dist/cli.js');
 const core = await import(pathToFileURL(path.join(root, 'packages/core/dist/index.js')).href);
@@ -40,10 +45,43 @@ const zOf = (x, y) => {
 };
 const write = (text) => fs.writeFileSync(path.join(dir, 'part.obj'), text);
 
-/** `polymerge review part.obj` during the conflict: the merge review is served git's three stages. */
-async function checkReview() {
-  const child = spawn(process.execPath, [cli, 'review', 'part.obj', '--no-open', '--port', '0'], { cwd: dir, stdio: ['ignore', 'pipe', 'pipe'] });
+const hook = (page) => page.evaluate(() => window.__POLYMERGE__);
+
+/** Run an action that starts a resolution round-trip; wait for 'loading' and then its settled state. */
+async function settle(page, action) {
+  await page.evaluate(() => {
+    window.__settled = new Promise((resolve) => {
+      let sawLoading = false;
+      const obs = new MutationObserver(() => {
+        const state = document.body.dataset.state;
+        if (state === 'loading') sawLoading = true;
+        else if (sawLoading) {
+          obs.disconnect();
+          resolve(state);
+        }
+      });
+      obs.observe(document.body, { attributes: true, attributeFilter: ['data-state'] });
+      setTimeout(() => {
+        obs.disconnect();
+        resolve('timeout');
+      }, 30_000);
+    });
+  });
+  await action();
+  return page.evaluate(() => window.__settled);
+}
+
+/**
+ * `polymerge review <file>` during the conflict: the merge review is served git's three stages;
+ * in the browser, resolving the conflict to theirs and clicking "Save to repository" writes the
+ * result and stages it.
+ */
+async function reviewAndSave(file = 'part.obj') {
+  const child = spawn(process.execPath, [cli, 'review', file, '--no-open', '--port', '0'], { cwd: dir, stdio: ['ignore', 'pipe', 'pipe'] });
+  dog.onTimeout(() => child.kill());
+  let browser;
   try {
+    dog.mark('review: start');
     const url = await new Promise((resolve, reject) => {
       let buf = '';
       child.stdout.on('data', (d) => {
@@ -55,21 +93,54 @@ async function checkReview() {
       setTimeout(() => reject(new Error('review did not start')), 30_000);
     });
     const u = new URL(url);
-    check(u.searchParams.get('mode') === 'merge' && u.searchParams.get('path') === 'part.obj', 'polymerge review opens the merge review for part.obj');
+    check(u.searchParams.get('mode') === 'merge' && u.searchParams.get('path') === file, `polymerge review opens the merge review for ${file}`);
+    check(/^#token=[A-Za-z0-9_-]{43}$/.test(u.hash) && !u.search.includes(u.hash.slice(7)), 'the session token is in the URL fragment, not the query');
     let same = true;
     for (const [side, n] of [['base', 1], ['ours', 2], ['theirs', 3]]) {
       const served = Buffer.from(await (await fetch(new URL(u.searchParams.get(side), u.origin))).arrayBuffer());
-      same &&= served.equals(execFileSync('git', ['show', `:${n}:part.obj`], { cwd: dir }));
+      same &&= served.equals(execFileSync('git', ['show', `:${n}:${file}`], { cwd: dir }));
     }
     check(same, 'it serves git stages :1 / :2 / :3 as base / ours / theirs');
+
+    dog.mark('browser: open the review');
+    browser = await chromium.launch({
+      headless: true,
+      args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist', '--enable-webgl'],
+    });
+    const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
+    page.setDefaultTimeout(30_000);
+    const errors = [];
+    page.on('pageerror', (e) => errors.push(e.message));
+    await page.goto(url);
+    await page.waitForSelector('body[data-state="ready"], body[data-state="error"]', { timeout: 120_000 });
+    await page.waitForFunction(() => window.__POLYMERGE__?.merge?.save, null, { timeout: 30_000 });
+    let h = await hook(page);
+    check(h.state === 'ready' && h.merge.unresolved === 1, `the review shows the unresolved conflict (state ${h.state}${h.error ? `: ${h.error}` : ''})`);
+    check(h.merge.save.writable && h.merge.save.path === file && !h.merge.save.enabled, `"Save to repository" is offered for ${file}, disabled while a conflict is unresolved`);
+    check(!page.url().includes('token'), 'the page removed the token from the address bar');
+
+    dog.mark('browser: resolve theirs');
+    const state = await settle(page, () => page.click('[data-conflict="0"] [data-pick="theirs"]'));
+    h = await hook(page);
+    check(state === 'ready' && h.merge.unresolved === 0 && h.merge.save.enabled, 'choosing "Theirs" resolves the conflict and enables Save');
+
+    dog.mark('browser: save');
+    await page.click('[data-save="repo"]');
+    await page.waitForFunction(() => ['saved', 'error'].includes(window.__POLYMERGE__?.merge?.save?.state), null, { timeout: 60_000 });
+    h = await hook(page);
+    check(h.merge.save.state === 'saved', `Save reports success (${h.merge.save.message})`);
+    check(/git commit/.test(await page.locator('.save-repo').innerText()), 'the viewer suggests git commit next');
+    check(errors.length === 0, `no page errors (${errors.join('; ')})`);
   } finally {
+    await browser?.close();
     child.kill();
   }
 }
 
 /**
  * 4. A .glb with a node hierarchy ("assembly" → "bracket", rotated and scaled): merged by the
- * driver as GLB with its nodes kept; a conflict is settled with `polymerge resolve`.
+ * driver as GLB with its nodes kept; a conflict is saved from the review, byte-identical to what
+ * `polymerge resolve` writes.
  */
 async function checkGlb() {
   const bytes = fs.readFileSync(path.join(root, 'fixtures/cases/gltf-node-hierarchy/target.glb'));
@@ -117,11 +188,17 @@ async function checkGlb() {
   const clash = gitRaw('merge', '--no-edit', 'glb-clash');
   check(clash.status !== 0 && git('status', '--short').trim() === 'UU bracket.glb', 'conflicting .glb merge stops, file unmerged (UU)');
   check(has(await read(), a), 'the conflict region keeps the base geometry in the .glb');
+  const conflicted = fs.readFileSync(path.join(dir, 'bracket.glb'));
   const res = polymerge('resolve', 'bracket.glb', '--pick', '0=theirs', '-q');
   check(res.status === 0, `polymerge resolve bracket.glb exits 0 (got ${res.status}: ${res.stderr.trim()})`);
   const resolved = await read();
-  check(has(resolved, [a[0], a[1], a[2] - 0.5]) && resolved.scene?.nodes.length === 2, 'resolve wrote theirs into the .glb, nodes kept');
-  git('add', 'bracket.glb');
+  check(has(resolved, [a[0], a[1], a[2] - 0.5]) && resolved.scene?.nodes.length === 2, 'resolve writes theirs into the .glb, nodes kept');
+  const resolvedBytes = fs.readFileSync(path.join(dir, 'bracket.glb'));
+  writeGlbFile(conflicted);
+  await reviewAndSave('bracket.glb');
+  dog.mark('after .glb save');
+  check(fs.readFileSync(path.join(dir, 'bracket.glb')).equals(resolvedBytes), 'the review saved the .glb byte-identical to `polymerge resolve` output');
+  check(git('ls-files', '-u').trim() === '' && git('status', '--short').trim() === 'M  bracket.glb', 'bracket.glb is staged (UU → M)');
   git('commit', '-qm', 'merge glb clash (theirs)');
   check(git('status', '--short').trim() === '', '.glb merge committed, working tree clean');
 }
@@ -162,11 +239,22 @@ try {
   check(/move-move/.test(clash.stderr), 'the driver explains the conflict (move-move)');
   check(git('status', '--short').trim() === 'UU part.obj', 'the model is marked unmerged (UU)');
   check(zOf(2, 2) === 0 && zOf(8, 7) === -0.25, 'conflict region keeps base geometry; other edits stay merged');
-  await checkReview();
+  // What `polymerge resolve --pick 0=theirs` writes; then put the file back as the driver left it.
+  const conflicted = fs.readFileSync(path.join(dir, 'part.obj'));
   const res = polymerge('resolve', 'part.obj', '--pick', '0=theirs', '-q');
   check(res.status === 0, `polymerge resolve exits 0 (got ${res.status}: ${res.stderr.trim()})`);
   check(zOf(2, 2) === -1, 'resolve applied theirs to the conflict region');
-  git('add', 'part.obj');
+  const resolved = fs.readFileSync(path.join(dir, 'part.obj'));
+  fs.writeFileSync(path.join(dir, 'part.obj'), conflicted);
+  check(git('status', '--short').trim() === 'UU part.obj', 'still unmerged (UU) before the review');
+
+  await reviewAndSave();
+  dog.mark('after save');
+  check(fs.readFileSync(path.join(dir, 'part.obj')).equals(resolved), 'the saved file is byte-identical to `polymerge resolve --pick 0=theirs` output');
+  check(zOf(2, 2) === -1 && zOf(8, 7) === -0.25, 'it has theirs in the conflict region and the automatic edit');
+  check(git('diff', '--cached', '--name-only').trim() === 'part.obj', 'git diff --cached shows part.obj staged');
+  check(execFileSync('git', ['show', ':0:part.obj'], { cwd: dir }).equals(resolved), 'the index holds the saved file (stage 0)');
+  check(git('ls-files', '-u').trim() === '' && git('status', '--short').trim() === 'M  part.obj', 'part.obj is no longer unmerged (UU → M)');
   git('commit', '-qm', 'merge clash (theirs)');
   check(git('status', '--short').trim() === '', 'merge committed, working tree clean');
 
