@@ -46,6 +46,17 @@ async function probe() {
   await browser.close();
 }
 
+/**
+ * The base branch commit to diff against. actions/checkout checks out GitHub's test merge of the
+ * pull request (refs/pull/N/merge, parents: base, head); its first parent is the base exactly as
+ * the "Files changed" tab uses it, while the event's base.sha can be older. Any other checkout
+ * falls back to the event's base.sha.
+ */
+function baseTip(repo, eventBase, head) {
+  const [, first, second, extra] = gitTry(repo, ['rev-list', '--parents', '-n', '1', 'HEAD']).stdout.trim().split(' ');
+  return first && second === head && !extra ? first : eventBase;
+}
+
 /** The merge base of the pull request's base and head commits, fetching history if the checkout is shallow. */
 function mergeBase(repo, base, head) {
   const find = () => gitTry(repo, ['merge-base', base, head]);
@@ -146,7 +157,14 @@ class Renderer {
 }
 
 async function main() {
-  if (args.includes('--probe')) return probe();
+  if (args.includes('--probe')) {
+    // A failure here is expected on a runner without Chromium's system libraries: action.yml
+    // installs them next, so this is a log line, not an error annotation.
+    return probe().catch((err) => {
+      log(`Chromium does not start yet (${message(err).split('\n')[0]})`);
+      process.exit(1);
+    });
+  }
   const listOnly = args.includes('--list');
 
   const eventPath = process.env.GITHUB_EVENT_PATH;
@@ -166,7 +184,7 @@ async function main() {
     maxBytes: intInput('POLYMERGE_MAX_FILE_MB', 50) * 1024 * 1024,
   };
 
-  const base = mergeBase(repo, baseSha, headSha);
+  const base = mergeBase(repo, baseTip(repo, baseSha, headSha), headSha);
   const raw = git(repo, ['diff', '--raw', '-z', '--no-abbrev', '-M', '--no-ext-diff', '--no-textconv', '--no-color', base, headSha]);
   const plan = planWork(modelChanges(parseRawDiff(raw)), limits.maxFiles);
   log(`${plan.length} model file(s) changed between the merge base ${base.slice(0, 7)} and ${headSha.slice(0, 7)}`);

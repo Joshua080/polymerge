@@ -522,6 +522,18 @@ try {
   r = await run('action/post.mjs', [], postEnv('pull_request', event(head3), out3));
   check(r.code === 0 && ours().length === 1 && ours()[0].body.includes('no longer changes any STL, OBJ, glTF or GLB files') && !ours()[0].body.includes('<img'), 'the comment is updated to say there are no model changes any more');
   check(api.unauthorised === 0, 'every API call carried the token');
+
+  // ---- GitHub's merge ref, with an out-of-date base.sha in the event ----------------------------------
+  dog.mark('render at a merge ref');
+  await git(repo, 'merge', '-q', '--no-edit', 'main'); // the branch takes main in, main-only.stl included
+  const headM = await git(repo, 'rev-parse', 'HEAD');
+  await git(repo, 'checkout', '-q', '--detach', 'main');
+  await git(repo, 'merge', '-q', '--no-ff', '--no-edit', headM); // what actions/checkout checks out: parents (base, head)
+  const out4 = path.join(tmp, 'out4');
+  const stale = { pull_request: { number: 42, base: { sha: forkPoint, ref: 'main', repo: { full_name: REPO } }, head: { sha: headM, ref: 'feature', repo: { full_name: REPO } } } };
+  r = await run('action/render.mjs', ['--list'], { ...renderEnv(out4, headM), GITHUB_EVENT_PATH: eventFile('event-stale.json', stale) });
+  const atMerge = fs.existsSync(path.join(out4, 'result.json')) ? JSON.parse(fs.readFileSync(path.join(out4, 'result.json'), 'utf8')) : null;
+  check(r.code === 0 && atMerge?.base === mainTip && atMerge.files.length === 0, `at the merge ref, the base is its first parent, not the event's older base.sha (merge base ${atMerge?.base?.slice(0, 7)}, main ${mainTip.slice(0, 7)}; main's own file not listed)`);
 } catch (err) {
   console.error(err);
   failures++;
