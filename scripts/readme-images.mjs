@@ -3,40 +3,31 @@
  * Regenerates the README images from the real viewer (headless Chromium, the built CLI's server):
  *   docs/images/diff-viewer.png     the diff viewer on the mixed-topology-edit example
  *   docs/images/merge-review.gif    the merge review: select a conflict, preview both sides, resolve
+ *   docs/images/action-card.png     the pull-request image (docs/github-action.md): the capture
+ *                                   card of the moved-part example, as the GitHub Action renders it
  *
  *   npm run build && node scripts/readme-images.mjs
  *
- * The GIF is encoded with Python's Pillow (`pip install pillow`). Not part of CI.
+ * The server, the browser and the ready-wait are scripts/viewer-capture.mjs, which the GitHub
+ * Action's pull-request images use too. The GIF is encoded with Python's Pillow
+ * (`pip install pillow`). Not part of CI.
  */
-import { execFileSync, spawn } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { chromium } from 'playwright';
+import { launchBrowser, startViewer, waitReady } from './viewer-capture.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const outDir = path.join(root, 'docs/images');
 const frames = fs.mkdtempSync(path.join(os.tmpdir(), 'polymerge-frames-'));
 fs.mkdirSync(outDir, { recursive: true });
 
-const cli = spawn(process.execPath, [path.join(root, 'packages/cli/dist/cli.js'), 'demo', '--no-open', '--port', '0'], {
-  stdio: ['ignore', 'pipe', 'inherit'],
-});
-const origin = await new Promise((resolve, reject) => {
-  const timer = setTimeout(() => reject(new Error('the CLI printed no URL')), 15_000);
-  cli.stdout.on('data', (d) => {
-    const m = String(d).match(/https?:\/\/[^/\s]+/);
-    if (m) {
-      clearTimeout(timer);
-      resolve(m[0]);
-    }
-  });
-});
-const browser = await chromium.launch({
-  args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist', '--enable-webgl'],
-});
-const ready = (page) => page.waitForSelector('body[data-state="ready"]', { timeout: 120_000 });
+const viewer = await startViewer(); // `polymerge demo`: the viewer with its built-in examples
+const origin = viewer.origin;
+const browser = await launchBrowser();
+const ready = (page) => waitReady(page);
 
 /** Wait for a resolve round-trip: the state goes to 'loading', then settles. */
 async function settle(page, action) {
@@ -118,7 +109,16 @@ try {
   await diff.close();
   console.log('readme-images: docs/images/diff-viewer.png');
 
-  // 2. The merge review, as frames: [file, duration ms].
+  // 2. The pull-request image: the capture card, at the size and scale action/render.mjs uses.
+  const card = await browser.newPage({ viewport: { width: 800, height: 700 }, deviceScaleFactor: 2 });
+  const models = new URLSearchParams({ capture: '1', before: 'main', after: 'my-branch', base: 'fixtures/cases/moved-part/base.obj', target: 'fixtures/cases/moved-part/target.obj' });
+  await card.goto(`${origin}/?${models}`);
+  await ready(card);
+  await card.locator('#capture').screenshot({ path: path.join(outDir, 'action-card.png') });
+  await card.close();
+  console.log('readme-images: docs/images/action-card.png');
+
+  // 3. The merge review, as frames: [file, duration ms].
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
   await page.goto(`${origin}/?mode=merge&demo=boss-height`);
   await ready(page);
@@ -193,6 +193,6 @@ ims[0].save(sys.argv[2], save_all=True, append_images=ims[1:], duration=[d for _
   console.log(`readme-images: docs/images/merge-review.gif (${list.length} frames, ${(fs.statSync(gif).size / 1024).toFixed(0)} kB)`);
 } finally {
   await browser.close();
-  cli.kill();
+  viewer.stop();
   fs.rmSync(frames, { recursive: true, force: true });
 }
