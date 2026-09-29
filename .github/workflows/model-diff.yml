@@ -1,0 +1,35 @@
+# Renders a before / after image and a structural diff of every STL, OBJ, glTF and GLB file a pull
+# request changes (fixtures/, examples/, anywhere), with this repository's own action (`uses: ./`),
+# and uploads the result as an artifact. The comment is posted by model-diff-comment.yml, a separate
+# workflow_run workflow: this job runs the pull request's code, so it gets a read-only token and
+# writes nothing. That split is what makes it work for pull requests from forks too.
+#
+# No `paths:` filter, on purpose: when a later push takes every model change back out of a pull
+# request, this run is what tells the comment to say so. Without model changes the action stops
+# after one `git diff`, before installing anything. Setup for other repositories:
+# docs/github-action.md.
+name: Model diff
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: model-diff-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  render:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0 # the history back to the merge base with the base branch
+          persist-credentials: false
+
+      - uses: ./
+        with:
+          mode: render

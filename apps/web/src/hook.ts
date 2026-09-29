@@ -46,11 +46,29 @@ export interface IMergeHookState {
   };
 }
 
+/** Capture mode state (mode 'capture': the fixed before / after card). */
+export interface ICaptureHookState {
+  /** 'diff': both versions; 'added' / 'deleted': one side only. */
+  kind: 'diff' | 'added' | 'deleted';
+  /** The view direction both panels use (from the model towards the camera). */
+  direction: Vec3;
+  panels: {
+    side: 'base' | 'target';
+    /** Whether the panel has a model (an added file has no before). */
+    empty: boolean;
+    /** The panel's canvas within the card element: x, y, width, height in CSS px. */
+    rect: [number, number, number, number];
+    /** DiffViewer.cameraState(): identical in both panels when the framing is shared. */
+    camera: number[];
+  }[];
+}
+
 export interface IPolymergeHook {
   state: ViewerState;
-  /** Which viewer is open: two-way diff (default) or three-way merge review. */
-  mode?: 'diff' | 'merge';
+  /** Which viewer is open: two-way diff (default), three-way merge review, or the capture card. */
+  mode?: 'diff' | 'merge' | 'capture';
   merge?: IMergeHookState;
+  capture?: ICaptureHookState;
   error?: string;
   tier?: MatchTier;
   tierName?: string;

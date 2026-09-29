@@ -9,7 +9,7 @@
  */
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { DIFF_COLORS, FaceStatus, type IDiffResult, type IMesh, type Vec3 } from 'polymerge-core';
+import { DIFF_COLORS, FaceStatus, type FaceStatusCode, type IDiffResult, type IMesh, type Vec3 } from 'polymerge-core';
 import {
   BASE_ACCENT,
   alignPositions,
@@ -59,7 +59,8 @@ export interface IPickHit {
   face: number;
   /** Status of the picked face (null in single-mesh preview / merge review). */
   faceStatus: number | null;
-  layer: 'target' | 'removed' | 'ghost' | 'preview' | 'merged';
+  /** 'base' / 'target': one side of a diff on its own (the before / after capture). */
+  layer: 'target' | 'removed' | 'ghost' | 'preview' | 'merged' | 'base';
   /** Hit point, target (or merged) space. */
   point: Vec3;
 }
@@ -107,6 +108,9 @@ interface IPickable {
 }
 
 const BACKGROUND = '#0f141d';
+
+/** Default view direction, from the look-at point towards the camera: a 3/4 view from above. */
+export const DEFAULT_VIEW: Vec3 = [0.9, 0.62, 1.25];
 
 export class DiffViewer {
   readonly renderer: THREE.WebGLRenderer;
@@ -398,6 +402,63 @@ export class DiffViewer {
     };
   }
 
+  /**
+   * Show ONE side of a diff (the before / after capture). 'base': the base mesh aligned into
+   * target space, coloured by its own face status (removed red, moved yellow, unchanged grey).
+   * 'target': the target mesh (added green, moved yellow, unchanged grey). The origin and the
+   * framing are those of showDiff for the same pair, so a 'base' viewer and a 'target' viewer of
+   * the same size draw an unchanged face on exactly the same pixels.
+   */
+  showSide(base: IMesh, target: IMesh, result: IDiffResult, side: 'base' | 'target'): void {
+    this.clear();
+    this.previewMode = false;
+    const matrix = isIdentityMatrix(result.alignment.matrix) ? null : result.alignment.matrix;
+    const alignedBase = alignPositions(base.positions, matrix);
+    this.origin.copy(centerOf(target.faceCount > 0 ? target.positions : alignedBase));
+    this.content.position.copy(this.origin);
+    const mesh = side === 'target' ? target : base;
+    const positions = side === 'target' ? target.positions : alignedBase;
+    const status = side === 'target' ? result.targetFaceStatus : result.baseFaceStatus;
+    this.showLayer(buildFaceLayer(mesh, positions, status, this.origin), { layer: side, side, mesh, positions, status });
+    this.fit(boxOf(target.positions).union(boxOf(alignedBase)));
+  }
+
+  /** Show one whole mesh in a single status colour (an added file green, a deleted one red). */
+  showSingle(mesh: IMesh, side: 'base' | 'target', status: FaceStatusCode): void {
+    this.clear();
+    this.previewMode = false;
+    this.origin.copy(centerOf(mesh.positions));
+    this.content.position.copy(this.origin);
+    const statuses = new Uint8Array(mesh.faceCount).fill(status);
+    this.showLayer(buildFaceLayer(mesh, mesh.positions, statuses, this.origin), { layer: side, side, mesh, positions: mesh.positions, status: statuses });
+    this.fit(boxOf(mesh.positions));
+  }
+
+  /** One coloured face layer as the whole scene (the "target" object slot, so layer toggles apply). */
+  private showLayer(layer: IFaceLayer, pickable: Omit<IPickable, 'object' | 'faceMap'>): void {
+    const obj = new THREE.Mesh(layer.geometry, this.materials.target);
+    this.objects.target = obj;
+    this.objects.targetLayer = layer;
+    this.objects.targetWire = new THREE.Mesh(layer.geometry, this.materials.wire);
+    this.content.add(obj, this.objects.targetWire);
+    this.pickables = [{ ...pickable, object: obj, faceMap: layer.faceMap }];
+    this.applyLayers();
+  }
+
+  /**
+   * Frame `box` looking along `direction` (from the box towards the camera). Deterministic:
+   * two viewers of the same size framing the same box the same way get identical cameras.
+   */
+  frame(box: THREE.Box3, direction: Vec3 = DEFAULT_VIEW): void {
+    this.fit(box, direction);
+  }
+
+  /** Camera position, look-at target, fov, aspect, near and far (to compare two viewers' framing). */
+  cameraState(): number[] {
+    const c = this.camera;
+    return [...c.position.toArray(), ...this.controls.target.toArray(), c.fov, c.aspect, c.near, c.far];
+  }
+
   /** Remove all model content (keeps camera). */
   clear(): void {
     this.setSelection(null);
@@ -647,13 +708,13 @@ export class DiffViewer {
   // Camera
   // -------------------------------------------------------------------------
 
-  /** Frame `box`: view direction fixed, distance chosen so all 8 box corners fit with a margin. */
-  private fit(box: THREE.Box3): void {
+  /** Frame `box` seen from `direction` (the default 3/4 view), at the distance where all 8 box corners fit with a margin. */
+  private fit(box: THREE.Box3, direction: Vec3 = DEFAULT_VIEW): void {
     if (box.isEmpty()) box = new THREE.Box3(new THREE.Vector3(-1, -1, -1), new THREE.Vector3(1, 1, 1));
     const center = box.getCenter(new THREE.Vector3());
     const radius = Math.max(box.getSize(new THREE.Vector3()).length() / 2, 1e-9);
     this.sceneRadius = radius;
-    const zAxis = new THREE.Vector3(0.9, 0.62, 1.25).normalize(); // from target towards the camera
+    const zAxis = new THREE.Vector3(...direction).normalize(); // from target towards the camera
     const xAxis = new THREE.Vector3().crossVectors(new THREE.Vector3(0, 1, 0), zAxis).normalize();
     const yAxis = new THREE.Vector3().crossVectors(zAxis, xAxis);
     const margin = 0.82;
