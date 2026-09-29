@@ -6,7 +6,8 @@
 
 Most 3D "diff" tools paint a heatmap of how far two surfaces are apart. polymerge works out which vertex in the old model *became* which vertex in the new one, even when the file was re-exported, re-ordered, converted from inches to millimetres, or had a part moved. On top of that correspondence it can:
 - tell you exactly what changed;
-- merge two people's edits to the same model the way git merges text: independent changes are combined, and real conflicts are shown to you to decide.
+- merge two people's edits to the same model the way git merges text: independent changes are combined, and real conflicts are shown to you to decide;
+- comment on pull requests with a before/after render of every changed model ([GitHub Action](#use-it-in-pull-requests)).
 
 ![Merge review: the conflict is orange; hover previews each side; clicking Theirs resolves it](docs/images/merge-review.gif)
 
@@ -208,6 +209,31 @@ polymerge review part.stl                         # see the conflicts in the bro
 git commit                                        # after saving; or: polymerge resolve part.stl --pick 0=theirs && git add part.stl
 ```
 
+### Use it in pull requests
+
+A GitHub Action comments on pull requests that change STL, OBJ, glTF or GLB files. For each changed model it shows a before/after image from the same camera, coloured by what changed, plus a short structural summary. There is one comment per pull request, updated on every push.
+
+![Before/after card from the GitHub Action](docs/images/action-card.png)
+
+```yaml
+# .github/workflows/model-diff.yml (pull requests from branches of this repository)
+name: Model diff
+on: pull_request
+permissions:
+  contents: write        # commit the images to the polymerge-images branch
+  pull-requests: write   # create / update the comment
+jobs:
+  diff:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: Joshua080/polymerge@v1
+```
+
+For pull requests from forks, use the two-workflow setup in [docs/github-action.md](docs/github-action.md), which also covers image hosting, Git LFS and security. `@v1` will be tagged with the first release; until then, pin a commit SHA.
+
 ### Use it as a library
 
 The engine is a separate package, `polymerge-core`. It runs in Node and in the browser.
@@ -331,6 +357,7 @@ npm run dev            # viewer dev server with the built-in examples
 packages/core   polymerge-core — parsers, tiered diff engine, three-way merge, writers (Node + browser)
 packages/cli    @joshuahurley/polymerge — the polymerge command, with the web viewer bundled at publish time
 apps/web        the Vite + three.js viewer
+action/         the pull-request GitHub Action (action.yml at the root runs it)
 fixtures/       known-answer model pairs and their generator
 examples/       the three-way merge example used in this README
 docs/           design notes (three-way merge semantics) and README images
