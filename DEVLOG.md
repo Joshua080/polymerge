@@ -4,6 +4,105 @@ A living log of milestones, architectural decisions, what works, what is stubbed
 
 ---
 
+## Session 8 — 2026-09-29 — PR comments, write-back, glTF output, appearance merge; share and STEP investigated
+
+Priorities set by the owner:
+1. **Build:** a GitHub Action that comments on PRs with a rendered before/after of changed models, reusing the README render pipeline. This is the most important item: it's how people who have never heard of polymerge see it.
+2. **Build:** write the merge review's result back to the repository (and `git add` it), with the security design done first.
+3. **Build:** glTF/GLB output for merges, preserving geometry and node structure.
+4. **Build:** materials, UVs and texture references in merge. Design what a conflict means for them, and implement it for glTF.
+5. **Investigate only:** shareable links (`polymerge share`). What are the realistic options, and who runs and pays for what?
+6. **Investigate only:** STEP support. What's involved, and what does a mesh conversion lose?
+
+Items 1–4 were built by four agents in parallel, each in its own git worktree, then integrated here. Items 3 and 4 share the glTF parser, the mesh types and the new writer, so item 4 wrote its design, parsing and merge rules in parallel, and added its data to item 3's writer only once that writer had landed. I wrote the two investigations while the agents worked.
+
+### Investigation — shareable links (`polymerge share`): options, not built
+
+**The need.** Someone without polymerge installed opens a link and sees the interactive diff or merge review.
+
+**What the viewer already does.** It loads `?base=<url>&target=<url>` with `fetch`, and absolute URLs work as they are.
+- Checked on 2026-09-29: the built viewer, served from one origin, diffed `examples/plate` models served from *another* origin that sends `Access-Control-Allow-Origin: *`. It reached `ready` with Tier 1, 10 moved vertices, and the diff ran in the worker.
+- `raw.githubusercontent.com` and `gist.githubusercontent.com` both send `Access-Control-Allow-Origin: *` (checked with curl the same day).
+- The viewer bundle is 1.3 MB on disk, 260 kB gzipped.
+
+**Options:**
+
+| Option | How it works | Cost / who runs it | Good | Bad |
+|---|---|---|---|---|
+| **A. Hosted static viewer + model URLs** | Publish `apps/web/dist` once to GitHub Pages. A link is `…/polymerge/?base=<raw URL @ sha>&target=<raw URL @ sha>`. `polymerge share` prints it when both versions are pushed to a public GitHub repo. | Free (Pages on a public repo). No server; the models go straight from GitHub to the browser. | Nearly no new code. Permanent, immutable links (commit SHAs). The PR comment (item 1) can link to it: "open this diff in 3D". | Public repos only: a private raw URL needs a token, and a token must never go in a link. Not "temporary". |
+| **B. Self-contained HTML export** | `polymerge export diff.html`: viewer + both models (+ optional precomputed result) in one file. Host it anywhere (Pages, S3, an intranet wiki) or attach it to an email or ticket. | Free. The user chooses where it lives. | Works for private models and offline. Nothing leaves the user's control until they put the file somewhere. | File size ≈ 0.85 MB + 1.33 × the models (base64). From `file://`, Chrome blocks module workers, so the diff uses the existing main-thread fallback. A file is not a link until someone hosts it. |
+| **C. Secret gist + hosted viewer** | Upload both files to a secret gist with the user's GitHub token, then link option A's viewer to the gist raw URLs. | Free; needs a GitHub account and the `gist` token scope. | Works for files that aren't in a public repo. | A secret gist is *unlisted, not private*: anyone with the URL can read it. No expiry (needs a `--delete`). The Gist API takes text, so binary STL/GLB needs base64 or a git push to the gist. |
+| **D. Tunnel to the local server** | `polymerge share --tunnel`: the existing local viewer server, exposed through a no-account tunnel (e.g. Cloudflare Quick Tunnels). | Free. | Truly temporary: the link dies with the process. Nothing is uploaded anywhere. | Quick Tunnels are "for testing and development only", with no SLA and a hard limit of 200 concurrent requests. Needs `cloudflared` installed. Exposes a local server to the internet: it must be a read-only mode, with item 2's write endpoint impossible and its Host check changed for the tunnel host. Often blocked on corporate networks. |
+| **E. Our own upload service** | `polymerge share` uploads to an API; links expire after N days. Cheapest real stack: Cloudflare Worker + R2 with lifecycle expiry. | Money is small: R2 free tier 10 GB-month, 1 M / 10 M operations a month, free egress; Workers free 100 k requests a day, or $5/month paid. **The owner runs it.** | The nicest UX: one command, expiring links, private repos too. | Anonymous file hosting attracts abuse (malware, illegal content, takedowns). Users would upload proprietary CAD to a bucket the owner is responsible for (POPIA, GDPR). Needs auth or rate limits, monitoring and uptime. 1–2 weeks to build properly, then ongoing operations. |
+| F. Model in the URL fragment | Encode the model into `#…`. | Free. | No server at all. | Real models are megabytes; chat tools and email break long URLs well before that. Toy-sized only. |
+
+**Recommendation.** Build **A** first. It's about a day: a Pages deploy workflow, `polymerge share` for pushed files in public repos, and a link from the PR comment. Then build **B** for private models (1–2 days). Don't run a service (E) until there's real demand *and* a decision on who operates it. D is an opt-in power-user flag at most. C is a small add-on to A if wanted.
+
+**Decisions needed from the owner:**
+1. Is it OK to publish the viewer on GitHub Pages from this repo (`joshua080.github.io/polymerge`)? The hosting identity is the owner's.
+2. Should the hosted viewer load models from any https host, or only an allowlist (GitHub raw + gists)? Loading is data-only and client-side, but the page should show where a model came from.
+3. Is "unlisted, not private" acceptable for gist sharing?
+4. Is there any appetite for operating a service? Cost ≈ $0–5/month, but with abuse and privacy obligations.
+
+### Investigation — STEP support: scope estimate, not built
+
+**What changes.** STEP (ISO 10303: AP203/214/242) stores a **B-rep**: exact analytic or NURBS surfaces trimmed by edge loops, plus units, names, colours and assembly structure. Everything in polymerge starts at triangles. Reading STEP therefore means one of two things:
+- tessellate it into a mesh, and everything existing works on the mesh; or
+- build a second, B-rep-level diff.
+
+**Parsing options** (npm, checked 2026-09-29):
+
+| Option | Gives | Size / licence | Notes |
+|---|---|---|---|
+| `occt-import-js` 0.0.23 | STEP/IGES/BREP → triangle meshes per solid, **with each B-rep face's triangle range**, names, colours, assembly tree, unit conversion | 7.6 MB wasm; LGPL-2.1 | Emscripten build of OpenCascade. Node and browser. Last release Dec 2024. |
+| `opencascade.js` 1.1.1 / `replicad-opencascadejs` | The full OpenCascade API: surface types and parameters, topology, STEP *writing* | 49–67 MB unpacked (custom builds can be smaller); LGPL-2.1 | The only route to B-rep-level data in JavaScript. |
+| Our own STEP (Part 21) text reader | The entity graph: surfaces, placements, loops | Small; MIT | Parsing is easy. *Evaluating and trimming* surfaces into triangles needs a geometry kernel, which is not realistic to write. |
+
+**Experiment** (a throwaway in the scratch directory; nothing committed):
+- **Parts.** A plate built with real B-rep operations (OpenCascade via replicad): 100 × 60 × 10 mm, corner fillets r5, two Ø8 holes, 12 B-rep faces. Variants:
+  - *ours* moves one hole 5 mm;
+  - *theirs* adds a Ø6 hole;
+  - *corner* changes the fillets r5 → r8.
+- **Pipeline.** Each part was exported as STEP (40 kB each) and tessellated with `occt-import-js` (deflection 0.1% of the bounding box). The existing `polymerge diff` / `merge` then ran on the meshes.
+
+Results:
+- **Tessellation is deterministic and fast.** The same file tessellated twice gives identical triangles. The plate took 0.05 s. A 432 kB, 18-part CAx-IF test assembly (160 B-rep faces, 5 040 triangles) took 0.46 s. Units are normalised (an inch file comes out in mm).
+- **A local B-rep edit re-tessellates whole faces.** Moving one hole left 9 of 12 B-rep faces tessellated identically, but only **126 of 364 triangles (35%)**. The top and bottom faces carry most triangles, and both were re-triangulated around the moved hole. The fillet change left 2 of 12 faces identical.
+- **Diff.**
+  - Hole moved → Tier 2. It correctly reports 50 vertices moved by exactly 5.000 mm. It also reports 104 "modified" and 30 added/removed faces, all re-triangulation of the planar faces (46 vertices slid).
+  - Hole added → Tier 2: 52 vertices added, 146 faces added and 38 removed.
+  - Fillets r5 → r8 → Tier 3 (treated as a remesh), reported as 24 vertices removed.
+- **Merge.** Ours (hole moved) + theirs (hole added), which is trivially compatible in CAD, gives **1 conflict**: competing and overlapping additions on the re-triangulated top and bottom faces, 86 base vertices. Fillets + a hole gives a whole-model `lineage` conflict.
+
+**What a mesh conversion loses:**
+1. **Shape precision: bounded, and fine for viewing and diffing.** Tessellation vertices lie exactly on the true surfaces, and the chord error is at most the deflection, which we choose.
+2. **Meaning: the real loss.**
+   - Exact parameters (hole Ø8.00 → Ø8.10, fillet r5 → r8) become "vertices moved".
+   - Face identity is lost.
+   - A planar face that didn't change shows up as changed, because its triangles did.
+   
+   A CAD user wants "hole moved +5 mm in X", not "104 faces modified".
+3. **Merge output.** A mesh cannot be written back as STEP. A merged STEP would come out as STL or GLB, a downgrade no CAD user would accept. As measured above, mesh-level merging also invents conflicts that CAD would not have.
+
+**Scope estimate:**
+
+| Level | What | Estimate | Verdict |
+|---|---|---|---|
+| **A. View + diff through tessellation** | `.step`/`.stp` accepted by `diff`, `view` and the PR action. <br>`occt-import-js` is an optional, lazily loaded dependency in the CLI, and a separately fetched wasm in the viewer. <br>Both versions are tessellated with one *absolute* deflection derived from the base: a bounding-box ratio would tessellate two versions differently and invent changes. <br>Groups = solids / B-rep faces; names and colours kept. <br>`merge` refuses STEP with a clear message. | **3–5 days**, including generated STEP fixtures (replicad as a devDependency), tests, licence notices and the viewer bundle split | Feasible, and useful for review and PR images. Noisy on planar faces. |
+| **B. Face-aware diff** | Use the per-face triangle ranges to report changes per CAD face. Suppress re-triangulation noise: a face whose surface and boundary didn't change is unchanged. Report parameter changes for analytic surfaces (plane, cylinder, cone, sphere, torus). | **2–4 weeks** on top of A. It needs surface types and parameters: either the full OpenCascade build (~50 MB) or our own Part 21 reader for analytic surfaces. Matching faces across versions is CAD's "persistent naming" problem. | Where the real value is: a second engine beside the mesh one. |
+| **C. STEP merge (writing STEP)** | Merge B-rep edits and write a valid STEP. | **Months, with an uncertain outcome.** B-rep edits don't compose like mesh edits: a moved hole and an added hole both rebuild the same trimmed face. Parametric CAD tools merge at the feature-history level, not the B-rep. | Not recommended. |
+
+**Licence.** Both OpenCascade builds are LGPL-2.1. The usual approach alongside an MIT tool is to ship the unmodified wasm as a separately loaded, replaceable module, with its licence text. That needs a conscious decision; this is not legal advice.
+
+**Recommendation.** If STEP matters, build **A** first: it's small, and it makes STEP visible in the PR action. Decide on **B** after trying it on real exported parts. Don't do **C**.
+
+**Decisions needed from the owner:**
+1. Is ~8 MB of LGPL wasm, as an optional download, acceptable?
+2. Should STEP be view/diff only, with merge refusing it?
+3. Which CAD tools' STEP exports matter? They decide the fixtures.
+
+---
+
 ## Session 7 — 2026-09-29 — README ready for the first release
 
 - **Pre-release note removed before tagging.** The Install section no longer says the packages are "not on npm yet". Its from-source steps (clone, build, `npm link -w @joshuahurley/polymerge`) moved to Development.
