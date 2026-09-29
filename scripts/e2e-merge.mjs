@@ -5,7 +5,7 @@
  *  1. `polymerge view base ours theirs` (three files → merge review) on a plate whose boss both
  *     sides raised to different heights: the conflict region shows orange, the automatic edits
  *     blue / purple; clicking "Theirs" resolves it (orange gone, --pick in the command), and the
- *     downloaded STL has theirs' boss height.
+ *     downloaded STL and GLB have theirs' boss height.
  *  2. The thin-wall example (a collision conflict): clicking the orange region IN THE 3D VIEW
  *     selects it, and the key "1" resolves it to ours.
  *  3. The mixed-choices example: two conflicts whose mixed resolution collides → a warning.
@@ -186,17 +186,20 @@ try {
     const after = await colours(page, 'merge-cli-theirs.png');
     console.log(`   pixels resolved:   conflict ${after.conflict}, ours ${after.ours}, theirs ${after.theirs}`);
     check(after.conflict < px.conflict / 10 && after.theirs > px.theirs, 'the region turns from orange to theirs (purple)');
-    const [download] = await Promise.all([page.waitForEvent('download'), page.click('[data-download="stl"]')]);
-    const file = path.join(dir, 'merged.stl');
-    await download.saveAs(file);
-    const merged = await loadMesh(fs.readFileSync(file), { fileName: 'merged.stl' });
-    let bossZ = [];
-    for (let i = 0; i < merged.vertexCount; i++) {
-      const [x, y, z] = [merged.positions[i * 3], merged.positions[i * 3 + 1], merged.positions[i * 3 + 2]];
-      if (x >= 3 && x <= 5 && y >= 3 && y <= 5 && z > 0.5) bossZ.push(z);
+    // Every download format re-reads with theirs' boss height (the writers run in the browser).
+    for (const format of ['stl', 'glb']) {
+      const [download] = await Promise.all([page.waitForEvent('download'), page.click(`[data-download="${format}"]`)]);
+      const file = path.join(dir, `merged.${format}`);
+      await download.saveAs(file);
+      const merged = await loadMesh(fs.readFileSync(file), { fileName: `merged.${format}` });
+      let bossZ = [];
+      for (let i = 0; i < merged.vertexCount; i++) {
+        const [x, y, z] = [merged.positions[i * 3], merged.positions[i * 3 + 1], merged.positions[i * 3 + 2]];
+        if (x >= 3 && x <= 5 && y >= 3 && y <= 5 && z > 0.5) bossZ.push(z);
+      }
+      bossZ = [...new Set(bossZ.map((z) => Math.round(z * 1e4) / 1e4))];
+      check(bossZ.length === 1 && Math.abs(bossZ[0] - 1.4) < 1e-4, `the downloaded ${format.toUpperCase()} has theirs' boss height (z = ${bossZ.join(', ')})`);
     }
-    bossZ = [...new Set(bossZ.map((z) => Math.round(z * 1e4) / 1e4))];
-    check(bossZ.length === 1 && Math.abs(bossZ[0] - 1.4) < 1e-4, `the downloaded STL has theirs' boss height (z = ${bossZ.join(', ')})`);
     check(errors.length === 0, `no page errors (${errors.join('; ')})`);
     await page.close();
 
