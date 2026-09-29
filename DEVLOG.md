@@ -174,6 +174,8 @@ Writing it found three existing problems:
 **Output.**
 - `writeGlb` and `writeGltf` in core. A `.gltf` is one self-contained file, with the buffer as a base64 data URI. `writeMesh` / `WRITABLE_FORMATS` cover both.
 - These all write glTF now: `polymerge merge … -o out.glb|out.gltf`, the git driver on `.glb` / `.gltf` paths, `polymerge resolve`, and the review's **Save to repository**. The format follows the extension, as before. `git-setup` prints `merge=polymerge` for glTF too.
+- **The merge review in the viewer** now downloads `.glb` and `.gltf` too, and its "same result from the command line" suggests the base's own format. I added this at integration; the writer runs in the browser unchanged.
+  - `e2e-merge` downloads the resolved GLB in headless Chromium and checks that it re-reads with theirs' boss height, as it already did for STL.
 
 **Structure is recorded, not reconstructed.** The loader still bakes positions into world space, so the engine's contract is unchanged. It now also records the scene alongside, as an optional `IMesh.scene`:
 - the default scene's nodes: name, children, the local transform exactly as written (matrix or T/R/S), the mesh link, and the world matrix three.js baked with;
