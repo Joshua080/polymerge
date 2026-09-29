@@ -182,6 +182,11 @@ function nanArray(n: number): Float32Array {
   return new Float32Array(n).fill(NaN);
 }
 
+/** dst.push(...src) without the argument-count limit (a unit can span a whole mesh). */
+function append<T>(dst: T[], src: readonly T[]): void {
+  for (const x of src) dst.push(x);
+}
+
 function lookSide(side: ISide, base: IMesh, index: FaceIndex, sets: number, baseSlots: Int32Array): ILookSide {
   const mesh = side.mesh;
   const look = mesh.appearance!;
@@ -482,15 +487,17 @@ function planUvSet(
   });
   if (!changed[0].any && !changed[1].any) return { plan: out, inComp };
 
-  // Super-islands: base gluing, then each side's own gluing on top.
+  // Super-islands: base gluing, then each side's own gluing on top (a side without changes has none).
   const baseUf = new UnionFind(FO);
-  glueIslands(base.faces, FO, O, eps, (f, g) => baseUf.union(f, g));
+  glueIslands(base.faces, FO, base.vertexCount, O, eps, (f, g) => baseUf.union(f, g));
   const comps = sides.map((S, si) => {
     const nAdded = S.side.addedFaces.length;
+    const comp = new Int32Array(FO + nAdded).fill(-1);
+    if (!changed[si].any) return comp;
     const uf = new UnionFind(FO + nAdded);
     for (let f = 0; f < FO; f++) uf.parent[f] = baseUf.find(f);
     const node = (s: number): number => (S.baseOfFace[s] >= 0 ? S.baseOfFace[s] : S.slotOfFace[s] >= 0 ? FO + S.slotOfFace[s] : -1);
-    glueIslands(S.mesh.faces, S.mesh.faceCount, S.uvs[k], eps, (s1, s2) => {
+    glueIslands(S.mesh.faces, S.mesh.faceCount, S.mesh.vertexCount, S.uvs[k], eps, (s1, s2) => {
       const a = node(s1);
       const b = node(s2);
       if (a >= 0 && b >= 0) uf.union(a, b);
@@ -498,7 +505,6 @@ function planUvSet(
     const hot = new Uint8Array(FO + nAdded);
     for (let f = 0; f < FO; f++) if (changed[si].base[f]) hot[uf.find(f)] = 1;
     for (let i = 0; i < nAdded; i++) if (changed[si].added[i]) hot[uf.find(FO + i)] = 1;
-    const comp = new Int32Array(FO + nAdded).fill(-1);
     for (let x = 0; x < FO + nAdded; x++) {
       const r = uf.find(x);
       if (hot[r]) comp[x] = r;
@@ -768,9 +774,9 @@ function joinOverlaps(plan: IMergePlan, look: IAppearancePlan, k: number, seeds:
     remap[i] = j;
     const u = units[j];
     const src = set.units[i];
-    u.baseFaces.push(...src.baseFaces);
-    u.oursFaces.push(...src.oursFaces);
-    u.theirsFaces.push(...src.theirsFaces);
+    append(u.baseFaces, src.baseFaces);
+    append(u.oursFaces, src.oursFaces);
+    append(u.theirsFaces, src.theirsFaces);
     u.layout += src.layout;
     u.overlaps += hits[i];
     // A union of several units was joined by an overlap, so it is a conflict; a lone unit keeps its status.
@@ -831,11 +837,11 @@ function couple(plan: IMergePlan, look: IAppearancePlan, seeds: ISeed[]): void {
       whats.push(new Map());
     }
     const cp = look.coupled[c];
-    cp.atomic.base.push(...s.base);
-    cp.atomic.oursFaceSlots.push(...s.oursSlots);
-    cp.atomic.theirsFaceSlots.push(...s.theirsSlots);
-    cp.faces.push(...s.faces);
-    cp.pairs.push(...s.pairs);
+    append(cp.atomic.base, s.base);
+    append(cp.atomic.oursFaceSlots, s.oursSlots);
+    append(cp.atomic.theirsFaceSlots, s.theirsSlots);
+    append(cp.faces, s.faces);
+    append(cp.pairs, s.pairs);
     for (const [k, u] of s.units) if (!cp.units.some(([a, b]) => a === k && b === u)) cp.units.push([k, u]);
     whats[c].set(s.what, (whats[c].get(s.what) ?? 0) + 1);
   });
@@ -1002,7 +1008,13 @@ function regionOfAtomic(plan: IMergePlan, a: IAtomic): number {
 function lineageAppearance(look: IAppearancePlan, m: IMaterialized): IAppearanceResult {
   const src = m.provenance.faceSource[0] ?? 0;
   const from = look.meshes[src];
-  const mesh: IMesh = { ...m.mesh, materials: from.materials.map((x) => ({ ...x })), appearance: from.appearance };
+  // A copy, like the geometry (image bytes are shared: they are never modified).
+  const app = from.appearance!;
+  const mesh: IMesh = {
+    ...m.mesh,
+    materials: from.materials.map((x) => ({ ...x })),
+    appearance: { materials: structuredClone(app.materials), images: [...app.images], uvs: app.uvs.map((u) => Float32Array.from(u)) },
+  };
   if (from.faceMaterials) mesh.faceMaterials = Int32Array.from(from.faceMaterials);
   return {
     mesh,

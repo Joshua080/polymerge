@@ -2,7 +2,7 @@
  * UV machinery for the appearance merge (docs/appearance-merge-design.md §4, §5):
  *
  *   islands    faces glued along an edge whose two end corners carry the same UVs in both faces
- *              (per version, per UV set), via an exact edge hash — O(corners);
+ *              (per version, per UV set), with edges bucketed by their lower vertex — O(corners);
  *   overlap    positive-area overlap of two UV triangles (separating axes with an ε margin, so faces
  *              that merely share an edge or touch do not count), searched on a uniform grid over the
  *              candidate faces only.
@@ -10,7 +10,6 @@
  * UVs are compared per coordinate within ε; NaN (no UV in that set) equals only NaN.
  */
 import { hash3 } from '../diff/faceset.js';
-import { Uint32TripleMap } from '../parsers/weld.js';
 
 export class UnionFind {
   readonly parent: Int32Array;
@@ -101,28 +100,48 @@ export function sameFaceUv(a: ArrayLike<number>, ia: number, b: ArrayLike<number
   return sameCornerUv(a, ia, b, ib, eps) && sameCornerUv(a, ia + 2, b, ib + 2, eps) && sameCornerUv(a, ia + 4, b, ib + 4, eps);
 }
 
+/** Corner index e (= face · 3 + corner) of the next corner of the same face. */
+const nextCorner = (e: number): number => (e % 3 === 2 ? e - 2 : e + 1);
+
 /**
  * Glue the faces of a mesh into UV islands for one UV set: calls `glue(f, g)` for every pair of
  * faces sharing an edge whose end corners carry the same UVs in both (`uv` is per face corner). On
- * a non-manifold edge every later face is compared with the first one.
+ * a non-manifold edge every later face is compared with the first one. Edges are bucketed by their
+ * lower vertex (a counting sort, no hashing), so this is one linear pass over the corners.
  */
-export function glueIslands(faces: Uint32Array, faceCount: number, uv: Float32Array, eps: number, glue: (f: number, g: number) => void): void {
-  const edges = new Uint32TripleMap(faceCount * 2);
-  for (let f = 0; f < faceCount; f++) {
-    for (let c = 0; c < 3; c++) {
-      const a = faces[f * 3 + c];
-      const b = faces[f * 3 + ((c + 1) % 3)];
-      const value = f * 3 + c;
-      const first = edges.getOrInsert(a < b ? a : b, a < b ? b : a, 0, value);
-      if (first === value) continue;
-      const g = (first / 3) | 0;
-      const cg = first - g * 3;
-      const ga = faces[first];
-      // Corner of g holding vertex a, and of vertex b.
-      const ia = ga === a ? cg : (cg + 1) % 3;
-      const ib = ga === a ? (cg + 1) % 3 : cg;
-      if (sameCornerUv(uv, (f * 3 + c) * 2, uv, (g * 3 + ia) * 2, eps) && sameCornerUv(uv, (f * 3 + ((c + 1) % 3)) * 2, uv, (g * 3 + ib) * 2, eps)) {
-        glue(f, g);
+export function glueIslands(
+  faces: Uint32Array,
+  faceCount: number,
+  vertexCount: number,
+  uv: Float32Array,
+  eps: number,
+  glue: (f: number, g: number) => void,
+): void {
+  const E = faceCount * 3;
+  const start = new Int32Array(vertexCount + 1);
+  for (let e = 0; e < E; e++) start[Math.min(faces[e], faces[nextCorner(e)]) + 1]++;
+  for (let v = 0; v < vertexCount; v++) start[v + 1] += start[v];
+  const cursor = start.slice(0, vertexCount);
+  const order = new Int32Array(E);
+  for (let e = 0; e < E; e++) order[cursor[Math.min(faces[e], faces[nextCorner(e)])]++] = e;
+  for (let v = 0; v < vertexCount; v++) {
+    for (let i = start[v] + 1; i < start[v + 1]; i++) {
+      const e = order[i];
+      const a = faces[e];
+      const b = faces[nextCorner(e)];
+      const hi = a > b ? a : b;
+      for (let j = start[v]; j < i; j++) {
+        const first = order[j];
+        const ga = faces[first];
+        const gb = faces[nextCorner(first)];
+        if ((ga > gb ? ga : gb) !== hi) continue;
+        // The first edge of this pair: compare the UVs of vertex a, then of vertex b, in both faces.
+        const ia = ga === a ? first : nextCorner(first);
+        const ib = ga === a ? nextCorner(first) : first;
+        if (sameCornerUv(uv, e * 2, uv, ia * 2, eps) && sameCornerUv(uv, nextCorner(e) * 2, uv, ib * 2, eps)) {
+          glue((e / 3) | 0, (first / 3) | 0);
+        }
+        break;
       }
     }
   }

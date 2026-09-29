@@ -7,8 +7,10 @@
 import { describe, expect, it } from 'vitest';
 import { appearanceValueKey } from '../../src/appearance.js';
 import { mergeMeshes, resolveMerge } from '../../src/merge/index.js';
+import { loadMesh } from '../../src/parsers/index.js';
 import type { IMaterialDefinition, IMergeResult, IMesh } from '../../src/types.js';
 import { captureLogger, cylinder, grid, silent, withMoves } from '../diff/util.js';
+import { buildGltf, glbBytes } from '../parsers/helpers.js';
 import {
   appendFaces,
   arraysOf,
@@ -699,5 +701,71 @@ describe('appearance merge · properties', () => {
     expect(o.merged.faceCount).toBe(remeshed.faceCount);
     expect(o.merged.materials).toEqual(remeshed.materials);
     expect(Array.from(o.merged.appearance!.uvs[0])).toEqual(Array.from(remeshed.appearance!.uvs[0]));
+  });
+});
+
+describe('appearance merge · glTF files end to end (parse → merge)', () => {
+  /**
+   * A 3 × 3-vertex panel (2 × 2 quads) as a GLB: two UV islands (left and right column of quads,
+   * a seam at x = 1, so those positions are stored twice), material "Paint" with an embedded
+   * texture (never decoded, so any bytes do), the right island shifted by `rightU` in u.
+   */
+  function panel(imageText: string, rightU = 0.5): Uint8Array {
+    const positions: number[] = [];
+    const uv: number[] = [];
+    for (let j = 0; j < 2; j++) {
+      for (let i = 0; i < 2; i++) {
+        const u0 = i === 0 ? 0 : rightU - 1 * 0.2;
+        const corner = (x: number, y: number): void => {
+          positions.push(x, y, 0);
+          uv.push(u0 + x * 0.2, y * 0.2);
+        };
+        // Triangles (a, b, d) and (a, d, c) of quad (i, j).
+        corner(i, j);
+        corner(i + 1, j);
+        corner(i + 1, j + 1);
+        corner(i, j);
+        corner(i + 1, j + 1);
+        corner(i, j + 1);
+      }
+    }
+    return glbBytes(
+      buildGltf({
+        meshes: [{ name: 'Panel', primitives: [{ positions, material: 0, attributes: { TEXCOORD_0: { data: uv, type: 'VEC2', componentType: 5126 } } }] }],
+        nodes: [{ name: 'Panel', mesh: 0 }],
+        materials: [{ name: 'Paint', pbrMetallicRoughness: { baseColorTexture: { index: 0 } } }],
+        extra: { textures: [{ source: 0 }], images: [{ uri: `data:image/png;base64,${btoa(imageText)}` }] },
+      }),
+    );
+  }
+  const load = (bytes: Uint8Array, name: string): Promise<IMesh> => loadMesh(bytes, { fileName: name });
+  /** Faces of the right-hand island (quads with i = 1) in the loaded panel. */
+  const rightFaces = [2, 3, 6, 7];
+
+  it('ours swaps the texture, theirs moves an island: both, from real GLB bytes', async () => {
+    const base = await load(panel('albedo v1'), 'base.glb');
+    const ours = await load(panel('albedo v2'), 'ours.glb');
+    const theirs = await load(panel('albedo v1', 0.75), 'theirs.glb');
+    expect(base.vertexCount).toBe(9); // the seam is in the UVs, not in the welded vertices
+    const r = mergeMeshes(base, ours, theirs, opts);
+    checkAppearance(r);
+    expect(r.clean).toBe(true);
+    expect(r.merged.appearance!.images.map((i) => i.hash)).toEqual([ours.appearance!.images[0].hash]);
+    expect(Array.from(r.merged.appearance!.images[0].data!)).toEqual(Array.from(new TextEncoder().encode('albedo v2')));
+    expect(uvsAre(r, theirs, rightFaces)).toBe(true);
+    expect(uvsAre(r, base, [0, 1, 4, 5])).toBe(true);
+    expect(r.appearance!.stats).toMatchObject({ propertiesFromOurs: 1, uvFacesFromTheirs: 4 });
+  });
+
+  it('both sides swap the texture: the same bytes converge, different bytes conflict until resolved', async () => {
+    const base = await load(panel('albedo v1'), 'base.glb');
+    const v2 = await load(panel('albedo v2'), 'ours.glb');
+    const same = mergeMeshes(base, v2, await load(panel('albedo v2'), 'theirs.glb'), opts);
+    expect(same.clean).toBe(true);
+    const r = mergeMeshes(base, v2, await load(panel('albedo v3'), 'theirs.glb'), opts);
+    expect(r.conflicts.map((c) => [Object.keys(c.kinds), c.appearance?.properties])).toEqual([[['material-property'], ['baseColorTexture']]]);
+    expect(r.merged.appearance!.images[0].hash).toBe(base.appearance!.images[0].hash);
+    const t = resolveMerge(r, { 0: 'theirs' });
+    expect(Array.from(t.merged.appearance!.images[0].data!)).toEqual(Array.from(new TextEncoder().encode('albedo v3')));
   });
 });
