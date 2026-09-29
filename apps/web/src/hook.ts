@@ -35,6 +35,15 @@ export interface IMergeHookState {
   selected: number | null;
   /** The equivalent CLI command for the current resolutions. */
   command: string;
+  /** "Save to repository", present only in a `polymerge review` session that offers it. */
+  save?: {
+    path: string;
+    writable: boolean;
+    /** The Save button is enabled. */
+    enabled: boolean;
+    state: 'idle' | 'saving' | 'saved' | 'error';
+    message?: string;
+  };
 }
 
 export interface IPolymergeHook {

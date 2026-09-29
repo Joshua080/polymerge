@@ -1,6 +1,11 @@
 # Saving from the merge review — security design
 
-Status: written and committed before any of the feature's code. The implementation follows this document; where a detail had to change while building it, the change is recorded here too.
+Status: written and committed before any of the feature's code. The implementation follows this document; where a detail had to change while building it, the change is recorded here too. The code is in `packages/cli/src/`:
+- `serve-guard.ts`: the `Host` / `Origin` / token checks and the static allowlist;
+- `review-api.ts`: the two HTTP routes;
+- `write-back.ts`: path validation, the recomputed file, the rechecks, the atomic write and `git add`.
+
+The viewer side is in `apps/web/src/merge-app.ts`.
 
 ## The feature, and why it needs a threat model
 
@@ -341,6 +346,8 @@ Against the real server, with a real git repository (`packages/cli/test/write-ba
 | §4.9 static | Encoded dots, encoded slashes and backslashes, drive letters, NUL and double encoding all 404, and never return a file outside the viewer |
 | §5 sessions | The routes are absent (404) in `demo` and in `view` |
 | Unwritable format | A writer that throws leaves nothing on disk |
+
+**Each defence is pinned by a test.** Removing any one of these makes at least one test fail: the token check, the `Host` check (all routes), the loopback-only `Host` rule of the write routes, the `Origin` check, the content hash, the parent realpath, the file-type check, the unresolved check, the warning acknowledgement, the digest, the unknown-field rule, the stage recheck, the loopback-only bind, and the model content types. This was checked by disabling each one in turn. The first run found one gap: the write routes' loopback-only `Host` rule was hidden behind the general check, so a non-loopback IP-literal `Host` case was added.
 
 The happy path runs in real git (`scripts/e2e-git.mjs`): a conflicted `git merge`, then `polymerge review`, then a resolution in headless Chromium, then Save. It checks that the file on disk equals `polymerge resolve --pick …` output, that `git diff --cached` shows it staged, and that the path is no longer `UU`.
 

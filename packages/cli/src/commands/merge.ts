@@ -180,8 +180,28 @@ export async function runGitMerge(args: string[], o: { resolve?: string; collisi
  * unresolved (then `git add <path>` to mark it resolved).
  */
 export async function runGitResolve(repoPath: string, o: MergeCommandOptions): Promise<number> {
+  const { result, bytes } = await resolveStages((n) => gitStage(n, repoPath), repoPath, o);
+  await writeFile(repoPath, bytes);
+  if (!o.quiet) {
+    process.stdout.write(formatMergeReport(result, { base: `${repoPath} :1`, ours: `${repoPath} :2 (ours)`, theirs: `${repoPath} :3 (theirs)` }) + '\n');
+    process.stdout.write(result.clean ? `Wrote ${repoPath} — run "git add ${repoPath}" to mark it resolved.\n` : `Wrote ${repoPath} (still conflicted).\n`);
+  }
+  return result.clean ? 0 : 1;
+}
+
+/**
+ * What `polymerge resolve` computes: the three index stages of a conflicted file merged with
+ * the given resolutions, and the bytes it writes to <path> (format from its extension). The
+ * merge review's "Save to repository" (write-back.ts) calls this too, so a save from the
+ * browser writes exactly what `polymerge resolve <path> --pick …` would.
+ */
+export async function resolveStages(
+  stage: (n: 1 | 2 | 3) => Uint8Array,
+  repoPath: string,
+  o: MergeCommandOptions,
+): Promise<{ result: IMergeResult; bytes: Uint8Array }> {
   const format = outputFormat(repoPath, o.format);
-  const load = (n: 1 | 2 | 3) => loadMesh(new Uint8Array(gitStage(n, repoPath)), { fileName: path.basename(repoPath) });
+  const load = (n: 1 | 2 | 3) => loadMesh(new Uint8Array(stage(n)), { fileName: path.basename(repoPath) });
   const [base, ours, theirs] = await Promise.all([load(1), load(2), load(3)]);
   const result = mergeMeshes(base, ours, theirs, {
     logger: silentLogger,
@@ -189,12 +209,7 @@ export async function runGitResolve(repoPath: string, o: MergeCommandOptions): P
     resolutions: parsePicks(o.pick),
     detectCollisions: o.collisionCheck !== false,
   });
-  await writeFile(repoPath, writeMesh(result.merged, format, { name: path.basename(repoPath) }));
-  if (!o.quiet) {
-    process.stdout.write(formatMergeReport(result, { base: `${repoPath} :1`, ours: `${repoPath} :2 (ours)`, theirs: `${repoPath} :3 (theirs)` }) + '\n');
-    process.stdout.write(result.clean ? `Wrote ${repoPath} — run "git add ${repoPath}" to mark it resolved.\n` : `Wrote ${repoPath} (still conflicted).\n`);
-  }
-  return result.clean ? 0 : 1;
+  return { result, bytes: writeMesh(result.merged, format, { name: path.basename(repoPath) }) };
 }
 
 /** One index stage of a conflicted file: 1 = common ancestor, 2 = ours, 3 = theirs. */

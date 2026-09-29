@@ -17,7 +17,7 @@ import { parseArgs } from 'node:util';
 import { runDiff } from './commands/diff.js';
 import { gitSetupText, runGitDiff } from './commands/git.js';
 import { runInfo } from './commands/info.js';
-import { gitStage, runGitMerge, runGitResolve, runMerge } from './commands/merge.js';
+import { runGitMerge, runGitResolve, runMerge } from './commands/merge.js';
 import { createRequire } from 'node:module';
 import { MERGE_DEMOS, runDemo, runReview, runView } from './commands/view.js';
 
@@ -51,7 +51,8 @@ Usage:
       --no-collision-check   Don't check the combined edits for surfaces passing through each other
       -q, --quiet            No report
   polymerge review <path> [--port N] [--no-open]
-                                             Open the merge review on a conflicted git merge of <path>
+                                             Open the merge review on a conflicted git merge of <path>;
+                                             "Save to repository" writes <path> and stages it (git add)
   polymerge resolve <path> --pick <id>=<side> | --resolve <side>
                                              Finish a conflicted git merge of <path> (reads git's index stages)
   polymerge demo [example] [--port N] [--no-open]
@@ -184,7 +185,7 @@ async function main(argv: string[]): Promise<number> {
         },
       });
       requirePositionals('review', positionals, 1);
-      return runReview(positionals[0], { port: values.port, host: values.host, open: !values['no-open'], webDist: values['web-dist'] }, gitStage);
+      return runReview(positionals[0], { port: values.port, host: values.host, open: !values['no-open'], webDist: values['web-dist'] });
     }
     case 'resolve': {
       const { values, positionals } = parseArgs({
