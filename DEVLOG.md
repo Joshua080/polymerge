@@ -4,6 +4,16 @@ A living log of milestones, architectural decisions, what works, what is stubbed
 
 ---
 
+## Session 7 — 2026-09-29 — README ready for the first release
+
+- **Pre-release note removed before tagging.** The Install section no longer says the packages are "not on npm yet". Its from-source steps (clone, build, `npm link -w @joshuahurley/polymerge`) moved to Development.
+  - This had to happen *before* the tag: prepack copies the root README into the CLI package.
+  - Otherwise the npm page for 0.1.1 would have said "not on npm yet" until the next version.
+- The Development file tree now names the CLI package `@joshuahurley/polymerge` (missed in session 6).
+- **Not done.** Nothing is tagged or published.
+
+---
+
 ## Session 6 — 2026-09-28 — CLI package renamed to `@joshuahurley/polymerge`, version 0.1.1
 
 npm refused to publish the CLI as `polymerge`: E403, too similar to the existing package `poly-merge`. `polymerge-core@0.1.0` did get published before that failure.

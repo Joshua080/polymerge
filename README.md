@@ -31,15 +31,7 @@ npm install -g @joshuahurley/polymerge
 polymerge demo            # opens the merge review on a built-in example — no files needed
 ```
 
-The package is `@joshuahurley/polymerge`; the command it installs is `polymerge`. To run it without installing: `npx @joshuahurley/polymerge demo`.
-
-> **Release status:** the packages are ready to publish (see [Releasing](#releasing)) but **not on npm yet**. Until the first release, install from source:
->
-> ```bash
-> git clone https://github.com/Joshua080/polymerge.git && cd polymerge
-> npm install && npm run build
-> npm link -w @joshuahurley/polymerge   # puts `polymerge` on your PATH
-> ```
+The package is `@joshuahurley/polymerge`; the command it installs is `polymerge`. To run it without installing: `npx @joshuahurley/polymerge demo`. To run it from a clone instead, see [Development](#development).
 
 `polymerge view`, `review` and `demo` start a small local web server (bound to 127.0.0.1) and open your browser. The viewer is bundled in the package. It uses WebGL and runs entirely on your machine; nothing is uploaded.
 
@@ -316,8 +308,10 @@ The full list of known limits and next steps is kept in [DEVLOG.md](DEVLOG.md).
 ## Development
 
 ```bash
+git clone https://github.com/Joshua080/polymerge.git && cd polymerge
 npm install
 npm run build          # core → CLI → web viewer
+npm link -w @joshuahurley/polymerge   # optional: puts this checkout's `polymerge` on your PATH
 npm test               # unit, fixture and merge tests, then the perf tests on their own
 npm run e2e            # headless-browser viewer, CLI → browser, worker, merge review, real git, packed npm install
 npm run verify         # everything CI runs
@@ -326,7 +320,7 @@ npm run dev            # viewer dev server with the built-in examples
 
 ```
 packages/core   polymerge-core — parsers, tiered diff engine, three-way merge, writers (Node + browser)
-packages/cli    polymerge — the command line, with the web viewer bundled at publish time
+packages/cli    @joshuahurley/polymerge — the polymerge command, with the web viewer bundled at publish time
 apps/web        the Vite + three.js viewer
 fixtures/       known-answer model pairs and their generator
 examples/       the three-way merge example used in this README
