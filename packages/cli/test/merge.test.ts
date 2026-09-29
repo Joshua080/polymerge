@@ -2,8 +2,9 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import { createMesh, loadMesh, writeObj, writeStl } from 'polymerge-core';
+import { createMesh, loadMesh, writeGlb, writeObj, writeStl, type IMesh, type Vec3 } from 'polymerge-core';
 import { outputFormat, parsePicks, runGitMerge, runMerge } from '../src/commands/merge.js';
+import { gitSetupText } from '../src/commands/git.js';
 
 /** 6×6 vertex grid (spacing 1) with optional vertex moves. */
 function grid(moves: Record<number, [number, number, number]> = {}) {
@@ -112,7 +113,7 @@ describe('polymerge merge', () => {
     expect(() => parsePicks(['x=ours'])).toThrow(/--pick/);
     expect(() => parsePicks(['1=mine'])).toThrow(/ours, theirs or base/);
     expect(outputFormat('a/b/model.STL')).toBe('stl');
-    expect(() => outputFormat('model.glb')).toThrow(/cannot write/);
+    expect(() => outputFormat('model.ply')).toThrow(/cannot write/);
   });
 });
 
@@ -125,7 +126,7 @@ describe('polymerge git-merge (merge driver protocol)', () => {
     writeFileSync(file('A2.tmp'), readFileSync(file('ours.stl')));
     expect(await runGitMerge([file('base.stl'), file('A2.tmp'), file('base.stl'), 'parts/bracket.stl'])).toBe(0);
     expect(await zAt(file('A2.tmp'), 2, 2)).toBe(1);
-    expect(await runGitMerge([file('base.stl'), file('A2.tmp'), file('theirs.stl'), 'x.glb'])).toBe(2);
+    expect(await runGitMerge([file('base.stl'), file('A2.tmp'), file('theirs.stl'), 'x.ply'])).toBe(2);
     expect(await runGitMerge(['only-one'])).toBe(2);
   });
 
@@ -148,5 +149,75 @@ describe('polymerge git-merge (merge driver protocol)', () => {
     expect(json.warnings).toHaveLength(1);
     expect(json.warnings[0].kind).toBe('collision');
     expect(json.warnings[0].mergedFaces.length).toBeGreaterThan(0);
+  });
+});
+
+describe('glTF / GLB output (merge -o, git-merge driver)', () => {
+  // Base: an L-bracket mesh under a nested, rotated and scaled node hierarchy ("assembly" → "bracket").
+  const fixture = new URL('../../../fixtures/cases/gltf-node-hierarchy/target.glb', import.meta.url);
+  let base: IMesh;
+  let a: Vec3;
+  let b: Vec3;
+  const at = (m: IMesh, v: number): Vec3 => [m.positions[v * 3], m.positions[v * 3 + 1], m.positions[v * 3 + 2]];
+  /** The base with world vertices moved by dz, written as GLB (the writer keeps the node structure). */
+  const edited = (moves: [number, number][]): Uint8Array => {
+    const positions = Float64Array.from(base.positions);
+    for (const [v, dz] of moves) positions[v * 3 + 2] += dz;
+    return writeGlb({ ...base, positions });
+  };
+  const has = (m: IMesh, p: Vec3): boolean => {
+    for (let i = 0; i < m.vertexCount; i++) if (at(m, i).every((x, k) => x === p[k])) return true;
+    return false;
+  };
+  const read = async (f: string): Promise<IMesh> => loadMesh(readFileSync(f), { fileName: f });
+
+  beforeAll(async () => {
+    writeFileSync(file('base.glb'), readFileSync(fixture));
+    base = await loadMesh(readFileSync(fixture), { fileName: 'base.glb' });
+    // Two vertices far apart: ours raises the first, theirs lowers the other.
+    a = at(base, 0);
+    const dist = (v: number): number => Math.hypot(...at(base, v).map((x, k) => x - a[k]));
+    let far = 0;
+    for (let v = 1; v < base.vertexCount; v++) if (dist(v) > dist(far)) far = v;
+    b = at(base, far);
+    writeFileSync(file('ours.glb'), edited([[0, 0.5]]));
+    writeFileSync(file('theirs.glb'), edited([[far, -0.25]]));
+    writeFileSync(file('theirs-clash.glb'), edited([[0, -0.5]]));
+  });
+
+  it('merge -o out.glb / out.gltf: both edits, the base node hierarchy and transforms', async () => {
+    expect(await runMerge(file('base.glb'), file('ours.glb'), file('theirs.glb'), { output: file('out.glb'), quiet: true })).toBe(0);
+    expect(await runMerge(file('base.glb'), file('ours.glb'), file('theirs.glb'), { output: file('out.gltf'), quiet: true })).toBe(0);
+    const glb = await read(file('out.glb'));
+    const gltf = await read(file('out.gltf'));
+    expect(JSON.parse(readFileSync(file('out.gltf'), 'utf8')).buffers[0].uri).toMatch(/^data:application\/octet-stream;base64,/);
+    for (const m of [glb, gltf]) {
+      expect(has(m, [a[0], a[1], a[2] + 0.5])).toBe(true);
+      expect(has(m, [b[0], b[1], b[2] - 0.25])).toBe(true);
+      expect(has(m, a) || has(m, b)).toBe(false);
+      expect(m.scene!.nodes.map((n) => [n.name, n.translation, n.rotation, n.scale])).toEqual(
+        base.scene!.nodes.map((n) => [n.name, n.translation, n.rotation, n.scale]),
+      );
+    }
+    expect(Array.from(gltf.positions)).toEqual(Array.from(glb.positions));
+  });
+
+  it('git-merge writes a .glb / .gltf path in its format: 0 when clean, 1 with the conflict region at base', async () => {
+    writeFileSync(file('G.tmp'), readFileSync(file('ours.glb')));
+    expect(await runGitMerge([file('base.glb'), file('G.tmp'), file('theirs.glb'), 'models/bracket.glb'])).toBe(0);
+    expect(new TextDecoder().decode(readFileSync(file('G.tmp')).subarray(0, 4))).toBe('glTF');
+    const clean = await loadMesh(readFileSync(file('G.tmp')), { fileName: 'bracket.glb' });
+    expect(has(clean, [a[0], a[1], a[2] + 0.5]) && has(clean, [b[0], b[1], b[2] - 0.25])).toBe(true);
+    expect(clean.scene!.nodes.map((n) => n.name)).toEqual(['assembly', 'bracket']);
+
+    writeFileSync(file('G2.tmp'), readFileSync(file('ours.glb')));
+    expect(await runGitMerge([file('base.glb'), file('G2.tmp'), file('theirs-clash.glb'), 'models/bracket.gltf'])).toBe(1);
+    const clash = await loadMesh(readFileSync(file('G2.tmp')), { fileName: 'bracket.gltf' });
+    expect(clash.metadata.format).toBe('gltf');
+    expect(has(clash, a)).toBe(true); // the conflict region keeps the base geometry
+  });
+
+  it('git-setup registers the merge driver for glTF too', () => {
+    for (const ext of ['stl', 'obj', 'gltf', 'glb']) expect(gitSetupText()).toContain(`*.${ext} diff=polymerge merge=polymerge`);
   });
 });

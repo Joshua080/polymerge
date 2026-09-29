@@ -7,4 +7,17 @@ export * from './mesh.js';
 export { detectFormat, loadMesh } from './parsers/index.js';
 export { diffMeshes, serializeDiff, deserializeDiff } from './diff/index.js';
 export { mergeMeshes, resolveMerge } from './merge/index.js';
-export { writeMesh, writeObj, writeStl, formatFloat32, WRITABLE_FORMATS, type WritableFormat } from './writers/index.js';
+export {
+  writeMesh,
+  writeObj,
+  writeStl,
+  writeGlb,
+  writeGltf,
+  buildGltfDocument,
+  formatFloat32,
+  WRITABLE_FORMATS,
+  type WritableFormat,
+  type IGltfDocument,
+  type IGltfWriteOptions,
+} from './writers/index.js';
+export { cloneScene } from './scene.js';
