@@ -185,6 +185,7 @@ export interface IMaterialDefinition {
   /** Linear RGB (default [0, 0, 0]). */
   emissiveFactor: [r: number, g: number, b: number];
   alphaMode: MaterialAlphaMode;
+  /** Meaningful in MASK mode only; 0.5 in every other mode. */
   alphaCutoff: number;
   doubleSided: boolean;
   baseColorTexture?: ITextureRef;

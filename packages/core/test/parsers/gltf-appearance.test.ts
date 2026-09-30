@@ -188,6 +188,20 @@ describe('glTF appearance — materials and texture references', () => {
     expect(mesh.metadata.warnings.join('\n')).toMatch(/2 texture reference problem\(s\) ignored: material 0\.baseColorTexture: texture 7 does not exist/);
   });
 
+  it('alphaCutoff means something in MASK mode only: 0.5 in every other mode (a write / read cycle cannot invent a change)', async () => {
+    const g = buildGltf({
+      meshes: [{ primitives: [{ ...seamQuad(), material: 0 }, { positions: [0, 0, 5, 1, 0, 5, 0, 1, 5], material: 1 }, { positions: [0, 0, 6, 1, 0, 6, 0, 1, 6], material: 2 }] }],
+      nodes: [{ mesh: 0 }],
+      materials: [{ alphaMode: 'MASK', alphaCutoff: 0.3 }, { alphaMode: 'BLEND', alphaCutoff: 0.3 }, { alphaCutoff: 0.9 }],
+    });
+    const [mesh] = await loadBoth(g);
+    expect(mesh.appearance!.materials.map((m) => [m.alphaMode, m.alphaCutoff])).toEqual([
+      ['MASK', 0.3],
+      ['BLEND', 0.5],
+      ['OPAQUE', 0.5],
+    ]);
+  });
+
   it('unlit and unnamed materials: the extension is a property; the summary keeps the loader name', async () => {
     const g = buildGltf({
       meshes: [{ primitives: [{ ...seamQuad(), material: 0 }, { positions: [0, 0, 5, 1, 0, 5, 0, 1, 5], material: 1 }] }],

@@ -517,6 +517,29 @@ describe('glTF writer — appearance (materials, textures, per-corner UVs)', () 
     expect(back.appearance!.images[byName('Decal').baseColorTexture!.image].hash).toBe(decal.hash);
   });
 
+  it('a texture whose only image source is an extension (WebP, no fallback) is written the same way and the extension is required', async () => {
+    const webp = new TextEncoder().encode('RIFF....WEBPVP8 fake');
+    const g = buildGltf({
+      meshes: [{ primitives: [{ positions: [0, 0, 0, 1, 0, 0, 1, 1, 0], attributes: { TEXCOORD_0: uvAttr([0, 0, 1, 0, 1, 1]) }, material: 0 }] }],
+      nodes: [{ mesh: 0 }],
+      materials: [{ name: 'Web', pbrMetallicRoughness: { baseColorTexture: { index: 0 } } }],
+      extra: {
+        images: [{ uri: `data:image/webp;base64,${btoa(String.fromCharCode(...webp))}` }],
+        textures: [{ extensions: { EXT_texture_webp: { source: 0 } } }],
+        extensionsUsed: ['EXT_texture_webp'],
+        extensionsRequired: ['EXT_texture_webp'],
+      },
+    });
+    const source = await load(glbBytes(g), 'webp.glb');
+    expect(source.appearance!.materials[0].baseColorTexture).toEqual({ image: 0, texCoord: 0, sourceExtension: 'EXT_texture_webp' });
+    const json = buildGltfDocument(source).json as { textures: unknown[]; images: { mimeType: string }[]; extensionsUsed: string[]; extensionsRequired: string[] };
+    expect(json.textures).toEqual([{ extensions: { EXT_texture_webp: { source: 0 } } }]);
+    expect(json.images[0].mimeType).toBe('image/webp');
+    expect(json.extensionsUsed).toEqual(['EXT_texture_webp']);
+    expect(json.extensionsRequired).toEqual(['EXT_texture_webp']);
+    expectSameModel(await load(writeGlb(source), 'webp-out.glb'), source);
+  });
+
   it('instances with different UVs do not share a mesh', async () => {
     const spec = assembly();
     spec.meshes[1].primitives[0].attributes = { TEXCOORD_0: uvAttr(CUBE_CORNERS.flatMap(([x, y]) => [x, y])) };

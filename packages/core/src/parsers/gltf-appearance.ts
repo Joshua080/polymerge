@@ -206,7 +206,9 @@ export function resolveGltfAppearance(capture: GltfAppearanceCapture, prepared: 
     def.roughnessFactor = num(pbr.roughnessFactor) ?? def.roughnessFactor;
     def.emissiveFactor = (numbers(m.emissiveFactor, 3) as IMaterialDefinition['emissiveFactor']) ?? def.emissiveFactor;
     if ((ALPHA_MODES as readonly unknown[]).includes(m.alphaMode)) def.alphaMode = m.alphaMode as MaterialAlphaMode;
-    def.alphaCutoff = num(m.alphaCutoff) ?? def.alphaCutoff;
+    // The cutoff means something in MASK mode only (validators warn otherwise): 0.5 elsewhere, so a
+    // write / read cycle cannot invent a change.
+    if (def.alphaMode === 'MASK') def.alphaCutoff = num(m.alphaCutoff) ?? def.alphaCutoff;
     def.doubleSided = m.doubleSided === true;
     const slots: Array<[keyof IMaterialDefinition & `${string}Texture`, unknown]> = [
       ['baseColorTexture', pbr.baseColorTexture],

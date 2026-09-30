@@ -418,6 +418,8 @@ class TextureTable {
   readonly samplers: Record<string, unknown>[] = [];
   readonly textures: Record<string, unknown>[] = [];
   readonly extensions = new Set<string>();
+  /** Extensions a client must support: a texture whose only image source is an extension has no fallback. */
+  readonly required = new Set<string>();
   private readonly imageOf = new Map<number, number>();
   private readonly samplerOf = new Map<string, number>();
   private readonly textureOf = new Map<string, number>();
@@ -461,6 +463,7 @@ class TextureTable {
       const json: Record<string, unknown> = {};
       if (ref.sourceExtension) {
         this.extensions.add(ref.sourceExtension);
+        this.required.add(ref.sourceExtension);
         json.extensions = { [ref.sourceExtension]: { source: image } };
       } else json.source = image;
       if (sampler >= 0) json.sampler = sampler;
@@ -969,6 +972,7 @@ export function buildGltfDocument(mesh: IMesh, opts: IGltfWriteOptions = {}): IG
     if (textures.samplers.length) json.samplers = textures.samplers;
     if (textures.textures.length) json.textures = textures.textures;
     if (textures.extensions.size) json.extensionsUsed = [...textures.extensions].sort();
+    if (textures.required.size) json.extensionsRequired = [...textures.required].sort();
     if (textures.untyped > 0) notes.push(`${textures.untyped} image(s) of unknown type were embedded as data: URIs (a buffer view needs a mimeType)`);
     // A primitive whose material samples a UV set it does not have (only when the source had one).
     let missing = 0;
