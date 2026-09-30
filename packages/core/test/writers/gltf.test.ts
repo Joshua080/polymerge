@@ -540,6 +540,25 @@ describe('glTF writer — appearance (materials, textures, per-corner UVs)', () 
     expectSameModel(await load(writeGlb(source), 'webp-out.glb'), source);
   });
 
+  it('an appearance layer that does not fit the mesh (a dangling image, mismatched UVs) is ignored with a note: valid output, plain materials', async () => {
+    const source = await load(glbBytes(buildGltf(textured())), 'textured.glb');
+    const dangling: IMesh = { ...source, appearance: { ...source.appearance!, images: source.appearance!.images.slice(0, 1) } };
+    const shortUvs: IMesh = { ...source, appearance: { ...source.appearance!, uvs: [Float32Array.from([0, 0, 1, 1, 0, 1])] } };
+    for (const broken of [dangling, shortUvs]) {
+      const doc = buildGltfDocument(broken);
+      expect(doc.notes).toEqual(['the appearance data does not match the mesh; materials were written without textures or UVs']);
+      const json = doc.json as Record<string, unknown> & { materials: { name: string; pbrMetallicRoughness: Record<string, unknown> }[] };
+      expect(json.images).toBeUndefined();
+      expect(json.textures).toBeUndefined();
+      expect(json.materials.map((m) => m.name)).toEqual(['Painted', 'Sticker']);
+      const bytes = writeGlb(broken);
+      await expectValid(bytes);
+      const back = await load(bytes, 'plain.glb');
+      expect(Array.from(back.faces)).toEqual(Array.from(source.faces));
+      expect(back.materials.map((m) => m.name)).toEqual(['Painted', 'Sticker']);
+    }
+  });
+
   it('instances with different UVs do not share a mesh', async () => {
     const spec = assembly();
     spec.meshes[1].primitives[0].attributes = { TEXCOORD_0: uvAttr(CUBE_CORNERS.flatMap(([x, y]) => [x, y])) };

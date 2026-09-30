@@ -410,8 +410,8 @@ function sniffImage(b: Uint8Array): string | undefined {
 
 /**
  * The document's images, samplers and textures, built from the texture references the materials
- * use: images one to one with `IMeshAppearance.images` (in first-use order), samplers and textures
- * shared by value.
+ * use: the images some slot references (in first-reference order; unreferenced ones are not
+ * written), samplers and textures shared by value.
  */
 class TextureTable {
   readonly images: Record<string, unknown>[] = [];
@@ -539,11 +539,17 @@ function definitionJson(def: IMaterialDefinition, textures: TextureTable): Recor
   return out;
 }
 
-/** The mesh's appearance layer when it is consistent with its materials and faces (else null). */
+/**
+ * The mesh's appearance layer when it is consistent with its materials, faces and images (else
+ * null: the materials are then written from their IMaterial summaries, with a note).
+ */
 function usableAppearance(mesh: IMesh): IMeshAppearance | null {
   const look = mesh.appearance;
   if (!look) return null;
-  const ok = look.materials.length === mesh.materials.length && look.uvs.every((uv) => uv.length === mesh.faceCount * 6);
+  const ok =
+    look.materials.length === mesh.materials.length &&
+    look.uvs.every((uv) => uv.length === mesh.faceCount * 6) &&
+    look.materials.every((def) => textureRefsOf(def).every((ref) => ref.image >= 0 && ref.image < look.images.length));
   return ok ? look : null;
 }
 
