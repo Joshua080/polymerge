@@ -5,12 +5,15 @@
  */
 import { Matrix4, Quaternion, Vector3 } from 'three';
 import { describe, expect, it } from 'vitest';
+import { remapTextureRefs } from '../../src/appearance.js';
 import { mulberry32 } from '../../src/diff/prng.js';
 import { createMesh } from '../../src/mesh.js';
 import { loadMesh } from '../../src/parsers/index.js';
-import type { IMesh } from '../../src/types.js';
+import type { IMaterialDefinition, IMesh, IMeshAppearance } from '../../src/types.js';
 import { buildGltfDocument, writeGlb, writeGltf, writeMesh } from '../../src/writers/index.js';
 import { asciiStl, buildGltf, CUBE_CORNERS, CUBE_TRIS, cubeTriangles, glbBytes, objText, utf8, type GltfSpec, type NodeSpec, type PrimitiveSpec } from '../parsers/helpers.js';
+import { mergeMeshes, resolveMerge } from '../../src/merge/index.js';
+import { appendFaces, def, png, pngImage, tex, textured as texturedLook, type ILookSpec } from '../merge/appearance-util.js';
 import { validateGltf } from './validate.js';
 
 type Quat = [number, number, number, number];
@@ -72,6 +75,30 @@ function expectSameModel(back: IMesh, m: IMesh): void {
   expect(back.materials).toEqual(m.materials);
   expect(back.faceMaterials).toEqual(m.faceMaterials);
   expect(back.vertexIds).toEqual(m.vertexIds);
+  if (m.appearance) expectSameAppearance(back, m);
+}
+
+/**
+ * The appearance layer, exactly: material definitions (texture references compared by the image's
+ * content, so image order does not matter), image names / types / URIs / bytes, and every face
+ * corner's UVs (a set no face has is not written, so trailing all-NaN sets are ignored).
+ */
+function expectSameAppearance(back: IMesh, m: IMesh): void {
+  const byContent = (look: IMeshAppearance): IMaterialDefinition[] => {
+    const hashes = [...new Set(look.images.map((i) => i.hash))].sort();
+    return look.materials.map((d) => remapTextureRefs(d, (i) => hashes.indexOf(look.images[i].hash)));
+  };
+  const images = (look: IMeshAppearance) =>
+    look.images.map(({ hash, name, mimeType, uri, data }) => ({ hash, name, mimeType, uri, bytes: data?.length })).sort((a, b) => (a.hash < b.hash ? -1 : 1));
+  const uvs = (look: IMeshAppearance): number[][] => {
+    const sets = [...look.uvs];
+    while (sets.length > 0 && sets[sets.length - 1].every(Number.isNaN)) sets.pop();
+    return sets.map((u) => Array.from(u));
+  };
+  expect(back.appearance, 'appearance read back').toBeDefined();
+  expect(byContent(back.appearance!)).toEqual(byContent(m.appearance!));
+  expect(images(back.appearance!)).toEqual(images(m.appearance!));
+  expect(uvs(back.appearance!)).toEqual(uvs(m.appearance!));
 }
 
 /** Zero errors and zero warnings from the Khronos validator; infos may only be NODE_EMPTY (a transform-only node the source had too). */
@@ -289,5 +316,244 @@ describe('glTF writer — meshes without a scene (STL / OBJ / merges of them)', 
     const back = await load(bytes, 'mat.glb');
     expect(Array.from(back.faceMaterials!)).toEqual(Array.from(m.faceMaterials!));
     expect(back.materials[1]).toEqual({ name: 'Brass', color: [0.9, 0.7, 0.2, 1], metalness: 1, roughness: 0.3 });
+  });
+});
+
+// ---- Appearance: materials, textures and per-corner UVs (docs/appearance-merge-design.md §8) -------
+
+const dataUri = (bytes: Uint8Array): string => `data:image/png;base64,${btoa(String.fromCharCode(...bytes))}`;
+const uvAttr = (data: number[]) => ({ data, type: 'VEC2' as const, componentType: 5126 });
+
+/**
+ * Every face as (its corners' positions, its material definition by content, its corner UVs), sorted:
+ * a round trip may regroup faces into primitives (by material and UV sets), so face order may change,
+ * but no face may change.
+ */
+function sortedFaces(m: IMesh): string[] {
+  const look = m.appearance!;
+  const hashes = look.images.map((i) => i.hash);
+  const defKey = (mi: number): string => (mi < 0 ? 'none' : JSON.stringify(remapTextureRefs(look.materials[mi], (i) => hashes[i] as unknown as number)));
+  const out: string[] = [];
+  for (let f = 0; f < m.faceCount; f++) {
+    const corners = [0, 1, 2].map((c) => Array.from(m.positions.subarray(m.faces[f * 3 + c] * 3, m.faces[f * 3 + c] * 3 + 3)));
+    const uvs = look.uvs.map((uv) => Array.from(uv.subarray(f * 6, f * 6 + 6)));
+    out.push(JSON.stringify([corners, defKey(m.faceMaterials?.[f] ?? -1), uvs]));
+  }
+  return out.sort();
+}
+
+/**
+ * A textured assembly: a panel whose two triangles meet at a UV seam (TEXCOORD_0 and TEXCOORD_1),
+ * under a scaled node inside a rotated root, and a box with its own texture. The panel's material
+ * uses every texture slot but normal (no tangents are written), a texture transform, MASK alpha,
+ * double-siding, two extensions (one with a texture) and extras; the box's is unlit.
+ */
+function textured(): GltfSpec {
+  return {
+    meshes: [
+      {
+        name: 'Panel',
+        primitives: [
+          {
+            positions: [0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 0, 0, 1, 1, 0, 0, 1, 0],
+            attributes: {
+              TEXCOORD_0: uvAttr([0, 0, 0.5, 0, 0.5, 0.5, 0.6, 0.1, 1, 0.6, 0.6, 0.6]),
+              TEXCOORD_1: uvAttr([0, 0, 1, 0, 1, 1, 0, 0, 1, 1, 0, 1]),
+            },
+            material: 0,
+          },
+        ],
+      },
+      { name: 'Box', primitives: [cubePrim({ material: 1, attributes: { TEXCOORD_0: uvAttr(CUBE_CORNERS.flatMap(([x, y, z]) => [x * 0.5 + z * 0.25, y * 0.5])) } })] },
+    ],
+    nodes: [
+      { name: 'Root', translation: [1.5, -2, 0.25], rotation: quat([0, 1, 0], 30), children: [1, 2] },
+      { name: 'Panel', mesh: 0, scale: [2, 2, 2] },
+      { name: 'Box', mesh: 1, translation: [3, 0, 0] },
+    ],
+    materials: [
+      {
+        name: 'Painted',
+        pbrMetallicRoughness: {
+          baseColorFactor: [1, 0.5, 0.25, 1],
+          metallicFactor: 0.2,
+          roughnessFactor: 0.7,
+          baseColorTexture: { index: 0, extensions: { KHR_texture_transform: { offset: [0.5, 0], rotation: 0.25, scale: [2, 2] } } },
+          metallicRoughnessTexture: { index: 1 },
+        },
+        occlusionTexture: { index: 1, texCoord: 1, strength: 0.5 },
+        emissiveTexture: { index: 0 },
+        emissiveFactor: [0.1, 0.05, 0],
+        alphaMode: 'MASK',
+        alphaCutoff: 0.3,
+        doubleSided: true,
+        extensions: { KHR_materials_clearcoat: { clearcoatFactor: 1, clearcoatTexture: { index: 1 } }, KHR_materials_emissive_strength: { emissiveStrength: 2 } },
+        extras: { studio: 'A' },
+      },
+      { name: 'Sticker', pbrMetallicRoughness: { baseColorTexture: { index: 2 } }, extensions: { KHR_materials_unlit: {} } },
+    ],
+    extra: {
+      images: [{ uri: dataUri(png([200, 40, 40])), name: 'albedo' }, { uri: dataUri(png([90, 90, 255])), name: 'orm' }, { uri: dataUri(png([40, 200, 40])) }],
+      samplers: [{ magFilter: 9729, minFilter: 9987, wrapS: 33648, wrapT: 10497 }],
+      textures: [{ source: 0, sampler: 0 }, { source: 1, sampler: 0 }, { source: 2 }],
+      extensionsUsed: ['KHR_texture_transform', 'KHR_materials_clearcoat', 'KHR_materials_emissive_strength', 'KHR_materials_unlit'],
+    },
+  };
+}
+
+describe('glTF writer — appearance (materials, textures, per-corner UVs)', () => {
+  it('a textured assembly: GLB and .gltf validate and read back with the same definitions, images and corner UVs', async () => {
+    const source = await load(glbBytes(buildGltf(textured())), 'textured.glb');
+    expect(source.appearance!.uvs).toHaveLength(2);
+    for (const [bytes, name] of [
+      [writeGlb(source), 'out.glb'],
+      [writeGltf(source), 'out.gltf'],
+    ] as const) {
+      await expectValid(bytes);
+      const back = await load(bytes, name);
+      expectSameModel(back, source);
+      expect(back.scene).toEqual(source.scene);
+      expect(back.appearance!.materials).toEqual(source.appearance!.materials); // same image order too
+    }
+    const doc = buildGltfDocument(source);
+    expect(doc.notes).toEqual([]);
+    const json = doc.json as Record<string, unknown> & {
+      images: Record<string, unknown>[];
+      samplers: unknown[];
+      textures: unknown[];
+      meshes: { primitives: { attributes: Record<string, number> }[] }[];
+      accessors: { count: number }[];
+    };
+    // Images are embedded in the buffer with their type; the shared sampler is written once.
+    expect(json.images.map((i) => [i.name, i.mimeType, typeof i.bufferView])).toEqual([
+      ['albedo', 'image/png', 'number'],
+      ['orm', 'image/png', 'number'],
+      [undefined, 'image/png', 'number'],
+    ]);
+    expect(json.samplers).toEqual([{ magFilter: 9729, minFilter: 9987, wrapS: 33648, wrapT: 10497 }]);
+    expect(json.textures).toEqual([{ source: 0, sampler: 0 }, { source: 1, sampler: 0 }, { source: 2 }]);
+    expect(json.extensionsUsed).toEqual(['KHR_materials_clearcoat', 'KHR_materials_emissive_strength', 'KHR_materials_unlit', 'KHR_texture_transform']);
+    // The panel's 4 welded vertices become 5 glTF vertices: vertex 0 sits on both sides of a UV seam
+    // (the other shared corner has equal UVs in set 0 but not in set 1, so it splits too: 6 in all).
+    const panel = json.meshes[0].primitives[0].attributes;
+    expect(Object.keys(panel).sort()).toEqual(['POSITION', 'TEXCOORD_0', 'TEXCOORD_1']);
+    expect(source.vertexCount).toBe(4 + 8);
+    expect(json.accessors[panel.POSITION].count).toBe(6);
+    expect(json.accessors[json.meshes[1].primitives[0].attributes.POSITION].count).toBe(8);
+  });
+
+  it('a definition keeps glTF\'s metallic default (1); only an IMaterial with unknown metalness is written as 0', async () => {
+    const g = buildGltf({ meshes: [{ primitives: [cubePrim({ material: 0 })] }], nodes: [{ mesh: 0 }], materials: [{ name: 'Default' }] });
+    const source = await load(glbBytes(g), 'default.glb');
+    expect(source.materials[0]).toEqual({ name: 'Default', color: [1, 1, 1, 1], metalness: 1, roughness: 1 });
+    const json = buildGltfDocument(source).json as { materials: unknown[] };
+    expect(json.materials).toEqual([{ name: 'Default' }]);
+    const back = await load(writeGlb(source), 'default.glb');
+    expect(back.materials[0].metalness).toBe(1);
+    expect(back.appearance!.materials[0].metallicFactor).toBe(1);
+  });
+
+  it('an external image stays a reference (never fetched, never embedded)', async () => {
+    const spec = textured();
+    (spec.extra!.images as { uri: string }[])[2] = { uri: 'textures/sticker.png' };
+    const source = await load(glbBytes(buildGltf(spec)), 'external.glb');
+    expect(source.appearance!.images[2]).toEqual({ hash: 'uri:textures/sticker.png', uri: 'textures/sticker.png' });
+    const bytes = writeGltf(source);
+    const v = await validateGltf(bytes, (uri) => {
+      expect(uri).toBe('textures/sticker.png');
+      return png([40, 200, 40]);
+    });
+    expect([v.errors, v.warnings, v.problems, v.notes]).toEqual([0, 0, [], []]);
+    expect((JSON.parse(new TextDecoder().decode(bytes)) as { images: unknown[] }).images[2]).toEqual({ uri: 'textures/sticker.png' });
+    expectSameModel(await load(bytes, 'external.gltf'), source);
+  });
+
+  it('a normal map keeps its scale; its one validator complaint is the tangent space (no normals are written, so clients generate it)', async () => {
+    const spec = textured();
+    (spec.materials![0] as Record<string, unknown>).normalTexture = { index: 1, scale: 0.8 };
+    const source = await load(glbBytes(buildGltf(spec)), 'normal.glb');
+    expect(source.appearance!.materials[0].normalTexture).toEqual({ image: 1, texCoord: 0, sampler: { magFilter: 9729, minFilter: 9987, wrapS: 33648, wrapT: 10497 }, scale: 0.8 });
+    const bytes = writeGlb(source);
+    const v = await validateGltf(bytes);
+    expect(v.errors).toBe(0);
+    expect(v.problems.map((p) => p.split(' ')[0])).toEqual(['MESH_PRIMITIVE_GENERATED_TANGENT_SPACE']);
+    expectSameModel(await load(bytes, 'normal.glb'), source);
+  });
+
+  it('a merge of textured models round-trips: every face comes back with its corners, material definition and corner UVs', async () => {
+    // Four 2 × 2-quad islands, each in its own cell of texture space; materials sample real PNGs.
+    const [albedo, red, redV2, decal] = [pngImage('albedo', [200, 200, 200]), pngImage('red', [220, 20, 20]), pngImage('red v2', [255, 60, 60]), pngImage('decal', [20, 20, 220])];
+    const paint = def('Paint', { baseColorTexture: tex(0), roughnessFactor: 0.5 });
+    const quadrant = (i: number, j: number): number => (i < 2 ? 0 : 1) + (j < 2 ? 0 : 2);
+    const cells: Array<[number, number]> = [
+      [0, 0],
+      [0.3, 0],
+      [0, 0.3],
+      [0.3, 0.3],
+    ];
+    const red1 = def('Red', { baseColorTexture: tex(1) });
+    const spec = (moved: Record<number, [number, number]>, over: Partial<ILookSpec>): ILookSpec => ({
+      nx: 5,
+      ny: 5,
+      island: quadrant,
+      place: (k) => {
+        const [cu, cv] = moved[k] ?? cells[k];
+        return [cu - (k % 2 ? 2 : 0) * 0.1, cv - (k >= 2 ? 2 : 0) * 0.1, 0.1];
+      },
+      materials: [paint, red1],
+      images: [albedo, red],
+      material: (i, j) => (quadrant(i, j) === 1 ? 1 : 0), // island 1 is red, the rest Paint
+      ...over,
+    });
+    const base = texturedLook(spec({}, {}));
+    // Ours: island 0 moved; Paint recoloured and made smoother.
+    const ours = texturedLook(spec({ 0: [0.6, 0] }, { materials: [{ ...paint, baseColorFactor: [1, 0.9, 0.8, 1], roughnessFactor: 0.2 }, red1] }));
+    // Theirs: island 3 moved, the red texture swapped, Paint recoloured differently (a conflict), and a
+    // new decal face (its own material, texture and UVs) below the bottom edge.
+    const theirsGrid = texturedLook(spec({ 3: [0.6, 0.6] }, { images: [albedo, redV2], materials: [{ ...paint, baseColorFactor: [0.7, 0.8, 1, 1] }, red1] }));
+    // The new face's material is the mesh's own materials (Paint, Red) followed by the extra one: index 2.
+    const theirs = appendFaces(theirsGrid, [0.5, -1, 0], [1, 0, 25], [2], [[0.9, 0.9, 0.95, 0.9, 0.9, 0.95]], [def('Decal', { baseColorTexture: tex(2) })]);
+    theirs.appearance!.images.push(decal);
+    const r = mergeMeshes(base, ours, theirs, { logger: { info() {}, warn() {} } });
+    expect(r.conflicts.map((c) => [Object.keys(c.kinds)[0], c.appearance?.properties])).toEqual([['material-property', ['baseColorFactor']]]);
+    const merged = resolveMerge(r, { 0: 'theirs' }).merged;
+    expect(merged.materials.map((m) => m.name)).toEqual(['Paint', 'Red', 'Decal']);
+    for (const [bytes, name] of [
+      [writeGlb(merged), 'merged.glb'],
+      [writeGltf(merged), 'merged.gltf'],
+    ] as const) {
+      await expectValid(bytes);
+      const back = await load(bytes, name);
+      expect(sortedFaces(back)).toEqual(sortedFaces(merged));
+      expect(back.materials.map((m) => m.name).sort()).toEqual(['Decal', 'Paint', 'Red']);
+    }
+    // What was merged is what is written: ours' roughness, theirs' colour, theirs' texture, the decal.
+    const back = await load(writeGlb(merged), 'merged.glb');
+    const byName = (n: string): IMaterialDefinition => back.appearance!.materials[back.materials.findIndex((m) => m.name === n)];
+    expect(byName('Paint')).toMatchObject({ baseColorFactor: [0.7, 0.8, 1, 1], roughnessFactor: 0.2 });
+    expect(back.appearance!.images[byName('Red').baseColorTexture!.image].hash).toBe(redV2.hash);
+    expect(back.appearance!.images[byName('Decal').baseColorTexture!.image].hash).toBe(decal.hash);
+  });
+
+  it('instances with different UVs do not share a mesh', async () => {
+    const spec = assembly();
+    spec.meshes[1].primitives[0].attributes = { TEXCOORD_0: uvAttr(CUBE_CORNERS.flatMap(([x, y]) => [x, y])) };
+    spec.meshes[1].primitives[0].material = 2;
+    spec.materials!.push({ name: 'Decal', pbrMetallicRoughness: { baseColorTexture: { index: 0 } } });
+    spec.extra = { images: [{ uri: dataUri(png([10, 20, 30])) }], textures: [{ source: 0 }] };
+    const source = await load(glbBytes(buildGltf(spec)), 'bolts.glb');
+    // Both bolts share the "Bolt" mesh, UVs included.
+    const json0 = buildGltfDocument(source).json as { meshes: { name: string }[] };
+    expect(json0.meshes.map((m) => m.name)).toEqual(['Body', 'Bolt', 'Plate']);
+    // Re-UV one instance (the faces of Bolt B) only.
+    const g = source.groups.find((x) => x.name === 'Bolt B')!;
+    const uvs = Float32Array.from(source.appearance!.uvs[0]);
+    for (let q = g.faceStart * 6; q < (g.faceStart + g.faceCount) * 6; q += 2) uvs[q] += 0.5;
+    const edited: IMesh = { ...source, appearance: { ...source.appearance!, uvs: [uvs] } };
+    const doc = buildGltfDocument(edited);
+    expect((doc.json as { meshes: { name: string }[] }).meshes.map((m) => m.name)).toEqual(['Body', 'Bolt', 'Plate', 'Bolt']);
+    const bytes = writeGlb(edited);
+    await expectValid(bytes);
+    expectSameModel(await load(bytes, 'bolts.glb'), edited);
   });
 });
