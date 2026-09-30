@@ -148,9 +148,10 @@ Wrote merged.stl
 - different geometry added on the same edge or in the same space;
 - the same part moved differently;
 - different whole-model transforms;
-- a **collision**: two edits that are each fine but pass surfaces through each other, or fold faces over, when combined.
+- a **collision**: two edits that are each fine but pass surfaces through each other, or fold faces over, when combined;
+- for glTF/GLB, the same **material property**, face material or UV island changed differently, or two islands moved onto the same texels of a shared image ([appearance rules](docs/appearance-merge-design.md)).
 
-**What does not conflict.** Edits to different vertices compose, even adjacent ones. So do the same change made on both sides, and a unit re-export on one side with local edits on the other: you get the edits, in the new units.
+**What does not conflict.** Edits to different vertices compose, even adjacent ones. So do the same change made on both sides, and a unit re-export on one side with local edits on the other: you get the edits, in the new units. For glTF, different properties of one material compose (a metallic material with a darker colour), and so do neighbouring repaints: ours paints the door red, theirs paints its handle chrome, and you get both.
 
 ### Review a merge in the browser
 
@@ -309,7 +310,8 @@ polymerge git-diff | git-merge | git-setup       git drivers, and the config to 
   - Independent edits are combined, including frame composition (a unit re-export on one side plus edits on the other).
   - Conflicts are detected per region and resolved per region.
   - Collisions are detected: combined edits that make surfaces cross or fold.
-  - git diff and merge drivers.
+  - **Materials, face materials, UVs and texture references of glTF/GLB files** are merged too: material properties one by one, face materials face by face, UVs as whole islands, and textures by their bytes. The merged appearance is written into the GLB / `.gltf` output.
+  - git diff and merge drivers, including for glTF/GLB.
 - **Scale.** Tested up to about 100k vertices:
   - a diff takes about 0.3 s (Tier 1) to 2.5 s (Tier 3);
   - a 100k-vertex merge takes about 1.2 s, of which the collision check is about 25%.
@@ -323,8 +325,17 @@ polymerge git-diff | git-merge | git-setup       git drivers, and the config to 
   A merge can be free of collisions and still be wrong for your part. Review it.
 - **Re-meshed sides can't be merged vertex by vertex.** If one side re-tessellated the model, the merge reports a whole-model `lineage` conflict: you pick one side's whole mesh. Transferring edits between tessellations is future work.
 - **A side that splits a part and moves half of it** is seen as local moves, not a part motion. The other side's edits on that half then conflict.
-- **Materials, UVs and normals are not merged**, only geometry and groups. Textures are ignored.
-- **No glTF/GLB output.** Merges write STL or OBJ.
+- **Appearance merges for glTF/GLB only** ([rules](docs/appearance-merge-design.md)). STL and OBJ have no materials or UVs to merge (OBJ `vt` / `.mtl` and STL colours are not merged). Limits:
+  - texel content is never merged or judged: two different images in one slot conflict, and a UV edit on one side with an image edit on the other is merged unjudged;
+  - texture-space overlap is flagged only for islands on the same image that overlap in raw UV coordinates (not through wrapping or `KHR_texture_transform`);
+  - a repaint or re-UV on faces the other side remeshed is a conflict, not transferred;
+  - vertex colours, normals and tangents, and `KHR_materials_variants` are not merged.
+- **The merge review in the viewer** lists appearance conflicts as cards and resolves them, but does not yet highlight them or show textures: it shows geometry only.
+- **glTF output keeps geometry, structure and appearance, but not everything else.**
+  - Normals and tangents are not written (viewers compute flat normals; a normal-mapped material makes validators warn that its tangent space is generated).
+  - Skinned, morphed and GPU-instanced meshes are written as static geometry in their posed shape.
+  - Animations, cameras, lights, `extras` and most extensions are dropped.
+  - Node renames or re-parenting in a branch are not merged; the base's names and hierarchy win.
 - **Not supported on input:**
   - `.gltf` files with external `.bin`/image files;
   - Draco- or meshopt-compressed glTF;
@@ -362,8 +373,8 @@ apps/web        the Vite + three.js viewer
 action/         the pull-request GitHub Action (action.yml at the root runs it)
 fixtures/       known-answer model pairs and their generator
 examples/       the three-way merge example used in this README
-docs/           design notes (three-way merge semantics) and README images
-scripts/        end-to-end checks (CLI → browser, merge review, git, packed install) and image capture
+docs/           design notes (merge semantics, appearance merge, write-back security, the GitHub Action) and README images
+scripts/        end-to-end checks (CLI → browser, merge review, git, packed install, the Action) and image capture
 ```
 
 CI runs `npm run verify` on every push. One of its checks, `scripts/e2e-pack.mjs`, packs both npm packages, installs them into an empty project and uses them from there: the CLI, the library example above, and the bundled viewer in a real browser.

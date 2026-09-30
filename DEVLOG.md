@@ -244,6 +244,93 @@ Writing it found three existing problems:
 | D39 | Shared meshes stay shared only while one local dataset fits every instance exactly. | Instancing is kept where it is honest, never at the cost of geometry. |
 | D40 | Normals are not written; skin, morph and GPU instances are written static in the baked pose. | IMesh carries no normals, and invented smooth normals would change shading; the posed shape is what polymerge diffed and merged. |
 
+### Milestone 4 — Materials, UVs and texture references in merge (glTF) ✅
+
+Geometry rules do not transfer to appearance, so the design was written first, in its own commit: `docs/appearance-merge-design.md`, linked from `docs/merge-design.md`. It works out the unit of meaning for each kind of appearance data:
+
+| Data | Unit of meaning | Merged |
+|---|---|---|
+| Material definition (colour, metalness, roughness, emissive, alpha mode, double-sided, extensions) | one **property**; a colour is one value, and a texture slot (image + UV set + sampler + transform) is one property | property by property |
+| Face material assignment | one **face**; paint is piecewise constant, so a boundary between materials is normal, not damage | face by face |
+| UVs | the **island**: faces glued along edges whose end corners carry the same UVs. Half an island from each side is garbage, even when no corner changed twice | whole islands, never corner by corner |
+| Images | the **whole image**, identified by content (a 64-bit hash of the bytes; an external URI by its text) | as part of a slot |
+
+**Five new conflict kinds:**
+- `material-property`: both sides changed the same property of the same material to different values. An add/add material with different values is the same case, against glTF defaults.
+- `material-assignment`: both sides re-assigned the same face to different materials. Only the faces both assigned differently conflict, grouped into connected patches.
+- `uv-layout`: changes to one island from both sides that can't be taken whole from one of them.
+- `uv-overlap`: the appearance version of `collision`. Two sides each move a *different* island into the same empty corner of a shared image: no face was changed twice, yet both islands now show the same texels.
+- `appearance-geometry`: an appearance unit that can't be decided without also deciding geometry (a repaint or re-UV on faces the other side remeshed, or new faces glued into a UV conflict). It joins a geometry region, which then decides both.
+
+**Deliberately not conflicts:**
+- different properties of one material: ours makes it metallic, theirs darkens it, and you get a dark metal;
+- neighbouring repaints: ours paints the door red, theirs paints its handle chrome, so only the handle faces conflict;
+- a deletion plus an appearance edit on the same faces: nothing is left to paint;
+- a UV edit on one side and an image edit on the other, since texels are never judged;
+- the same change on both sides (the same image is the same bytes, whatever its name or index).
+
+**Taking a UV union whole.** Where both sides' UV changes touch the same faces, the union is taken whole from the side whose changes contain the other's; otherwise it's a `uv-layout` conflict. Per-face three-way merging inside an island is never used, since it tears islands. A test proves it: edits to different corners of one island conflict as the whole island, and every resolution gives exactly one version's UVs.
+
+**Identity.**
+- Materials match by name (duplicates told apart by rank), then rename detection over the faces both versions kept, else they're new. The same new name on both sides is one material.
+- A rename on one side and an edit on the other merge into the renamed material with the edit.
+- Numbers compare at float32 precision, so a float32-widened re-export is not an edit.
+
+**Loading.**
+- `IMesh.appearance` (glTF only) holds the full material definitions in a parallel array (`IMaterial` is unchanged), images as bytes or URIs (never decoded or fetched), and per-**corner** UVs, carried through the welder: vertices weld by position, but seams give one position different UVs per side.
+- Materials are read from the glTF JSON before texture stripping, so three.js never decodes an image.
+
+**API and CLI.**
+- Appearance conflicts get ids **after** the geometry ones, so `--pick`, `--resolve`, `resolveMerge`, the git driver and write-back all work unchanged. Unresolved means base, per unit.
+- `IMergeResult.appearance` has stats; `IMergeOptions` gains `mergeAppearance` and `uvEpsilon`. A `uv-overlap` created by chosen resolutions is a warning, like `collision`.
+- The CLI reports appearance conflicts (the material and properties, or the face count and UV set) and an "Appearance" line. Merging glTF to STL or OBJ prints a note that materials, UVs and textures aren't in that file.
+- Appearance merges only when all three inputs carry it. Otherwise it merges geometry only, with a log line, so a format that can't hold materials never reads as deleting them.
+
+**Writing it back (phase 3, through item 3's `SEAM(appearance)` points in `writers/gltf.ts`).**
+- **Materials** are written from their full definitions, with glTF defaults omitted, so `metallicFactor` keeps glTF's default of 1. Only a material without a definition (STL/OBJ colours) still writes unknown metalness as 0.
+- **Images** are written as read: embedded bytes as buffer views with their mimeType, external URIs as references. Samplers and textures are rebuilt from the slots and shared by value. `extensionsUsed` is written, and `extensionsRequired` for a texture whose only source is an extension (WebP, basisu).
+- **UVs are unwelded on write.** A glTF vertex is a welded vertex plus its corner's UVs in every set, so seams duplicate positions and the loader welds them back. Primitives split by source primitive, material and which UV sets are present, so no accessor holds NaN.
+- **Guard.** An appearance layer that doesn't fit the mesh (a dangling image index, UVs of the wrong length) is ignored with a note; the output stays valid, with plain materials.
+- **Found on the way.** A local coordinate that is exactly 0 comes back from the inverse world matrix as about 1e-8 under a rotation, and the exact un-bake never reached 0: three vertices of a rotated textured panel were written a few ulps off. Noise-sized coordinates are now also tried snapped to 0.
+- **Reader change.** `alphaCutoff` is kept only in MASK mode, 0.5 elsewhere, so a write/read cycle can't invent a change for the next merge.
+
+**Tests.**
+- **44 merge scenarios** (`packages/core/test/merge/appearance.test.ts`), each written as GLB and read back face by face. They cover:
+  - property-level merge, with conflicts left at base, and rename vs edit;
+  - reordered materials, add/add, and a texture swapped on both sides (the same bytes converge, different bytes conflict);
+  - neighbouring repaints and the door/handle case;
+  - different islands moved by each side; the no-half-islands proof; two islands moved into the same texture space (`uv-overlap`), with negative controls;
+  - shape and appearance composing; a hole beating a repaint; retriangulation vs repaint (`appearance-geometry`, all three resolutions);
+  - resolution ids and mixed resolutions; symmetry and identities.
+- **Parser**, 9 tests: seam UVs, degenerate faces dropped in sync, TEXCOORD_1, quantised UVs, full definitions, an embedded image hashing like a data URI, broken references.
+- **Writer**, 23 tests in total (8 new): round trips compare definitions, image hashes and every corner's UVs; a normal map keeps its scale; a WebP-only texture gets its required extension; instances with different UVs; a real merge round-tripped; the dangling-appearance fallback.
+- **CLI**, 9 tests. The git driver on `.glb` exits 1 with the base material written for a material conflict, and 0 for `--resolve ours|theirs` or a clean appearance merge. A texture conflict writes the base image bytes, and `--pick` writes exactly the chosen side's bytes.
+- **`e2e-git`** merges a textured `.glb` in real git: a conflict stops as `UU` with the base colour, the other edits are merged, and `polymerge resolve --pick 0=theirs` writes theirs' colour and commits clean.
+- **Validator.** Every GLB and `.gltf` written in these tests has 0 errors and 0 warnings, except the normal-map test, whose one warning (`MESH_PRIMITIVE_GENERATED_TANGENT_SPACE`, since no normals are written) is asserted.
+- **Cost.**
+  - Zero for STL/OBJ.
+  - At 205k faces (60 islands moved, 10k faces repainted, 3,000 vertex edits) the appearance merge adds about 0.24 s warm to a 0.39 s geometry merge.
+  - The 100k merge perf case runs in 1.26 s quiet (2.1 s under load from the other agents), against an unchanged 15 s bound.
+  - Writing a 205k-face textured GLB takes 0.14–0.2 s, and reading it back about 0.25 s.
+
+| # | Decision | Why |
+|---|----------|-----|
+| D41 | Definitions merge per property, assignment per face, UVs only as whole islands. | Each is its data's unit of meaning: independent parameters, piecewise-constant paint, a layout that is only valid as a whole island. |
+| D42 | A UV union is taken whole from the side whose changes contain the other's; otherwise it's a `uv-layout` conflict. | It avoids false conflicts (both sides move an island, one also stitches a neighbour) without ever mixing two layouts. |
+| D43 | `uv-overlap` needs islands from different sides on a shared image, overlapping in raw UV space and new in all three versions; after resolution it's a warning. | It's provable and attributable, like `collision`. Overlap through wrapping or transforms can't be proven without judging texels. |
+| D44 | Materials match by name, then by rename over kept faces, else they're new. Images match by content hash. | Indices are meaningless after welding; a rename plus an edit must not read as delete plus add. |
+| D45 | Deletion beats an appearance edit; replacement is `appearance-geometry`, decided with the geometry region. | A hole leaves nothing to paint, but a remesh would silently drop the other side's repaint. |
+| D46 | Appearance conflicts take ids after the geometry conflicts. | Every resolution path (`--pick`, `--resolve`, the driver, write-back) works unchanged, and existing ids never move. |
+| D47 | Full definitions live in a parallel array; `IMaterial` is untouched. | Existing `toEqual` tests pass unchanged, and summaries are re-derived with three.js' mapping. |
+| D48 | Appearance merges only when all three inputs carry it. | STL/OBJ behaviour is unchanged, and a format that can't hold materials must never read as deleting them. |
+| D49 | UVs are unwelded on write, keyed by (welded vertex, the corner's UVs in every set). | A glTF vertex carries its UVs, so seams duplicate positions while un-baking stays cached per welded vertex. |
+
+**Not done:**
+- **Viewer.** The merge review lists appearance conflicts as cards and resolves them through the worker, but selecting one highlights nothing, and there is no textured render. It needs `IMergeView` to carry `appearance.faceConflict` and `faceChangedBy`, a textured render mode (decode the images in the browser; per-corner UVs map straight onto the non-indexed triangle soup), hover previews that swap material and UVs, images sent from the worker once, and a GLB merge demo with an e2e test. About 1–2 days.
+- Texel content is never merged or judged, and appearance isn't transferred across tessellations (a replacement is a conflict, and `lineage` takes a whole side).
+- Vertex colours, normals and tangents, `KHR_materials_variants`, animated material properties and morph-target UVs aren't merged.
+- Two materials can end up with the same name if one side renames a material to a name the other side newly introduces; both are kept.
+
 ### Investigation — shareable links (`polymerge share`): options, not built
 
 **The need.** Someone without polymerge installed opens a link and sees the interactive diff or merge review.
@@ -328,6 +415,28 @@ Results:
 1. Is ~8 MB of LGPL wasm, as an optional download, acceptable?
 2. Should STEP be view/diff only, with merge refusing it?
 3. Which CAD tools' STEP exports matter? They decide the fixtures.
+
+### State at end of session 8
+
+**Verified.** `npm run verify` passes locally on the integrated branch in 2m45s (1m40s when nothing else was running), and CI is green on GitHub, including the new `Model diff` render job. It covers:
+- typecheck, including the action's JavaScript;
+- 647 unit / fixture / merge / web / action tests (+100 conditional fixture skips) and 6 perf tests;
+- build;
+- smoke (21/21 browser cases), e2e-view, e2e-worker, e2e-merge, e2e-git (including saving from the review, and glTF and textured-glTF merges in real git), e2e-action and e2e-pack.
+
+**Not verified** (needs the real thing):
+- **The pull-request comment on real GitHub.** The render half ran on this PR's own runs, but with no model changes. The comment half needs the workflow on `main`, plus a PR that changes a model. Whether the commit-pinned `raw` image URLs render for signed-in readers of a **private** repository is unverified.
+- Git LFS downloading from a real remote, and macOS/Windows runners for the action.
+- The review's Save on Windows (the browser launcher `cmd /c start` probably cuts the URL at `&`, so no token reaches the page: no Save, and it fails safe), and in browsers other than Chromium.
+
+**Known limits / next steps**
+1. **Merge review for appearance:** highlight appearance conflicts and show textures (about 1–2 days).
+2. **Publishing.** Session 6's release is still pending on the owner's `NPM_TOKEN` and a `v0.1.1` tag. This session's work would go out as **0.2.0** (new features: glTF output, appearance merge, write-back, the action), and the action's docs assume a `v1` tag that doesn't exist yet.
+3. **The Action's first live run.** After merging to `main`, open a small PR that changes a model and check the comment, the image branch and the private-repo behaviour.
+4. **Shareable links and STEP:** written up above, with decisions needed from the owner.
+5. Deformation transfer for `lineage` conflicts, and transferring appearance across tessellations.
+6. Carried over: parsing in the worker; chunked scene building for very large results; per-model Z-up in the viewer.
+7. The CLI doesn't print the glTF writer's notes (static skin geometry, faces with no node).
 
 ---
 
