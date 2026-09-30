@@ -3,18 +3,20 @@
  * worker and show the merged model coloured by who shaped each face (MERGE_COLORS). Conflict
  * regions are orange until resolved. Click a region (or its card) to select it: its versions
  * appear as ghosts (ours blue, theirs purple, base grey), and Ours / Theirs / Base — buttons or
- * keys 1 / 2 / 3 — resolve it. The result downloads as STL / OBJ, and the equivalent CLI command
+ * keys 1 / 2 / 3 — resolve it. The result downloads as STL / OBJ / GLB / glTF, and the equivalent CLI command
  * reproduces it. Opened by `polymerge review <path>`, it can also save the result to <path> and
  * stage it ("Save to repository"; the server side and its checks: docs/write-back-security.md).
  */
 import {
   MERGE_COLORS,
   MeshLoadError,
+  WRITABLE_FORMATS,
   writeMesh,
   type IMergeConflict,
   type MergeResolution,
   type SourceFormat,
   type Vec3,
+  type WritableFormat,
 } from 'polymerge-core';
 import * as THREE from 'three';
 import { findMergeDemo, MERGE_DEMOS } from './dev/merge-demos.js';
@@ -661,7 +663,7 @@ export class MergeApp {
       setChildren(this.el.output, h('p', { class: 'muted' }, 'The merged model can be downloaded once the merge has run.'));
       return;
     }
-    const download = (format: 'stl' | 'obj'): HTMLElement =>
+    const download = (format: WritableFormat): HTMLElement =>
       h('button', { class: 'small', dataset: { download: format }, onclick: () => this.download(format) }, `Download .${format}`);
     const command = this.command();
     const copy = h('button', { class: 'small', onclick: () => void navigator.clipboard?.writeText(command.join('\n')) }, 'Copy');
@@ -673,7 +675,7 @@ export class MergeApp {
         { class: 'muted small' },
         v.clean ? 'Nothing is unresolved.' : 'Unresolved regions are written in their BASE state (as the CLI does).',
       ),
-      h('div', { class: 'row buttons' }, download('stl'), download('obj')),
+      h('div', { class: 'row buttons' }, ...WRITABLE_FORMATS.map(download)),
       h('p', { class: 'muted small' }, 'Same result from the command line:'),
       h('pre', { class: 'merge-command' }, command.join('\n')),
       h('div', { class: 'row' }, copy),
@@ -835,12 +837,15 @@ export class MergeApp {
       .sort(([a], [b]) => Number(a) - Number(b))
       .map(([id, r]) => `--pick ${id}=${r}`);
     const name = (s: MergeSide): string => q(this.models[s]?.name ?? `${s}.stl`);
-    const out = [[`polymerge merge ${name('base')} ${name('ours')} ${name('theirs')}`, '-o merged.stl', ...picks].join(' ')];
+    // Suggest the base's own format when it is writable (a glTF base keeps its nodes that way).
+    const ext = (this.models.base?.name ?? '').toLowerCase().match(/\.([^.]+)$/)?.[1];
+    const format = WRITABLE_FORMATS.find((f) => f === ext) ?? 'stl';
+    const out = [[`polymerge merge ${name('base')} ${name('ours')} ${name('theirs')}`, `-o merged.${format}`, ...picks].join(' ')];
     if (this.repoPath) out.push([`polymerge resolve ${q(this.repoPath)}`, ...picks].join(' '));
     return out;
   }
 
-  private download(format: 'stl' | 'obj'): void {
+  private download(format: WritableFormat): void {
     const v = this.view;
     if (!v) return;
     const stem = (this.models.base?.name ?? 'model').replace(/\.[^.]+$/, '');

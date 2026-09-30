@@ -140,6 +140,8 @@ Wrote merged.stl
 
 `--resolve ours|theirs|base` resolves every conflict at once. `--report conflicts.json` writes the conflicts and statistics as JSON.
 
+`-o merged.glb` (or `.gltf`) writes glTF that keeps the base file's node hierarchy, node names, transforms and meshes; a node that one side moved by its transform keeps that transform.
+
 **What conflicts.** The rules are in [docs/merge-design.md](docs/merge-design.md). In short:
 - the same vertex moved differently on the two sides;
 - a vertex deleted on one side while the other side edited it or built on it;
@@ -190,8 +192,8 @@ polymerge git-setup      # prints the lines below
 # .gitattributes
 *.stl  diff=polymerge merge=polymerge
 *.obj  diff=polymerge merge=polymerge
-*.gltf diff=polymerge
-*.glb  diff=polymerge
+*.gltf diff=polymerge merge=polymerge
+*.glb  diff=polymerge merge=polymerge
 
 git config --global diff.polymerge.command "polymerge git-diff"
 git config --global difftool.polymerge.cmd 'polymerge view "$LOCAL" "$REMOTE" --name "$MERGED"'
@@ -204,7 +206,7 @@ Then:
 git diff -- part.stl                              # structural report instead of "Binary files differ"
 git log -p --ext-diff -- part.stl                 # history
 git difftool -y -t polymerge HEAD~1 -- part.stl   # visual diff in the browser
-git merge feature                                 # STL/OBJ merged three-way; a real conflict marks the file as conflicted
+git merge feature                                 # models merged three-way; a real conflict marks the file as conflicted
 polymerge review part.stl                         # see the conflicts in the browser, pick by clicking, "Save to repository"
 git commit                                        # after saving; or: polymerge resolve part.stl --pick 0=theirs && git add part.stl
 ```
@@ -262,7 +264,7 @@ The engine logs every decision to the console (`[polymerge] …`). Pass `logger:
 polymerge diff <base> <target> [--json out.json|-] [--force-tier 1|2|3] [--exit-code] [--top N] [-q]
 polymerge view <base> <target> [--port N] [--no-open]
 polymerge view <base> <ours> <theirs>            merge review: see conflicts, resolve by clicking
-polymerge merge <base> <ours> <theirs> [-o out.stl|obj] [--resolve ours|theirs|base] [--pick id=side]
+polymerge merge <base> <ours> <theirs> [-o out.stl|obj|glb|gltf] [--resolve ours|theirs|base] [--pick id=side]
                 [--report x.json] [--no-collision-check]
 polymerge review <path>                          merge review of a conflicted git merge; saves and stages <path>
 polymerge resolve <path> --pick <id>=<side>      finish a conflicted git merge of a model
@@ -277,7 +279,7 @@ polymerge git-diff | git-merge | git-setup       git drivers, and the config to 
 
 1. **Normalise.** STL, OBJ and glTF/GLB are loaded with the three.js loaders and converted into one mesh form:
    - vertices are welded;
-   - glTF node transforms are baked in.
+   - glTF node transforms are baked in, and the scene (nodes, transforms, meshes) is recorded alongside, so glTF output can rebuild it.
 
    The same geometry therefore gives the same mesh in any format.
 2. **Correspond, in tiers.** The first tier that clears its quality threshold wins, and every attempt is logged.
@@ -297,7 +299,7 @@ polymerge git-diff | git-merge | git-setup       git drivers, and the config to 
 **Handles**
 - **Formats.**
   - Input: STL (ASCII and binary), OBJ, GLB, and `.gltf` with embedded buffers.
-  - Output for merges: STL and OBJ (OBJ keeps groups).
+  - Output for merges: STL, OBJ (keeps groups), GLB and self-contained `.gltf` (keep the base's nodes, names, transforms and meshes; positions round-trip bit for bit).
 - **Diff.**
   - Direct vertex edits, re-ordered files, and local topology edits (holes, new patches, re-triangulated areas).
   - Whole-model moves, rotations and unit conversions (mm, cm, m, in, ft).
