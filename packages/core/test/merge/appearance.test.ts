@@ -11,6 +11,7 @@ import { loadMesh } from '../../src/parsers/index.js';
 import type { IMaterialDefinition, IMergeResult, IMesh } from '../../src/types.js';
 import { captureLogger, cylinder, grid, silent, withMoves } from '../diff/util.js';
 import { buildGltf, glbBytes } from '../parsers/helpers.js';
+import { writeGlb } from '../../src/writers/index.js';
 import {
   appendFaces,
   arraysOf,
@@ -21,6 +22,7 @@ import {
   image,
   quadFace,
   reverseMaterials,
+  sortedFaces,
   tex,
   textured,
   withLook,
@@ -64,8 +66,17 @@ function uvOfBaseFace(r: IMergeResult, f: number, k = 0): number[] | undefined {
 const close = (a: ArrayLike<number> | undefined, b: ArrayLike<number>): boolean =>
   !!a && a.length === b.length && Array.from(a).every((x, i) => Math.abs(x - b[i]) < 1e-6);
 
-/** Structural invariants of a merge with appearance. */
-function checkAppearance(r: IMergeResult): void {
+/**
+ * Structural invariants of a merge with appearance, and: the merged mesh can be written as GLB and
+ * read back with every face intact (its corners, material definition and corner UVs).
+ */
+async function checkAppearance(r: IMergeResult): Promise<void> {
+  checkStructure(r);
+  const back = await loadMesh(writeGlb(r.merged), { fileName: 'merged.glb' });
+  expect(sortedFaces(back)).toEqual(sortedFaces(r.merged));
+}
+
+function checkStructure(r: IMergeResult): void {
   const m = r.merged;
   const look = m.appearance!;
   expect(look).toBeDefined();
@@ -94,11 +105,11 @@ const kinds = (r: IMergeResult): string[] => r.conflicts.flatMap((c) => Object.k
 describe('appearance merge · material definitions (property by property)', () => {
   const base = textured(plain);
 
-  it('different properties of one material merge: ours recolours, theirs changes roughness', () => {
+  it('different properties of one material merge: ours recolours, theirs changes roughness', async () => {
     const ours = textured({ ...plain, materials: [{ ...PAINT, baseColorFactor: [1, 0, 0, 1] }] });
     const theirs = textured({ ...plain, materials: [{ ...PAINT, roughnessFactor: 0.9 }] });
     const r = mergeMeshes(base, ours, theirs, opts);
-    checkAppearance(r);
+    await checkAppearance(r);
     expect(r.clean).toBe(true);
     expect(r.merged.materials).toHaveLength(1);
     const m = material(r, 'Paint');
@@ -108,11 +119,11 @@ describe('appearance merge · material definitions (property by property)', () =
     expect(r.appearance!.stats).toMatchObject({ propertiesFromOurs: 1, propertiesFromTheirs: 1, conflicts: 0 });
   });
 
-  it('the same property changed differently → material-property conflict; base value until resolved, other properties still merge', () => {
+  it('the same property changed differently → material-property conflict; base value until resolved, other properties still merge', async () => {
     const ours = textured({ ...plain, materials: [{ ...PAINT, baseColorFactor: [1, 0, 0, 1] }] });
     const theirs = textured({ ...plain, materials: [{ ...PAINT, baseColorFactor: [0, 0, 1, 1], metallicFactor: 0 }] });
     const r = mergeMeshes(base, ours, theirs, opts);
-    checkAppearance(r);
+    await checkAppearance(r);
     expect(r.clean).toBe(false);
     expect(r.conflicts).toHaveLength(1);
     const c = r.conflicts[0];
@@ -131,19 +142,19 @@ describe('appearance merge · material definitions (property by property)', () =
     expect(material(resolveMerge(r, { 0: 'base' }), 'Paint').baseColorFactor).toEqual([0.8, 0.8, 0.8, 1]);
   });
 
-  it('a rename on one side and an edit on the other: the renamed material, edited (one material, not two)', () => {
+  it('a rename on one side and an edit on the other: the renamed material, edited (one material, not two)', async () => {
     const ours = textured({ ...plain, materials: [{ ...PAINT, name: 'Lacquer' }] });
     const theirs = textured({ ...plain, materials: [{ ...PAINT, metallicFactor: 0.25 }] });
     const log = captureLogger();
     const r = mergeMeshes(base, ours, theirs, { logger: log.logger });
-    checkAppearance(r);
+    await checkAppearance(r);
     expect(r.clean).toBe(true);
     expect(r.merged.materials.map((m) => m.name)).toEqual(['Lacquer']);
     expect(material(r, 'Lacquer').metallicFactor).toBe(0.25);
     expect(log.info.join('\n')).toMatch(/material renames recognised: 1 on ours, 0 on theirs/);
   });
 
-  it('a rename on one side and a different rename on the other → conflict on the name', () => {
+  it('a rename on one side and a different rename on the other → conflict on the name', async () => {
     const ours = textured({ ...plain, materials: [{ ...PAINT, name: 'Lacquer' }] });
     const theirs = textured({ ...plain, materials: [{ ...PAINT, name: 'Enamel' }] });
     const r = mergeMeshes(base, ours, theirs, opts);
@@ -152,7 +163,7 @@ describe('appearance merge · material definitions (property by property)', () =
     expect(resolveMerge(r, { 0: 'theirs' }).merged.materials[0].name).toBe('Enamel');
   });
 
-  it('reordering materials in the file changes nothing (identity is the name, not the index)', () => {
+  it('reordering materials in the file changes nothing (identity is the name, not the index)', async () => {
     const two: ILookSpec = { ...plain, materials: [PAINT, def('Rubber')], material: (i) => (i < 2 ? 0 : 1) };
     const b = textured(two);
     const reordered = reverseMaterials(b);
@@ -165,14 +176,14 @@ describe('appearance merge · material definitions (property by property)', () =
     expect(materialOfBaseFace(r, quadFace(plain, 3, 3))).toBe('Rubber');
   });
 
-  it('add/add: the same new material on both sides is one material; different definitions conflict against the glTF defaults', () => {
+  it('add/add: the same new material on both sides is one material; different definitions conflict against the glTF defaults', async () => {
     const sticker = (color: [number, number, number, number]): ILookSpec => ({
       ...plain,
       materials: [PAINT, def('Sticker', { baseColorFactor: color })],
       material: (i, j) => (i === 1 && j === 1 ? 1 : 0),
     });
     const same = mergeMeshes(base, textured(sticker([1, 1, 0, 1])), textured(sticker([1, 1, 0, 1])), opts);
-    checkAppearance(same);
+    await checkAppearance(same);
     expect(same.clean).toBe(true);
     expect(same.merged.materials.map((m) => m.name)).toEqual(['Paint', 'Sticker']);
     expect(same.appearance!.stats.facesReassignedConvergent).toBe(2);
@@ -183,7 +194,7 @@ describe('appearance merge · material definitions (property by property)', () =
     expect(material(resolveMerge(diff, { 0: 'theirs' }), 'Sticker').baseColorFactor).toEqual([0, 1, 1, 1]);
   });
 
-  it('a texture swapped on both sides: the same image (by content) converges; different images conflict', () => {
+  it('a texture swapped on both sides: the same image (by content) converges; different images conflict', async () => {
     const A = image('albedo-v1');
     const B = image('albedo-v2');
     const withTex = (images: ReturnType<typeof image>[], slotImage: number): ILookSpec => ({
@@ -195,7 +206,7 @@ describe('appearance merge · material definitions (property by property)', () =
     // Theirs stores the same new bytes at another index, under another name: still the same image.
     const renamedB = { ...B, name: 'renamed.png' };
     const same = mergeMeshes(b, textured(withTex([A, B], 1)), textured(withTex([renamedB], 0)), opts);
-    checkAppearance(same);
+    await checkAppearance(same);
     expect(same.clean).toBe(true);
     expect(same.appearance!.stats.propertiesConvergent).toBe(1);
     const look = same.merged.appearance!;
@@ -208,7 +219,7 @@ describe('appearance merge · material definitions (property by property)', () =
     expect(resolveMerge(diff, { 0: 'theirs' }).merged.appearance!.images.map((i) => i.hash)).toEqual([C.hash]);
   });
 
-  it('a texture slot is one property: ours changes its UV set, theirs its transform → conflict, not a mix', () => {
+  it('a texture slot is one property: ours changes its UV set, theirs its transform → conflict, not a mix', async () => {
     const A = image('albedo');
     const spec = (slot: ReturnType<typeof tex>): ILookSpec => ({ ...plain, images: [A], materials: [{ ...PAINT, baseColorTexture: slot }] });
     const r = mergeMeshes(textured(spec(tex(0))), textured(spec(tex(0, 1))), textured(spec(tex(0, 0, { transform: { scale: [2, 2] } }))), opts);
@@ -217,7 +228,7 @@ describe('appearance merge · material definitions (property by property)', () =
     expect(material(ours, 'Paint').baseColorTexture).toEqual({ image: 0, texCoord: 1 });
   });
 
-  it('extensions merge as whole properties next to core ones', () => {
+  it('extensions merge as whole properties next to core ones', async () => {
     const ours = textured({ ...plain, materials: [{ ...PAINT, extensions: { KHR_materials_emissive_strength: { emissiveStrength: 4 } } }] });
     const theirs = textured({ ...plain, materials: [{ ...PAINT, emissiveFactor: [1, 0.5, 0] }] });
     const r = mergeMeshes(base, ours, theirs, opts);
@@ -227,7 +238,7 @@ describe('appearance merge · material definitions (property by property)', () =
     expect(m.emissiveFactor).toEqual([1, 0.5, 0]);
   });
 
-  it('factors compare at float32 precision: a float32-widened re-export is not a change', () => {
+  it('factors compare at float32 precision: a float32-widened re-export is not a change', async () => {
     expect(appearanceValueKey(0.8, [])).toBe(appearanceValueKey(0.800000011920929, []));
     const reexported = textured({ ...plain, materials: [{ ...PAINT, baseColorFactor: [0.800000011920929, 0.800000011920929, 0.800000011920929, 1] }] });
     const theirs = textured({ ...plain, materials: [{ ...PAINT, baseColorFactor: [0, 1, 0, 1] }] });
@@ -242,9 +253,9 @@ describe('appearance merge · material assignment (face by face)', () => {
   const spec = (paint: (i: number, j: number) => number): ILookSpec => ({ ...plain, materials: palette, material: (i, j) => paint(i, j) });
   const base = textured(spec(() => 0));
 
-  it('neighbouring re-assignments compose: ours paints row 0 red, theirs row 1 blue', () => {
+  it('neighbouring re-assignments compose: ours paints row 0 red, theirs row 1 blue', async () => {
     const r = mergeMeshes(base, textured(spec((_, j) => (j === 0 ? 1 : 0))), textured(spec((_, j) => (j === 1 ? 2 : 0))), opts);
-    checkAppearance(r);
+    await checkAppearance(r);
     expect(r.clean).toBe(true);
     expect(materialOfBaseFace(r, quadFace(plain, 2, 0))).toBe('Red');
     expect(materialOfBaseFace(r, quadFace(plain, 2, 1, 1))).toBe('Blue');
@@ -252,11 +263,11 @@ describe('appearance merge · material assignment (face by face)', () => {
     expect(r.appearance!.stats).toMatchObject({ facesReassignedFromOurs: 8, facesReassignedFromTheirs: 8 });
   });
 
-  it('a repaint over a smaller repaint conflicts only where both painted: the red door with a chrome handle', () => {
+  it('a repaint over a smaller repaint conflicts only where both painted: the red door with a chrome handle', async () => {
     const door = (i: number): boolean => i < 3; // the wall (i = 3) stays "Paint" on both sides
     const handle = (i: number, j: number): boolean => i === 2 && j === 2;
     const r = mergeMeshes(base, textured(spec((i) => (door(i) ? 1 : 0))), textured(spec((i, j) => (handle(i, j) ? 3 : 0))), opts);
-    checkAppearance(r);
+    await checkAppearance(r);
     expect(r.conflicts).toHaveLength(1);
     const c = r.conflicts[0];
     expect(c.kinds).toEqual({ 'material-assignment': 2 });
@@ -275,18 +286,18 @@ describe('appearance merge · material assignment (face by face)', () => {
     expect(r.appearance!.faceConflict[j]).toBe(0);
   });
 
-  it('a new material that takes over ALL of a vanished material\'s faces reads as a rename (design §3): no conflict', () => {
+  it('a new material that takes over ALL of a vanished material\'s faces reads as a rename (design §3): no conflict', async () => {
     // Ours repaints everything "Red" (so "Paint" is gone); theirs paints the handle chrome. In the
     // file this is indistinguishable from renaming Paint to Red and recolouring it.
     const r = mergeMeshes(base, textured(spec(() => 1)), textured(spec((i, j) => (i === 2 && j === 2 ? 3 : 0))), opts);
-    checkAppearance(r);
+    await checkAppearance(r);
     expect(r.clean).toBe(true);
     expect(materialOfBaseFace(r, quadFace(plain, 0, 0))).toBe('Red');
     expect(materialOfBaseFace(r, quadFace(plain, 2, 2))).toBe('Chrome');
     expect(material(r, 'Red').baseColorFactor).toEqual([1, 0, 0, 1]);
   });
 
-  it('separate conflicting patches are separate conflicts, ordered by their first face', () => {
+  it('separate conflicting patches are separate conflicts, ordered by their first face', async () => {
     const r = mergeMeshes(base, textured(spec((i, j) => (j === 0 || j === 3 ? 1 : 0))), textured(spec((i, j) => ((j === 0 || j === 3) && i === 1 ? 2 : 0))), opts);
     expect(r.conflicts.map((c) => Array.from(c.baseFaces))).toEqual([
       [quadFace(plain, 1, 0, 0), quadFace(plain, 1, 0, 1)],
@@ -298,7 +309,7 @@ describe('appearance merge · material assignment (face by face)', () => {
     expect(materialOfBaseFace(one, quadFace(plain, 1, 0))).toBe('Paint');
   });
 
-  it('the same repaint on both sides is applied once', () => {
+  it('the same repaint on both sides is applied once', async () => {
     const red = textured(spec((i) => (i === 0 ? 1 : 0)));
     const r = mergeMeshes(base, red, red, opts);
     expect(r.clean).toBe(true);
@@ -350,11 +361,11 @@ function uvsAre(r: IMergeResult, version: IMesh, faces: number[]): boolean {
 describe('appearance merge · UVs (whole islands only)', () => {
   const base = textured(islands());
 
-  it('different islands moved by different sides merge (each island whole, from its side)', () => {
+  it('different islands moved by different sides merge (each island whole, from its side)', async () => {
     const ours = textured(islands({ 0: [0.6, 0] }));
     const theirs = textured(islands({ 3: [0.6, 0.6] }));
     const r = mergeMeshes(base, ours, theirs, opts);
-    checkAppearance(r);
+    await checkAppearance(r);
     expect(r.clean).toBe(true);
     expect(uvsAre(r, ours, islandFaces(0))).toBe(true);
     expect(uvsAre(r, theirs, islandFaces(3))).toBe(true);
@@ -362,7 +373,7 @@ describe('appearance merge · UVs (whole islands only)', () => {
     expect(r.appearance!.stats).toMatchObject({ uvFacesFromOurs: 8, uvFacesFromTheirs: 8 });
   });
 
-  it('no half-islands, ever: edits to DIFFERENT corners of one island conflict as the whole island', () => {
+  it('no half-islands, ever: edits to DIFFERENT corners of one island conflict as the whole island', async () => {
     const one: ILookSpec = { ...plain, materials: [TEXTURED], images: [ALBEDO] };
     const b = textured(one);
     /** Nudge the UVs of every corner at vertex v (a UV-vertex tweak inside the island). */
@@ -380,7 +391,7 @@ describe('appearance merge · UVs (whole islands only)', () => {
       expect(changedA && changedB).toBe(false);
     }
     const r = mergeMeshes(b, ours, theirs, opts);
-    checkAppearance(r);
+    await checkAppearance(r);
     expect(r.conflicts).toHaveLength(1);
     expect(r.conflicts[0].kinds).toEqual({ 'uv-layout': 32 });
     expect(r.conflicts[0].appearance).toMatchObject({ uvSet: 0, faces: 32 });
@@ -392,12 +403,12 @@ describe('appearance merge · UVs (whole islands only)', () => {
     expect(uvsAre(resolveMerge(r, { 0: 'base' }), b, all)).toBe(true);
   });
 
-  it("theirs' layout edit contained in ours' is taken whole from ours; the torn combination is a conflict", () => {
+  it("theirs' layout edit contained in ours' is taken whole from ours; the torn combination is a conflict", async () => {
     // Both move island 0 to (0.6, 0); ours also stitches island 1 onto it (same placement: glued).
     const stitched = textured({ ...islands({ 0: [0.6, 0] }), place: (k) => (k <= 1 ? cellPlace(0, 0.6, 0) : cellPlace(k, ...CELLS[k])) });
     const moved = textured(islands({ 0: [0.6, 0] }));
     const r = mergeMeshes(base, stitched, moved, opts);
-    checkAppearance(r);
+    await checkAppearance(r);
     expect(r.clean).toBe(true);
     expect(uvsAre(r, stitched, [...islandFaces(0), ...islandFaces(1)])).toBe(true);
     // Ours moves island 0; theirs stitches island 1 onto island 0's OLD place. Per-face merging would
@@ -410,7 +421,7 @@ describe('appearance merge · UVs (whole islands only)', () => {
     expect(uvsAre(resolveMerge(torn, { 0: 'theirs' }), oldStitch, [...islandFaces(0), ...islandFaces(1)])).toBe(true);
   });
 
-  it('the same island move on both sides is applied once', () => {
+  it('the same island move on both sides is applied once', async () => {
     const moved = textured(islands({ 2: [0.6, 0.6] }));
     const r = mergeMeshes(base, moved, moved, opts);
     expect(r.clean).toBe(true);
@@ -418,11 +429,11 @@ describe('appearance merge · UVs (whole islands only)', () => {
     expect(uvsAre(r, moved, islandFaces(2))).toBe(true);
   });
 
-  it('uv-overlap: two different islands moved into the same empty texture space conflict (one unit, both islands)', () => {
+  it('uv-overlap: two different islands moved into the same empty texture space conflict (one unit, both islands)', async () => {
     const ours = textured(islands({ 0: [0.6, 0.6] }));
     const theirs = textured(islands({ 3: [0.65, 0.65] }));
     const r = mergeMeshes(base, ours, theirs, opts);
-    checkAppearance(r);
+    await checkAppearance(r);
     expect(kinds(r)).toEqual(['uv-overlap']);
     const c = r.conflicts[0];
     expect(Array.from(c.baseFaces)).toEqual([...islandFaces(0), ...islandFaces(3)].sort((a, b) => a - b));
@@ -434,7 +445,7 @@ describe('appearance merge · UVs (whole islands only)', () => {
     expect(o.warnings).toEqual([]);
   });
 
-  it('uv-overlap needs a shared image, a new overlap and positive area (negative controls)', () => {
+  it('uv-overlap needs a shared image, a new overlap and positive area (negative controls)', async () => {
     // Moved next to each other, not onto each other.
     expect(mergeMeshes(base, textured(islands({ 0: [0.6, 0.6] })), textured(islands({ 3: [0.8, 0.6] })), opts).clean).toBe(true);
     // Different images: island 3 uses its own material and texture.
@@ -453,18 +464,18 @@ describe('appearance merge · UVs (whole islands only)', () => {
     expect(mergeMeshes(stacked, textured(islands({ 0: [0.6, 0.6], 3: [0, 0] })), textured(islands({ 3: [0.6, 0.6] })), opts).clean).toBe(true);
   });
 
-  it('a UV edit on one side and a geometry edit on the same faces on the other compose', () => {
+  it('a UV edit on one side and a geometry edit on the same faces on the other compose', async () => {
     const ours = textured(islands({}, { moves: { 6: [0, 0, 0.5], 7: [0, 0, 0.25] } }));
     const theirs = textured(islands({ 0: [0.6, 0] }));
     const r = mergeMeshes(base, ours, theirs, opts);
-    checkAppearance(r);
+    await checkAppearance(r);
     expect(r.clean).toBe(true);
     expect(uvsAre(r, theirs, islandFaces(0))).toBe(true);
     const j = r.provenance.vertexIndex.findIndex((v, i) => r.provenance.vertexSource[i] === 0 && v === 6);
     expect(r.merged.positions[j * 3 + 2]).toBeCloseTo(0.5, 9);
   });
 
-  it('a new image on one side and moved UVs on the other merge unjudged (texel content is never judged)', () => {
+  it('a new image on one side and moved UVs on the other merge unjudged (texel content is never judged)', async () => {
     const ours = textured(islands({}, { images: [image('albedo-v2')] }));
     const theirs = textured(islands({ 1: [0.6, 0.6] }));
     const r = mergeMeshes(base, ours, theirs, opts);
@@ -481,24 +492,24 @@ describe('appearance merge · with geometry edits', () => {
   /** Quad (1, 1) of the grid: vertices a = 6, b = 7, c = 11, d = 12; faces (a, b, d) and (a, d, c). */
   const QUAD = [quadFace(plain, 1, 1, 0), quadFace(plain, 1, 1, 1)];
 
-  it('geometry on one side, appearance on the other, same faces: both apply', () => {
+  it('geometry on one side, appearance on the other, same faces: both apply', async () => {
     const ours = textured(spec({ moves: { 12: [0, 0, 1] } }));
     const theirs = textured(spec({ material: (i, j) => (i === 1 && j === 1 ? 1 : 0) }));
     const r = mergeMeshes(base, ours, theirs, opts);
-    checkAppearance(r);
+    await checkAppearance(r);
     expect(r.clean).toBe(true);
     expect(materialOfBaseFace(r, QUAD[0])).toBe('Red');
     const j = r.provenance.vertexIndex.findIndex((v, i) => r.provenance.vertexSource[i] === 0 && v === 12);
     expect(r.merged.positions[j * 3 + 2]).toBeCloseTo(1, 9);
   });
 
-  it("deletion beats an appearance edit: ours cuts a hole where theirs repainted or re-UV'd; the rest of theirs' edit applies", () => {
+  it("deletion beats an appearance edit: ours cuts a hole where theirs repainted or re-UV'd; the rest of theirs' edit applies", async () => {
     const ours = dropFaces(base, QUAD);
     const repainted = textured(spec({ material: (_, j) => (j === 1 ? 1 : 0) }));
     const relaid = textured({ ...spec({ material: (_, j) => (j === 1 ? 1 : 0) }), place: (k) => (k === 0 ? cellPlace(0, 0.6, 0.6) : cellPlace(k, ...CELLS[k])) });
     for (const t of [repainted, relaid]) {
       const r = mergeMeshes(base, ours, t, opts);
-      checkAppearance(r);
+      await checkAppearance(r);
       expect(r.clean).toBe(true);
       expect(r.merged.faceCount).toBe(base.faceCount - 2);
       expect(uvOfBaseFace(r, QUAD[0])).toBeUndefined();
@@ -507,7 +518,7 @@ describe('appearance merge · with geometry edits', () => {
     }
   });
 
-  it('replacement vs repaint: ours retriangulates a quad theirs repainted → appearance-geometry region, decided with the geometry', () => {
+  it('replacement vs repaint: ours retriangulates a quad theirs repainted → appearance-geometry region, decided with the geometry', async () => {
     // Ours flips the diagonal of quad (1, 1): deletes its two faces, adds (a, b, c) and (b, d, c).
     const a = arraysOf(base);
     const uv = (v: number): number[] => {
@@ -517,7 +528,7 @@ describe('appearance merge · with geometry edits', () => {
     const flipped = appendFaces(dropFaces(base, QUAD), [], [6, 7, 11, 7, 12, 11], [0, 0], [[...uv(6), ...uv(7), ...uv(11), ...uv(7), ...uv(12), ...uv(11)]]);
     const theirs = textured(spec({ material: (i, j) => (i === 1 && j === 1 ? 1 : 0) }));
     const r = mergeMeshes(base, flipped, theirs, opts);
-    checkAppearance(r);
+    await checkAppearance(r);
     expect(r.conflicts).toHaveLength(1);
     const c = r.conflicts[0];
     expect(Object.keys(c.kinds)).toEqual(['appearance-geometry']);
@@ -538,14 +549,14 @@ describe('appearance merge · with geometry edits', () => {
     for (const j of added) expect(o.merged.materials[o.merged.faceMaterials![j]].name).toBe('Paint');
   });
 
-  it('new faces glued to an island the other side moves → appearance-geometry: the additions and the layout are decided together', () => {
+  it('new faces glued to an island the other side moves → appearance-geometry: the additions and the layout are decided together', async () => {
     // Ours adds a flap below the bottom edge of island 0 (vertices 0, 1), laid out as part of island 0.
     const [u0, v0, s] = cellPlace(0, ...CELLS[0]);
     const at = (x: number, y: number): number[] => [u0 + x * s, v0 + y * s];
     const flap = appendFaces(base, [0.5, -1, 0], [1, 0, 25], [0], [[...at(1, 0), ...at(0, 0), ...at(0.5, -1)]]);
     const theirs = textured(spec({ place: (k) => (k === 0 ? cellPlace(0, 0.6, 0.6) : cellPlace(k, ...CELLS[k])) }));
     const r = mergeMeshes(base, flap, theirs, opts);
-    checkAppearance(r);
+    await checkAppearance(r);
     expect(r.conflicts.flatMap((c) => Object.keys(c.kinds))).toEqual(['appearance-geometry']);
     expect(r.merged.faceCount).toBe(base.faceCount); // unresolved: no flap, island 0 at base
     expect(uvsAre(r, base, islandFaces(0))).toBe(true);
@@ -557,11 +568,11 @@ describe('appearance merge · with geometry edits', () => {
     expect(uvsAre(t, theirs, islandFaces(0))).toBe(true);
   });
 
-  it("new faces keep their own side's material and UVs", () => {
+  it("new faces keep their own side's material and UVs", async () => {
     const flap = appendFaces(base, [0.5, -1, 0], [1, 0, 25], [1], [[0.9, 0.9, 0.95, 0.9, 0.9, 0.95]], [palette[2]]);
     const theirs = textured(spec({ material: (i, j) => (i === 3 && j === 3 ? 1 : 0) }));
     const r = mergeMeshes(base, flap, theirs, opts);
-    checkAppearance(r);
+    await checkAppearance(r);
     expect(r.clean).toBe(true);
     const j = [...r.provenance.faceSource].indexOf(1);
     expect(r.merged.materials[r.merged.faceMaterials![j]].name).toBe('Decal');
@@ -570,7 +581,7 @@ describe('appearance merge · with geometry edits', () => {
     expect(materialOfBaseFace(r, quadFace(plain, 3, 3))).toBe('Red');
   });
 
-  it('the same new face on both sides with different materials → appearance-geometry conflict', () => {
+  it('the same new face on both sides with different materials → appearance-geometry conflict', async () => {
     /** The same flap on either side; material 0 = Paint (the mesh's own), 1 = Decal (new). */
     const flapWith = (m: number): IMesh => appendFaces(base, [0.5, -1, 0], [1, 0, 25], [m], [[0.9, 0.9, 0.95, 0.9, 0.9, 0.95]], [palette[2]]);
     const same = mergeMeshes(base, flapWith(1), flapWith(1), opts);
@@ -590,12 +601,12 @@ describe('appearance merge · with geometry edits', () => {
 describe('appearance merge · resolution, ids, options', () => {
   const base = textured(islands());
 
-  it('appearance conflicts follow the geometry ones in id order; each is resolved on its own', () => {
+  it('appearance conflicts follow the geometry ones in id order; each is resolved on its own', async () => {
     // Geometry: vertex 24 moved differently (move-move). Appearance: Paint recoloured differently.
     const ours = textured(islands({}, { moves: { 24: [0, 0, 1] }, materials: [{ ...TEXTURED, baseColorFactor: [1, 0, 0, 1] }] }));
     const theirs = textured(islands({}, { moves: { 24: [0, 0, -1] }, materials: [{ ...TEXTURED, baseColorFactor: [0, 1, 0, 1] }] }));
     const r = mergeMeshes(base, ours, theirs, opts);
-    checkAppearance(r);
+    await checkAppearance(r);
     expect(r.conflicts.map((c) => Object.keys(c.kinds)[0])).toEqual(['move-move', 'material-property']);
     expect(r.stats.conflicts).toBe(2);
     expect(r.appearance!.stats).toMatchObject({ conflicts: 1, unresolved: 1 });
@@ -611,7 +622,7 @@ describe('appearance merge · resolution, ids, options', () => {
     expect(material(all, 'Paint').baseColorFactor).toEqual([1, 0, 0, 1]);
   });
 
-  it('chosen resolutions that make islands overlap in texture space → a uv-overlap warning, not a new conflict', () => {
+  it('chosen resolutions that make islands overlap in texture space → a uv-overlap warning, not a new conflict', async () => {
     // Island 0: ours → (0.6, 0.6), theirs → (0.6, 0); island 3: ours → (0.6, 0.3), theirs → (0.6, 0.6).
     const ours = textured(islands({ 0: [0.6, 0.6], 3: [0.6, 0.3] }));
     const theirs = textured(islands({ 0: [0.6, 0], 3: [0.6, 0.6] }));
@@ -626,7 +637,7 @@ describe('appearance merge · resolution, ids, options', () => {
     expect(resolveMerge(r, { 0: 'ours', 1: 'ours' }).warnings).toEqual([]);
   });
 
-  it('STL / OBJ-like meshes (no appearance) merge exactly as before; mixed inputs log why appearance is skipped', () => {
+  it('STL / OBJ-like meshes (no appearance) merge exactly as before; mixed inputs log why appearance is skipped', async () => {
     const g = grid(5, 5);
     const r = mergeMeshes(g, withMoves(g, { 6: [0, 0, 1] }), g, opts);
     expect(r.appearance).toBeUndefined();
@@ -661,11 +672,11 @@ describe('appearance merge · properties', () => {
     conflicts: r.conflicts.map((c) => JSON.stringify([c.kinds, Array.from(c.baseFaces)])).sort(),
   });
 
-  it.each(scenarios)('is symmetric: swapping ours and theirs gives the same conflicts and the same result (%s)', (_, ours, theirs) => {
+  it.each(scenarios)('is symmetric: swapping ours and theirs gives the same conflicts and the same result (%s)', async (_, ours, theirs) => {
     const r = mergeMeshes(base, ours, theirs, opts);
     const s = mergeMeshes(base, theirs, ours, opts);
-    checkAppearance(r);
-    checkAppearance(s);
+    await checkAppearance(r);
+    await checkAppearance(s);
     expect(signature(s)).toEqual(signature(r));
     // Resolving everything 'ours' in one equals resolving everything 'theirs' in the other.
     const allOurs = resolveMerge(r, Object.fromEntries(r.conflicts.map((c) => [c.id, 'ours' as const])));
@@ -673,9 +684,9 @@ describe('appearance merge · properties', () => {
     expect(signature(allTheirs).faces).toEqual(signature(allOurs).faces);
   });
 
-  it.each(scenarios)("merging with the base or with itself returns that version's appearance (%s)", (_, ours) => {
-    const same = (r: IMergeResult, m: IMesh): void => {
-      checkAppearance(r);
+  it.each(scenarios)("merging with the base or with itself returns that version's appearance (%s)", async (_, ours) => {
+    const same = async (r: IMergeResult, m: IMesh): Promise<void> => {
+      await checkAppearance(r);
       expect(r.clean).toBe(true);
       expect(Array.from(r.merged.faceMaterials ?? [])).toEqual(Array.from(m.faceMaterials ?? []));
       expect(r.merged.materials).toEqual(m.materials);
@@ -683,13 +694,13 @@ describe('appearance merge · properties', () => {
       expect(r.merged.appearance!.images.map((i) => i.hash)).toEqual(m.appearance!.images.map((i) => i.hash));
       expect(Array.from(r.merged.appearance!.uvs[0])).toEqual(Array.from(m.appearance!.uvs[0]));
     };
-    same(mergeMeshes(base, base, base, opts), base);
-    same(mergeMeshes(base, ours, base, opts), ours);
-    same(mergeMeshes(base, base, ours, opts), ours);
-    same(mergeMeshes(base, ours, ours, opts), ours);
+    await same(mergeMeshes(base, base, base, opts), base);
+    await same(mergeMeshes(base, ours, base, opts), ours);
+    await same(mergeMeshes(base, base, ours, opts), ours);
+    await same(mergeMeshes(base, ours, ours, opts), ours);
   });
 
-  it("a lineage conflict (remeshed side) carries the chosen whole version's appearance", () => {
+  it("a lineage conflict (remeshed side) carries the chosen whole version's appearance", async () => {
     const look = (m: IMesh, color: [number, number, number, number]): IMesh =>
       withLook(m, def('Metal', { baseColorFactor: color }), (x, y, z) => [Math.atan2(y, x) / (2 * Math.PI) + 0.5, z / 2]);
     const b = look(cylinder(24, 6), [0.5, 0.5, 0.5, 1]);
@@ -748,7 +759,7 @@ describe('appearance merge · glTF files end to end (parse → merge)', () => {
     const theirs = await load(panel('albedo v1', 0.75), 'theirs.glb');
     expect(base.vertexCount).toBe(9); // the seam is in the UVs, not in the welded vertices
     const r = mergeMeshes(base, ours, theirs, opts);
-    checkAppearance(r);
+    await checkAppearance(r);
     expect(r.clean).toBe(true);
     expect(r.merged.appearance!.images.map((i) => i.hash)).toEqual([ours.appearance!.images[0].hash]);
     expect(Array.from(r.merged.appearance!.images[0].data!)).toEqual(Array.from(new TextEncoder().encode('albedo v2')));

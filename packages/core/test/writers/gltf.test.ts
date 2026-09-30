@@ -13,7 +13,7 @@ import type { IMaterialDefinition, IMesh, IMeshAppearance } from '../../src/type
 import { buildGltfDocument, writeGlb, writeGltf, writeMesh } from '../../src/writers/index.js';
 import { asciiStl, buildGltf, CUBE_CORNERS, CUBE_TRIS, cubeTriangles, glbBytes, objText, utf8, type GltfSpec, type NodeSpec, type PrimitiveSpec } from '../parsers/helpers.js';
 import { mergeMeshes, resolveMerge } from '../../src/merge/index.js';
-import { appendFaces, def, png, pngImage, tex, textured as texturedLook, type ILookSpec } from '../merge/appearance-util.js';
+import { appendFaces, def, png, pngImage, sortedFaces, tex, textured as texturedLook, type ILookSpec } from '../merge/appearance-util.js';
 import { validateGltf } from './validate.js';
 
 type Quat = [number, number, number, number];
@@ -323,24 +323,6 @@ describe('glTF writer — meshes without a scene (STL / OBJ / merges of them)', 
 
 const dataUri = (bytes: Uint8Array): string => `data:image/png;base64,${btoa(String.fromCharCode(...bytes))}`;
 const uvAttr = (data: number[]) => ({ data, type: 'VEC2' as const, componentType: 5126 });
-
-/**
- * Every face as (its corners' positions, its material definition by content, its corner UVs), sorted:
- * a round trip may regroup faces into primitives (by material and UV sets), so face order may change,
- * but no face may change.
- */
-function sortedFaces(m: IMesh): string[] {
-  const look = m.appearance!;
-  const hashes = look.images.map((i) => i.hash);
-  const defKey = (mi: number): string => (mi < 0 ? 'none' : JSON.stringify(remapTextureRefs(look.materials[mi], (i) => hashes[i] as unknown as number)));
-  const out: string[] = [];
-  for (let f = 0; f < m.faceCount; f++) {
-    const corners = [0, 1, 2].map((c) => Array.from(m.positions.subarray(m.faces[f * 3 + c] * 3, m.faces[f * 3 + c] * 3 + 3)));
-    const uvs = look.uvs.map((uv) => Array.from(uv.subarray(f * 6, f * 6 + 6)));
-    out.push(JSON.stringify([corners, defKey(m.faceMaterials?.[f] ?? -1), uvs]));
-  }
-  return out.sort();
-}
 
 /**
  * A textured assembly: a panel whose two triangles meet at a UV seam (TEXCOORD_0 and TEXCOORD_1),

@@ -5,7 +5,7 @@
  * with geometry edits.
  */
 import { deflateSync } from 'node:zlib';
-import { defaultMaterialDefinition, hashBytes, materialSummary } from '../../src/appearance.js';
+import { defaultMaterialDefinition, hashBytes, materialSummary, remapTextureRefs } from '../../src/appearance.js';
 import { createMesh } from '../../src/mesh.js';
 import type { IMaterialDefinition, IMesh, ITextureImage, ITextureRef, Vec3 } from '../../src/types.js';
 
@@ -250,4 +250,22 @@ export function reverseMaterials(mesh: IMesh): IMesh {
 /** UVs of face f in set k (6 numbers). */
 export function faceUv(mesh: IMesh, f: number, k = 0): number[] {
   return Array.from(mesh.appearance!.uvs[k].subarray(f * 6, f * 6 + 6));
+}
+
+/**
+ * Every face as (its corners' positions, its material definition by content, its corner UVs), sorted:
+ * a glTF round trip may regroup faces into primitives (by material and UV sets), so face order may
+ * change, but no face may change.
+ */
+export function sortedFaces(m: IMesh): string[] {
+  const look = m.appearance!;
+  const hashes = look.images.map((i) => i.hash);
+  const defKey = (mi: number): string => (mi < 0 ? 'none' : JSON.stringify(remapTextureRefs(look.materials[mi], (i) => hashes[i] as unknown as number)));
+  const out: string[] = [];
+  for (let f = 0; f < m.faceCount; f++) {
+    const corners = [0, 1, 2].map((c) => Array.from(m.positions.subarray(m.faces[f * 3 + c] * 3, m.faces[f * 3 + c] * 3 + 3)));
+    const uvs = look.uvs.map((uv) => Array.from(uv.subarray(f * 6, f * 6 + 6)));
+    out.push(JSON.stringify([corners, defKey(m.faceMaterials?.[f] ?? -1), uvs]));
+  }
+  return out.sort();
 }
