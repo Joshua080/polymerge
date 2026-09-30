@@ -167,11 +167,11 @@ Because a region contains *entire* change components of both sides, its boundary
 - **Faces:** kept base faces in base order, keeping base winding and groups. Then ours' added faces, then theirs' added faces, each carrying their side's group name. Faces that became degenerate are dropped and counted.
 - **Provenance:** every merged vertex and face records where it came from (base index, or side and index) and which side changed it. This is used for review and for the viewer.
 - **Appearance** (glTF/GLB inputs): materials, per-face material assignment, per-corner UVs and texture references are merged by their own rules and carried on the merged mesh ([appearance-merge-design.md](appearance-merge-design.md) §8).
-- **Formats:** OBJ (keeps groups) and binary STL writers in core. GLB output is future work.
+- **Formats:** STL (binary or ASCII), OBJ (keeps groups), and glTF as GLB or a self-contained `.gltf` (it rebuilds the inputs' node structure, `IMesh.scene`, and writes the merged appearance: [appearance-merge-design.md](appearance-merge-design.md) §8).
 
 ## 7. Scope and honest limits (v1)
 
-- Normals are not merged (they are derived data; writers recompute them). Materials, UVs and texture references are merged for glTF/GLB only; see [appearance-merge-design.md](appearance-merge-design.md) §9 for what that does not cover.
+- Normals are not merged (they are derived data): the STL writer recomputes facet normals, and the OBJ and glTF writers write none. Materials, UVs and texture references are merged for glTF/GLB only; see [appearance-merge-design.md](appearance-merge-design.md) §9 for what that does not cover.
 - A side that split a base component and moved half of it is seen as local moves, not a part motion. Edits on that half by the other side then conflict.
 - `collision` detects crossings and folds, not design intent. It does not flag coplanar contact, clearances or wall thickness (§4.1).
 - Tier 3 sides are usable only when their correspondence is one-to-one with every base face preserved: a reorder, re-export or unit conversion. A remesh produces a `lineage` conflict.

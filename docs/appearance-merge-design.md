@@ -122,6 +122,11 @@ The merged mesh carries appearance like a loaded glTF:
 
 `IMergeResult.appearance` reports statistics and, per merged face, who decided its appearance and which appearance conflict (if any) holds it. A `lineage` merge copies the chosen whole side's appearance. The appearance merge runs only when base, ours and theirs all carry appearance data. Otherwise the merge logs why and emits geometry only, as before.
 
+**Writing glTF/GLB** (`writers/gltf.ts`). The merged appearance is written the way it was read:
+- **Materials** from their full definitions, with glTF defaults left out (so a definition's metallic factor keeps glTF's default of 1). An `IMaterial` without a definition (STL/OBJ colours) still maps to `pbrMetallicRoughness`, with unknown metalness written as 0 so that a colour does not become a metal. `alphaCutoff` is written in MASK mode only (validators warn otherwise; the reader normalises it to 0.5 elsewhere, so a write/read cycle cannot invent a change).
+- **Images** as they were read: embedded bytes as buffer views with their `mimeType` (sniffed from the signature when missing, else a `data:` URI), external URIs as references. Samplers and textures are rebuilt from the slots and shared by value; `KHR_texture_transform` goes on the texture info. `extensionsUsed` lists every extension written, and `extensionsRequired` those a texture depends on without a fallback (`EXT_texture_webp`, `KHR_texture_basisu`).
+- **UVs** are unwelded on write. A glTF vertex is a welded vertex together with its corner's UVs in every set, so corners across a seam become separate glTF vertices, which the loader welds back by position. Faces are split into primitives by (source primitive, material, UV sets present), so no `TEXCOORD_n` accessor holds NaN, and instances with different UVs do not share a mesh.
+
 **Cost.** Everything is linear: one pass over faces and corners per side, union-find over edges for islands, and a uniform grid in UV space over faces whose UVs came from different sides. None of it runs for STL/OBJ, which have no appearance data.
 
 ## 9. Scope and honest limits
@@ -141,3 +146,4 @@ The merged mesh carries appearance like a loaded glTF:
   - OBJ `vt` / `.mtl` and STL colours. The same rules would apply; only glTF feeds them in v1.
 - **Material names:** if one side renames a material to a name the other side newly introduces, the merged file has two materials with that name. Both are kept, distinct.
 - **Images differing only in encoding** are different images.
+- **glTF output does not write** normals and tangents (an `IMesh` has none: clients compute flat normals, so a normal-mapped material makes the validator warn that its tangent space is generated at runtime), vertex colours, node and mesh extras and extensions, skins, morph targets and animations. Everything appearance-related that the loader reads is written and reads back identically.
