@@ -31,25 +31,26 @@
  * Vertex ids. `IMesh.vertexIds` are written as the custom attribute `_VERTEX_ID` (SCALAR FLOAT,
  * read back by the loader) on each primitive whose vertices all carry a float32-exact number id.
  *
- * Not written: UVs, textures, normals, skins, morph targets, animations, cameras, lights, extras
+ * Appearance (`IMesh.appearance`, docs/appearance-merge-design.md §8), where the loader read it:
+ *  - Materials are written from their full definitions (texture slots, alpha mode, emissive,
+ *    double-sided, extensions, extras); a mesh without definitions (STL, OBJ) maps its IMaterials.
+ *  - Images are written as they were read: embedded bytes in the buffer (a buffer view with its
+ *    mimeType), external URIs as references. Samplers and textures are rebuilt from the slots
+ *    (one per distinct image + sampler), KHR_texture_transform on the texture infos.
+ *  - UVs belong to face corners in an IMesh and to vertices in glTF: a glTF vertex is a welded
+ *    vertex together with its corner's UVs in every set, so corners across a UV seam become
+ *    separate glTF vertices (the loader welds them back by position). Faces are split into
+ *    primitives by the UV sets they have, so a TEXCOORD_n accessor never holds NaN.
+ *
+ * Not written: normals, skins, morph targets, animations, cameras, lights, and node / mesh extras
  * and extensions. Skinned, morphed and GPU-instanced geometry is written as static triangles in
  * the shape it was baked in (see `notes`).
- *
- * APPEARANCE SEAM (materials, UVs, textures), marked `SEAM(appearance)` below:
- *  - `primitiveKey` decides which faces share a primitive (source primitive + material today);
- *  - `collectPrimitive` defines a primitive's vertices: today one per welded vertex. Per-corner
- *    attributes (UVs) must key them by (welded vertex, corner values) instead, so that corners
- *    across a UV seam become separate glTF vertices, and gather the values into `PrimitiveData`;
- *  - `primitiveAttributes` emits every per-vertex accessor of a primitive (POSITION, _VERTEX_ID;
- *    TEXCOORD_n / COLOR_n / NORMAL go here), and `sameStructure` must compare what it adds;
- *  - `gltfMaterial` maps one IMaterial; textures need document-level images / samplers / textures
- *    arrays next to `json.materials` in `buildGltfDocument`, with image bytes in the buffer
- *    (`BinBuilder.view`).
  */
 import { Matrix4 } from 'three';
+import { textureRefsOf, textureRefUvSet } from '../appearance.js';
 import { writeGlb as packGlb } from '../parsers/gltf-container.js';
 import { copyTransform, worldMatrices, type SceneTransform } from '../scene.js';
-import type { IMaterial, IMesh, IMeshScene } from '../types.js';
+import type { IMaterial, IMaterialDefinition, IMesh, IMeshAppearance, IMeshScene, ITextureImage, ITextureRef } from '../types.js';
 
 export interface IGltfWriteOptions {
   /** `asset.generator` (default "polymerge"). */
@@ -150,7 +151,30 @@ class Unbaker {
       Math.fround(inv[2] * x + inv[6] * y + inv[10] * z + inv[14]),
     ];
     const targets = [{ e, t }];
-    if (!this.near(targets, b, out, o, true) && !this.search(targets, b, out, o)) this.inexact++;
+    if (this.near(targets, b, out, o, true)) return;
+    // A local coordinate that is exactly 0 (planar geometry, an axis-aligned edge) comes back from
+    // the inverse as rounding noise (1e-8, not 0) under a rotation, and 0 lies billions of float32
+    // steps from that noise, out of reach of `near` and `search`: try it with those snapped to 0.
+    const snapped = this.snapTiny(inv, x, y, z, b);
+    if (snapped && this.near(targets, snapped, this.found, 0, false)) {
+      out.set(this.found, o);
+      return;
+    }
+    if (!this.search(targets, b, out, o)) this.inexact++;
+  }
+
+  private readonly found = new Float32Array(3);
+
+  /** `b` with every coordinate at rounding-noise size (relative to the terms that produced it) set to 0; null when none is. */
+  private snapTiny(inv: ArrayLike<number>, x: number, y: number, z: number, b: number[]): number[] | null {
+    let any = false;
+    const out = b.map((v, i) => {
+      const size = Math.abs(inv[i] * x) + Math.abs(inv[4 + i] * y) + Math.abs(inv[8 + i] * z) + Math.abs(inv[12 + i]);
+      if (v === 0 || Math.abs(v) > size * 2 ** -20) return v;
+      any = true;
+      return 0;
+    });
+    return any ? out : null;
   }
 
   /**
@@ -352,15 +376,15 @@ class BinBuilder {
 }
 
 // ---------------------------------------------------------------------------
-// Appearance (the seam: see the module comment)
+// Appearance: materials, textures, images
 // ---------------------------------------------------------------------------
 
 const clamp01 = (x: number): number => Math.min(1, Math.max(0, x));
 
 /**
- * SEAM(appearance): an IMaterial as a glTF material. Unknown metalness is written as 0 (glTF's
- * default of 1 would make it a metal); the alpha of `color` goes into baseColorFactor only (no
- * alphaMode: IMaterial does not record one).
+ * An IMaterial (no full definition: STL / OBJ colours) as a glTF material. Unknown metalness is
+ * written as 0 (glTF's default of 1 would make it a metal); the alpha of `color` goes into
+ * baseColorFactor only (no alphaMode: IMaterial does not record one).
  */
 export function gltfMaterial(m: IMaterial): Record<string, unknown> {
   const pbr: Record<string, unknown> = {};
@@ -372,29 +396,194 @@ export function gltfMaterial(m: IMaterial): Record<string, unknown> {
   return out;
 }
 
+const sameValues = (a: ArrayLike<number>, b: readonly number[]): boolean => a.length === b.length && b.every((x, i) => a[i] === x);
+
+/** mimeType of image bytes from their signature (PNG, JPEG, WebP, KTX2), or undefined. */
+function sniffImage(b: Uint8Array): string | undefined {
+  const starts = (sig: number[], at = 0): boolean => sig.every((x, i) => b[at + i] === x);
+  if (starts([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])) return 'image/png';
+  if (starts([0xff, 0xd8, 0xff])) return 'image/jpeg';
+  if (starts([0x52, 0x49, 0x46, 0x46]) && starts([0x57, 0x45, 0x42, 0x50], 8)) return 'image/webp';
+  if (starts([0xab, 0x4b, 0x54, 0x58, 0x20, 0x32, 0x30, 0xbb])) return 'image/ktx2';
+  return undefined;
+}
+
+/**
+ * The document's images, samplers and textures, built from the texture references the materials
+ * use: images one to one with `IMeshAppearance.images` (in first-use order), samplers and textures
+ * shared by value.
+ */
+class TextureTable {
+  readonly images: Record<string, unknown>[] = [];
+  readonly samplers: Record<string, unknown>[] = [];
+  readonly textures: Record<string, unknown>[] = [];
+  readonly extensions = new Set<string>();
+  private readonly imageOf = new Map<number, number>();
+  private readonly samplerOf = new Map<string, number>();
+  private readonly textureOf = new Map<string, number>();
+  untyped = 0;
+
+  constructor(
+    private readonly bin: BinBuilder,
+    private readonly source: readonly ITextureImage[],
+  ) {}
+
+  /** A texture reference as a glTF textureInfo (with scale / strength when the slot has one). */
+  info(ref: ITextureRef): Record<string, unknown> {
+    const out: Record<string, unknown> = { index: this.texture(ref) };
+    if (ref.texCoord !== 0) out.texCoord = ref.texCoord;
+    if (ref.scale !== undefined) out.scale = ref.scale;
+    if (ref.strength !== undefined) out.strength = ref.strength;
+    if (ref.transform) {
+      this.extensions.add('KHR_texture_transform');
+      out.extensions = { KHR_texture_transform: { ...ref.transform } };
+    }
+    return out;
+  }
+
+  private texture(ref: ITextureRef): number {
+    const image = this.image(ref.image);
+    let sampler = -1;
+    if (ref.sampler) {
+      const s = ref.sampler;
+      const json: Record<string, unknown> = {};
+      for (const k of ['magFilter', 'minFilter', 'wrapS', 'wrapT'] as const) if (s[k] !== undefined) json[k] = s[k];
+      const key = JSON.stringify(json);
+      sampler = this.samplerOf.get(key) ?? -1;
+      if (sampler < 0) {
+        sampler = this.samplers.push(json) - 1;
+        this.samplerOf.set(key, sampler);
+      }
+    }
+    const key = `${image}|${sampler}|${ref.sourceExtension ?? ''}`;
+    let t = this.textureOf.get(key);
+    if (t === undefined) {
+      const json: Record<string, unknown> = {};
+      if (ref.sourceExtension) {
+        this.extensions.add(ref.sourceExtension);
+        json.extensions = { [ref.sourceExtension]: { source: image } };
+      } else json.source = image;
+      if (sampler >= 0) json.sampler = sampler;
+      t = this.textures.push(json) - 1;
+      this.textureOf.set(key, t);
+    }
+    return t;
+  }
+
+  private image(i: number): number {
+    let out = this.imageOf.get(i);
+    if (out !== undefined) return out;
+    const img = this.source[i];
+    const json: Record<string, unknown> = {};
+    if (img?.data) {
+      const mimeType = img.mimeType ?? sniffImage(img.data);
+      if (mimeType) {
+        json.bufferView = this.bin.view(img.data);
+        json.mimeType = mimeType;
+      } else {
+        // A buffer view needs a mimeType; bytes of unknown type go in as a data: URI instead.
+        json.uri = `data:application/octet-stream;base64,${toBase64(img.data)}`;
+        this.untyped++;
+      }
+    } else if (img?.uri !== undefined) {
+      json.uri = img.uri;
+      if (img.mimeType) json.mimeType = img.mimeType;
+    }
+    if (img?.name) json.name = img.name;
+    out = this.images.push(json) - 1;
+    this.imageOf.set(i, out);
+    return out;
+  }
+}
+
+/** Material extensions as glTF JSON: every texture reference inside becomes a textureInfo. */
+function extensionJson(value: unknown, textures: TextureTable): unknown {
+  if (Array.isArray(value)) return value.map((v) => extensionJson(v, textures));
+  if (typeof value !== 'object' || value === null) return value;
+  const ref = value as ITextureRef;
+  if (typeof ref.image === 'number' && typeof ref.texCoord === 'number') return textures.info(ref);
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(value)) out[k] = extensionJson(v, textures);
+  return out;
+}
+
+/**
+ * A full material definition as a glTF material. glTF defaults are left out (so metallicFactor is
+ * written only when it is not 1); alphaCutoff only in MASK mode, where it means something.
+ */
+function definitionJson(def: IMaterialDefinition, textures: TextureTable): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  if (def.name !== undefined) out.name = def.name;
+  const pbr: Record<string, unknown> = {};
+  if (!sameValues(def.baseColorFactor, [1, 1, 1, 1])) pbr.baseColorFactor = [...def.baseColorFactor];
+  if (def.metallicFactor !== 1) pbr.metallicFactor = def.metallicFactor;
+  if (def.roughnessFactor !== 1) pbr.roughnessFactor = def.roughnessFactor;
+  if (def.baseColorTexture) pbr.baseColorTexture = textures.info(def.baseColorTexture);
+  if (def.metallicRoughnessTexture) pbr.metallicRoughnessTexture = textures.info(def.metallicRoughnessTexture);
+  if (Object.keys(pbr).length) out.pbrMetallicRoughness = pbr;
+  if (def.normalTexture) out.normalTexture = textures.info(def.normalTexture);
+  if (def.occlusionTexture) out.occlusionTexture = textures.info(def.occlusionTexture);
+  if (def.emissiveTexture) out.emissiveTexture = textures.info(def.emissiveTexture);
+  if (!sameValues(def.emissiveFactor, [0, 0, 0])) out.emissiveFactor = [...def.emissiveFactor];
+  if (def.alphaMode !== 'OPAQUE') out.alphaMode = def.alphaMode;
+  if (def.alphaMode === 'MASK' && def.alphaCutoff !== 0.5) out.alphaCutoff = def.alphaCutoff;
+  if (def.doubleSided) out.doubleSided = true;
+  if (def.extensions && Object.keys(def.extensions).length) {
+    for (const name of Object.keys(def.extensions)) textures.extensions.add(name);
+    out.extensions = extensionJson(def.extensions, textures);
+  }
+  if (def.extras !== undefined) out.extras = structuredClone(def.extras);
+  return out;
+}
+
+/** The mesh's appearance layer when it is consistent with its materials and faces (else null). */
+function usableAppearance(mesh: IMesh): IMeshAppearance | null {
+  const look = mesh.appearance;
+  if (!look) return null;
+  const ok = look.materials.length === mesh.materials.length && look.uvs.every((uv) => uv.length === mesh.faceCount * 6);
+  return ok ? look : null;
+}
+
+/** Bitmask of the UV sets face f has on all three corners (bit k = TEXCOORD_k; sets beyond 30 are dropped). */
+function uvMaskOf(uvs: readonly Float32Array[], f: number): number {
+  let mask = 0;
+  for (let k = 0; k < uvs.length && k < 31; k++) {
+    const uv = uvs[k];
+    let present = true;
+    for (let q = f * 6; q < f * 6 + 6 && present; q++) present = Number.isFinite(uv[q]);
+    if (present) mask |= 1 << k;
+  }
+  return mask;
+}
+
 /** Faces of one primitive-to-be, keyed by `primitiveKey`. */
 interface PrimitiveFaces {
   /** Source primitive index (-1 = none; sorts last). */
   primitive: number;
   material: number;
+  /** The UV sets every face of the primitive has (bit k = TEXCOORD_k). */
+  uvMask: number;
   faces: number[];
 }
 
-/** SEAM(appearance): faces are split into primitives by this key: source primitive + material. */
-function primitiveKey(primitive: number, material: number): string {
-  return `${primitive}|${material}`;
+/** Faces are split into primitives by source primitive, material and the UV sets they have. */
+function primitiveKey(primitive: number, material: number, uvMask: number): string {
+  return `${primitive}|${material}|${uvMask}`;
 }
 
 /** One primitive's per-vertex data, local to its node. */
 interface PrimitiveData {
   material: number;
-  /** Welded (IMesh) vertex of every primitive vertex. */
+  /** Welded (IMesh) vertex of every primitive vertex (a welded vertex on a UV seam appears once per side of it). */
   vertices: Int32Array;
   positions: Float32Array;
   /** `_VERTEX_ID` values, when every vertex has a numeric id. */
   ids: Float32Array | null;
   /** Some vertices have ids but the attribute could not be written (a missing or non-numeric id). */
   idsDropped: boolean;
+  /** UV sets written (TEXCOORD_n), ascending, and their values: 2 per vertex, in the same order. */
+  uvSets: number[];
+  uvs: Float32Array[];
   indices: Uint32Array;
 }
 
@@ -407,25 +596,60 @@ function idValue(id: string | null | undefined): number | null {
 
 /**
  * Gather one primitive: its own vertex list (first use order), local positions from the node's
- * un-bake cache, ids, and the index list.
- *
- * SEAM(appearance): a glTF vertex here is one welded vertex (`stamp` / `slot`). With per-corner
- * attributes, key it by (welded vertex, the corner's values) and collect the values per glTF vertex.
+ * un-bake cache, ids, UVs, and the index list. A glTF vertex is a welded vertex together with its
+ * corner's UVs in every set the primitive has: corners of one welded vertex with equal UVs share a
+ * glTF vertex, corners across a UV seam get one each (`stamp` / `slot` find the first glTF vertex
+ * of a welded vertex, `next` chains the others).
  */
-function collectPrimitive(mesh: IMesh, prim: PrimitiveFaces, local: (v: number, out: Float32Array, o: number) => void, stamp: Int32Array, slot: Int32Array, stampId: number): PrimitiveData {
+function collectPrimitive(
+  mesh: IMesh,
+  prim: PrimitiveFaces,
+  local: (v: number, out: Float32Array, o: number) => void,
+  stamp: Int32Array,
+  slot: Int32Array,
+  stampId: number,
+): PrimitiveData {
   const f = mesh.faces;
   const indices = new Uint32Array(prim.faces.length * 3);
   const vertices: number[] = [];
+  const uvSets: number[] = [];
+  for (let s = 0; s < 31; s++) if (prim.uvMask & (1 << s)) uvSets.push(s);
+  const src = uvSets.map((s) => mesh.appearance!.uvs[s]);
+  const uvOut: number[][] = uvSets.map(() => []);
+  const next: number[] = [];
+  /** glTF vertex g carries the UVs of corner `corner` (face · 3 + c). */
+  const sameUvs = (g: number, corner: number): boolean => {
+    for (let s = 0; s < src.length; s++) {
+      if (uvOut[s][g * 2] !== src[s][corner * 2] || uvOut[s][g * 2 + 1] !== src[s][corner * 2 + 1]) return false;
+    }
+    return true;
+  };
+  const create = (v: number, corner: number): number => {
+    const g = vertices.length;
+    vertices.push(v);
+    next.push(-1);
+    for (let s = 0; s < src.length; s++) uvOut[s].push(src[s][corner * 2], src[s][corner * 2 + 1]);
+    return g;
+  };
   let k = 0;
   for (const face of prim.faces) {
     for (let c = 0; c < 3; c++) {
-      const v = f[face * 3 + c];
+      const corner = face * 3 + c;
+      const v = f[corner];
+      let g: number;
       if (stamp[v] !== stampId) {
         stamp[v] = stampId;
-        slot[v] = vertices.length;
-        vertices.push(v);
+        g = slot[v] = create(v, corner);
+      } else {
+        g = slot[v];
+        let last = g;
+        while (g >= 0 && !sameUvs(g, corner)) {
+          last = g;
+          g = next[g];
+        }
+        if (g < 0) next[last] = g = create(v, corner);
       }
-      indices[k++] = slot[v];
+      indices[k++] = g;
     }
   }
   const n = vertices.length;
@@ -440,10 +664,19 @@ function collectPrimitive(mesh: IMesh, prim: PrimitiveFaces, local: (v: number, 
     if (value === null) ids = null;
     else if (ids) ids[i] = value;
   }
-  return { material: prim.material, vertices: Int32Array.from(vertices), positions, ids, idsDropped: anyId && !ids, indices };
+  return {
+    material: prim.material,
+    vertices: Int32Array.from(vertices),
+    positions,
+    ids,
+    idsDropped: anyId && !ids,
+    uvSets,
+    uvs: uvOut.map((u) => Float32Array.from(u)),
+    indices,
+  };
 }
 
-/** SEAM(appearance): every per-vertex attribute of a primitive, as accessors (NORMAL / TEXCOORD_n / COLOR_n go here). */
+/** Every per-vertex attribute of a primitive, as accessors: POSITION, TEXCOORD_n, _VERTEX_ID. */
 function primitiveAttributes(bin: BinBuilder, data: PrimitiveData): Record<string, number> {
   const p = data.positions;
   const min = [Infinity, Infinity, Infinity];
@@ -457,6 +690,7 @@ function primitiveAttributes(bin: BinBuilder, data: PrimitiveData): Record<strin
   const attributes: Record<string, number> = {
     POSITION: bin.accessor(p, 'VEC3', ARRAY_BUFFER, { min, max }),
   };
+  data.uvSets.forEach((set, i) => (attributes[`TEXCOORD_${set}`] = bin.accessor(data.uvs[i], 'VEC2', ARRAY_BUFFER)));
   if (data.ids) attributes._VERTEX_ID = bin.accessor(data.ids, 'SCALAR', ARRAY_BUFFER);
   return attributes;
 }
@@ -549,16 +783,20 @@ export function buildGltfDocument(mesh: IMesh, opts: IGltfWriteOptions = {}): IG
 
   // ---- Faces → node → primitive -----------------------------------------------------------------
   const materials = mesh.materials;
+  const look = usableAppearance(mesh);
+  if (mesh.appearance && !look) notes.push('the appearance data does not match the mesh; materials were written without textures or UVs');
+  const uvs = look?.uvs ?? [];
   const loose = new Map<string, number>();
   let looseFaces = 0;
   const addFace = (node: number, primitive: number, face: number): void => {
     let material = mesh.faceMaterials ? mesh.faceMaterials[face] : -1;
     if (!(material >= 0 && material < materials.length)) material = -1;
-    const key = primitiveKey(primitive, material);
+    const uvMask = uvs.length ? uvMaskOf(uvs, face) : 0;
+    const key = primitiveKey(primitive, material, uvMask);
     const prims = nodes[node].prims;
     let p = prims.get(key);
     if (!p) {
-      p = { primitive, material, faces: [] };
+      p = { primitive, material, uvMask, faces: [] };
       prims.set(key, p);
     }
     p.faces.push(face);
@@ -615,13 +853,14 @@ export function buildGltfDocument(mesh: IMesh, opts: IGltfWriteOptions = {}): IG
   const meshesJson: Record<string, unknown>[] = [];
   const meshOfNode = new Int32Array(nodes.length).fill(-1);
   const w = new Float64Array(3);
-  // SEAM(appearance): instances share a mesh only if every per-vertex attribute is equal too.
+  // Instances share a mesh only if every per-vertex attribute is equal too (ids, UVs).
   const sameStructure = (a: PrimitiveData[], b: PrimitiveData[]): boolean =>
     a.length === b.length &&
     a.every((d, i) => {
       const m = b[i];
       if (m.material !== d.material || m.indices.length !== d.indices.length || m.vertices.length !== d.vertices.length) return false;
       if (!m.indices.every((x, k) => x === d.indices[k])) return false;
+      if (m.uvSets.join() !== d.uvSets.join() || !m.uvs.every((uv, s) => uv.every((x, k) => x === d.uvs[s][k]))) return false;
       return !!m.ids === !!d.ids && (!m.ids || m.ids.every((x, k) => x === d.ids![k]));
     });
   const target = (n: number, prim: number, slot: number): IBakeTarget => {
@@ -722,8 +961,26 @@ export function buildGltfDocument(mesh: IMesh, opts: IGltfWriteOptions = {}): IG
   const json: Record<string, unknown> = { asset, scene: 0, scenes: [sceneJson] };
   if (nodesJson.length) json.nodes = nodesJson;
   if (meshesJson.length) json.meshes = meshesJson;
-  // SEAM(appearance): textures add images / samplers / textures arrays here.
-  if (materials.length) json.materials = materials.map(gltfMaterial);
+  if (look) {
+    // Full definitions: textures, samplers and images come from the slots they use.
+    const textures = new TextureTable(bin, look.images);
+    if (look.materials.length) json.materials = look.materials.map((def) => definitionJson(def, textures));
+    if (textures.images.length) json.images = textures.images;
+    if (textures.samplers.length) json.samplers = textures.samplers;
+    if (textures.textures.length) json.textures = textures.textures;
+    if (textures.extensions.size) json.extensionsUsed = [...textures.extensions].sort();
+    if (textures.untyped > 0) notes.push(`${textures.untyped} image(s) of unknown type were embedded as data: URIs (a buffer view needs a mimeType)`);
+    // A primitive whose material samples a UV set it does not have (only when the source had one).
+    let missing = 0;
+    for (const data of dataOf) {
+      for (const d of data ?? []) {
+        if (d.material < 0) continue;
+        const need = textureRefsOf(look.materials[d.material]).map(textureRefUvSet);
+        if (need.some((set) => !d.uvSets.includes(set))) missing++;
+      }
+    }
+    if (missing > 0) notes.push(`${missing} primitive(s) use a textured material without the UV set it samples (as in their source)`);
+  } else if (materials.length) json.materials = materials.map(gltfMaterial);
   const bytes = bin.finish();
   if (bytes.length) {
     json.accessors = bin.accessors;

@@ -4,13 +4,62 @@
  * fake embedded images, and edits that keep per-face data (materials, per-corner UVs) in sync
  * with geometry edits.
  */
+import { deflateSync } from 'node:zlib';
 import { defaultMaterialDefinition, hashBytes, materialSummary } from '../../src/appearance.js';
 import { createMesh } from '../../src/mesh.js';
 import type { IMaterialDefinition, IMesh, ITextureImage, ITextureRef, Vec3 } from '../../src/types.js';
 
-/** A fake embedded image: the bytes of `text`, identified by content. */
+/** A fake embedded image: the bytes of `text`, identified by content (never decoded, so any bytes do). */
 export function image(text: string, name = text): ITextureImage {
   const data = new TextEncoder().encode(`fake image: ${text}`);
+  return { hash: hashBytes(data), data, mimeType: 'image/png', name };
+}
+
+const CRC_TABLE = Array.from({ length: 256 }, (_, n) => {
+  let c = n;
+  for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+  return c >>> 0;
+});
+
+function crc32(bytes: Uint8Array): number {
+  let c = 0xffffffff;
+  for (const b of bytes) c = CRC_TABLE[(c ^ b) & 0xff] ^ (c >>> 8);
+  return (c ^ 0xffffffff) >>> 0;
+}
+
+/** A real (valid) size × size RGB PNG of one colour — what glTF validators accept as an image. */
+export function png(rgb: [number, number, number], size = 2): Uint8Array {
+  const chunk = (type: string, data: Uint8Array): Uint8Array => {
+    const body = new Uint8Array(4 + data.length);
+    body.set(new TextEncoder().encode(type));
+    body.set(data, 4);
+    const out = new Uint8Array(12 + data.length);
+    const dv = new DataView(out.buffer);
+    dv.setUint32(0, data.length);
+    out.set(body, 4);
+    dv.setUint32(8 + data.length, crc32(body));
+    return out;
+  };
+  const ihdr = new Uint8Array(13);
+  const dv = new DataView(ihdr.buffer);
+  dv.setUint32(0, size);
+  dv.setUint32(4, size);
+  ihdr.set([8, 2, 0, 0, 0], 8); // 8-bit RGB, deflate, no filter, no interlace
+  const rows = new Uint8Array(size * (1 + size * 3));
+  for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) rows.set(rgb, y * (1 + size * 3) + 1 + x * 3);
+  const parts = [Uint8Array.of(0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a), chunk('IHDR', ihdr), chunk('IDAT', new Uint8Array(deflateSync(rows))), chunk('IEND', new Uint8Array(0))];
+  const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
+  let o = 0;
+  for (const p of parts) {
+    out.set(p, o);
+    o += p.length;
+  }
+  return out;
+}
+
+/** A real PNG image (one colour) as an embedded ITextureImage. */
+export function pngImage(name: string, rgb: [number, number, number]): ITextureImage {
+  const data = png(rgb);
   return { hash: hashBytes(data), data, mimeType: 'image/png', name };
 }
 

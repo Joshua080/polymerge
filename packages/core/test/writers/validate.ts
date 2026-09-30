@@ -29,9 +29,14 @@ export interface IValidation {
   notes: string[];
 }
 
-/** Validate GLB or .gltf bytes. */
-export async function validateGltf(bytes: Uint8Array): Promise<IValidation> {
-  const report = await validator.validateBytes(bytes, { writeTimestamp: false, maxIssues: 0 });
+/**
+ * Validate GLB or .gltf bytes. `external` supplies the bytes of external resources (e.g. an image
+ * the file references by URI); without it the validator reports them as unloadable.
+ */
+export async function validateGltf(bytes: Uint8Array, external?: (uri: string) => Uint8Array): Promise<IValidation> {
+  const options: Record<string, unknown> = { writeTimestamp: false, maxIssues: 0 };
+  if (external) options.externalResourceFunction = async (uri: string) => external(uri);
+  const report = await validator.validateBytes(bytes, options);
   const i = report.issues;
   return {
     errors: i.numErrors,
