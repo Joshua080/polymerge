@@ -85,6 +85,18 @@ export interface IMesh {
   /** Optional per-face material index into `materials` (-1 = none). Length = faceCount. */
   faceMaterials?: Int32Array;
   metadata: IMeshMetadata;
+  /**
+   * Appearance beyond `materials` / `faceMaterials`: the full definition of every material (same
+   * index as `materials`), the images they reference, and texture coordinates per face corner.
+   * Set by the glTF loader (always, possibly empty) and by the merge; absent for STL / OBJ.
+   * Semantics: docs/appearance-merge-design.md.
+   */
+  appearance?: IMeshAppearance;
+  /**
+   * Scene structure of a glTF source (nodes, local transforms, meshes, and the node each face
+   * came from). Absent for STL / OBJ. Positions stay baked in world space; see IMeshScene.
+   */
+  scene?: IMeshScene;
 }
 
 export interface IMeshGroup {
@@ -104,6 +116,106 @@ export interface IMaterial {
   roughness?: number;
 }
 
+/** glTF sampler parameters (numeric glTF / WebGL enums); an absent field means the glTF default. */
+export interface ITextureSampler {
+  magFilter?: number;
+  minFilter?: number;
+  wrapS?: number;
+  wrapT?: number;
+}
+
+/** KHR_texture_transform of a texture slot. */
+export interface ITextureTransform {
+  offset?: [u: number, v: number];
+  rotation?: number;
+  scale?: [u: number, v: number];
+  /** Overrides the slot's `texCoord`. */
+  texCoord?: number;
+}
+
+/**
+ * One texture slot of a material (glTF textureInfo resolved through its texture): which image,
+ * sampled through which UV set, and how. Merged and compared as a whole; `image` is compared by
+ * the image's content (`ITextureImage.hash`), never by index.
+ */
+export interface ITextureRef {
+  /** Index into `IMeshAppearance.images`. */
+  image: number;
+  /** UV set the slot samples (glTF `texCoord`, i.e. TEXCOORD_n). */
+  texCoord: number;
+  sampler?: ITextureSampler;
+  transform?: ITextureTransform;
+  /** normalTexture.scale, when not 1. */
+  scale?: number;
+  /** occlusionTexture.strength, when not 1. */
+  strength?: number;
+  /** The image came from this texture extension's `source` (e.g. EXT_texture_webp), not `texture.source`. */
+  sourceExtension?: string;
+}
+
+/** An image referenced by texture slots. Never decoded, never fetched. */
+export interface ITextureImage {
+  /**
+   * Content identity: `<byteLength>:<64-bit hash>` of the embedded bytes, or `uri:<uri>` for an
+   * external reference. Equal hashes = the same image, whatever its name or container.
+   */
+  hash: string;
+  name?: string;
+  mimeType?: string;
+  /** Embedded bytes exactly as stored in the file (GLB bufferView or data: URI). */
+  data?: Uint8Array;
+  /** External URI exactly as written in the file. */
+  uri?: string;
+}
+
+export type MaterialAlphaMode = 'OPAQUE' | 'MASK' | 'BLEND';
+
+/**
+ * Full glTF material definition. Every scalar property is present (glTF defaults filled in), so an
+ * absent property and its default compare equal. Merged property by property; each texture slot and
+ * each extension is one property (docs/appearance-merge-design.md §2).
+ */
+export interface IMaterialDefinition {
+  /** glTF name; absent when unnamed (`IMaterial.name` then holds the loader's `material_<index>`). */
+  name?: string;
+  /** Linear RGBA (default [1, 1, 1, 1]). */
+  baseColorFactor: [r: number, g: number, b: number, a: number];
+  metallicFactor: number;
+  roughnessFactor: number;
+  /** Linear RGB (default [0, 0, 0]). */
+  emissiveFactor: [r: number, g: number, b: number];
+  alphaMode: MaterialAlphaMode;
+  /** Meaningful in MASK mode only; 0.5 in every other mode. */
+  alphaCutoff: number;
+  doubleSided: boolean;
+  baseColorTexture?: ITextureRef;
+  metallicRoughnessTexture?: ITextureRef;
+  normalTexture?: ITextureRef;
+  occlusionTexture?: ITextureRef;
+  emissiveTexture?: ITextureRef;
+  /**
+   * Other material extensions by name (KHR_materials_unlit, KHR_materials_emissive_strength, …),
+   * each kept whole. Texture references inside them (`…Texture` objects) are ITextureRef.
+   */
+  extensions?: Record<string, unknown>;
+  extras?: unknown;
+}
+
+/** Appearance layer of a mesh (see `IMesh.appearance`). */
+export interface IMeshAppearance {
+  /** Definition of every entry of `IMesh.materials`: same index, same length. */
+  materials: IMaterialDefinition[];
+  /** Images referenced by the definitions' texture slots. */
+  images: ITextureImage[];
+  /**
+   * Texture coordinates per FACE CORNER, one array per UV set (index = TEXCOORD_n):
+   * `uvs[set][(face * 3 + corner) * 2 + (0 = u | 1 = v)]`, corners in `IMesh.faces` order; NaN where
+   * the face's source primitive has no such set. UVs belong to corners, not to welded vertices: a
+   * vertex on a UV seam has different coordinates in the faces on either side of it.
+   */
+  uvs: Float32Array[];
+}
+
 export interface IMeshMetadata {
   format: SourceFormat;
   /** Original file name if known (e.g. "bracket_v2.stl"). */
@@ -121,6 +233,66 @@ export interface IMeshMetadata {
   warnings: string[];
   /** Format-specific extras (glTF asset.generator, STL header, OBJ material libs, ...). */
   extras?: Record<string, unknown>;
+}
+
+/**
+ * Scene structure of a glTF source (additive; `IMesh.scene`). Positions are still baked in world
+ * space (NORMALISATION CONTRACT); this records how they were baked, so that a glTF writer can
+ * rebuild the node hierarchy and un-bake each node's geometry into its local space instead of
+ * writing one flat mesh (writers/gltf.ts). Set by the glTF loader (parsers/gltf-scene.ts) and
+ * carried through merges (merge/structure.ts). Every index is into this object's own arrays.
+ *
+ * In a freshly loaded mesh `sources[g]` describes `groups[g]` (one group per glTF primitive
+ * instance). A merge regroups faces by name, so consumers must go through `faceSources`.
+ */
+export interface IMeshScene {
+  /** Scene name, if the file gives one. */
+  name?: string;
+  /** The loaded scene's nodes, in file order (for a single-scene file: the glTF node indices). */
+  nodes: ISceneNode[];
+  /** Root nodes, in scene order. */
+  roots: number[];
+  /** glTF meshes the nodes reference, in file order. */
+  meshes: ISceneMesh[];
+  /** Distinct (node, primitive) origins of faces. */
+  sources: ISceneSource[];
+  /** Per face: index into `sources`, or -1 when the face belongs to no node. Length = faceCount. */
+  faceSources: Int32Array;
+}
+
+export interface ISceneNode {
+  /** Node name as written in the file (unsanitised). */
+  name?: string;
+  /** Child nodes, in file order. */
+  children: number[];
+  /** Local transform exactly as the file states it: `matrix` (column-major), or any of T / R / S. */
+  matrix?: Mat4;
+  translation?: Vec3;
+  /** Unit quaternion. */
+  rotation?: [x: number, y: number, z: number, w: number];
+  scale?: Vec3;
+  /** Index into `IMeshScene.meshes`. */
+  mesh?: number;
+  /** World matrix (column-major) the node's geometry is baked with: parent world × local, computed as three.js does. */
+  world: Mat4;
+  /**
+   * What else was baked into the node's geometry: 'skin' (posed by its skeleton), 'morph' (default
+   * morph weights applied), 'instances' (EXT_mesh_gpu_instancing copies). Writers emit that
+   * geometry as static triangles in the baked shape.
+   */
+  baked?: ('skin' | 'morph' | 'instances')[];
+}
+
+export interface ISceneMesh {
+  /** Mesh name as written in the file (unsanitised). */
+  name?: string;
+}
+
+export interface ISceneSource {
+  /** Index into `IMeshScene.nodes`. */
+  node: number;
+  /** Primitive index within the node's mesh (-1 = none: faces a merge attached to the node). */
+  primitive: number;
 }
 
 /** Object view of a single vertex (for reporting / UI; see `getVertex` in mesh.ts). */
@@ -476,6 +648,15 @@ export type MergeResolution = 'ours' | 'theirs' | 'base';
  *  - collision: edits that are fine on each side damage the model only when COMBINED — surfaces
  *    now pass through each other, or faces fold over / collapse — where neither base, ours nor
  *    theirs had that damage (checked on the merged mesh; docs/merge-design.md §4).
+ * Appearance kinds (glTF; docs/appearance-merge-design.md §5):
+ *  - material-property: both sides changed the same property of the same material differently;
+ *  - material-assignment: both sides gave the same face different materials;
+ *  - uv-layout: both sides changed the UV layout of the same island(s) differently;
+ *  - uv-overlap: islands whose UVs come from different sides now overlap in texture space on a
+ *    common image, where no version had them overlap;
+ *  - appearance-geometry: an appearance edit that cannot be decided without the geometry (one side
+ *    replaced faces the other re-materialed / re-UV'd, or new faces take part in a UV conflict);
+ *    always part of a geometry region.
  */
 export type MergeConflictKind =
   | 'move-move'
@@ -486,7 +667,24 @@ export type MergeConflictKind =
   | 'part-motion'
   | 'global-transform'
   | 'lineage'
-  | 'collision';
+  | 'collision'
+  | 'material-property'
+  | 'material-assignment'
+  | 'uv-layout'
+  | 'uv-overlap'
+  | 'appearance-geometry';
+
+/** What an appearance conflict is about (IMergeConflict.appearance). */
+export interface IAppearanceConflictInfo {
+  /** The material (merged name), for material-property conflicts. */
+  material?: string;
+  /** The conflicting properties (e.g. 'baseColorFactor', 'normalTexture', 'extensions.KHR_materials_unlit'). */
+  properties?: string[];
+  /** The UV set, for uv-layout / uv-overlap conflicts. */
+  uvSet?: number;
+  /** Faces whose appearance the conflict decides (base faces and added faces). */
+  faces: number;
+}
 
 /** One conflict REGION (the mesh analogue of a conflict hunk): resolved as a unit. */
 export interface IMergeConflict {
@@ -508,6 +706,12 @@ export interface IMergeConflict {
   resolution: MergeResolution | null;
   /** True for global-transform / lineage conflicts (they concern the whole model). */
   wholeModel: boolean;
+  /**
+   * Present on appearance conflicts (material-property, material-assignment, uv-layout, uv-overlap).
+   * They follow the geometry conflicts in id order; `baseFaces` / `baseVertices` list the base faces
+   * involved (for a material: the faces using it) and the vertex fields are derived from them.
+   */
+  appearance?: IAppearanceConflictInfo;
 }
 
 export interface IMergeStats {
@@ -564,6 +768,13 @@ export interface IMergeOptions {
    * resolution). Default true.
    */
   detectCollisions?: boolean;
+  /**
+   * Merge materials, UVs and texture references (docs/appearance-merge-design.md). Default true;
+   * it runs only when base, ours and theirs all carry appearance data (`IMesh.appearance`, glTF).
+   */
+  mergeAppearance?: boolean;
+  /** UV difference (in UV units, per coordinate) above which a corner counts as changed. Default 2⁻¹⁶. */
+  uvEpsilon?: number;
 }
 
 /**
@@ -572,7 +783,8 @@ export interface IMergeOptions {
  * 'theirs'. Reported, never auto-fixed: the resolutions were explicit choices.
  */
 export interface IMergeWarning {
-  kind: 'collision';
+  /** collision: surfaces cross / fold; uv-overlap: islands now overlap in texture space on a common image. */
+  kind: 'collision' | 'uv-overlap';
   message: string;
   /** Faces of `merged` involved (crossing pairs and folded faces). */
   mergedFaces: Uint32Array;
@@ -592,10 +804,44 @@ export interface IMergeResult {
   provenance: IMergeProvenance;
   /** Problems created by the combination of chosen resolutions (empty when none / unresolved). */
   warnings: IMergeWarning[];
+  /** The appearance merge (materials, UVs, textures), when it ran: base, ours and theirs all carry appearance. */
+  appearance?: IAppearanceMerge;
   /** The correspondences the merge was computed from. */
   ours: IDiffResult;
   theirs: IDiffResult;
   durationMs: number;
+}
+
+/** Counts of the appearance merge (auto-applied changes are counted whatever the resolutions). */
+export interface IAppearanceMergeStats {
+  /** Materials in the merged mesh. */
+  materials: number;
+  /** Material properties (texture slots included) taken from ours / theirs / identical on both. */
+  propertiesFromOurs: number;
+  propertiesFromTheirs: number;
+  propertiesConvergent: number;
+  /** Base faces whose material assignment was taken from ours / theirs / identical on both. */
+  facesReassignedFromOurs: number;
+  facesReassignedFromTheirs: number;
+  facesReassignedConvergent: number;
+  /** Base faces whose UVs were taken from ours / theirs / identical on both (whole islands). */
+  uvFacesFromOurs: number;
+  uvFacesFromTheirs: number;
+  uvFacesConvergent: number;
+  /** Appearance conflicts (appearance-geometry ones are counted with the geometry regions). */
+  conflicts: number;
+  unresolved: number;
+}
+
+export interface IAppearanceMerge {
+  stats: IAppearanceMergeStats;
+  /**
+   * Per merged face: bitmask of the sides whose appearance edit (material assignment or UVs) it
+   * carries: 1 = ours, 2 = theirs. Added faces carry their own side's bit.
+   */
+  faceChangedBy: Uint8Array;
+  /** Per merged face: id of the appearance conflict deciding its material or UVs (-1 = none). */
+  faceConflict: Int32Array;
 }
 
 export type MergeMeshesFn = (base: IMesh, ours: IMesh, theirs: IMesh, options?: IMergeOptions) => IMergeResult;

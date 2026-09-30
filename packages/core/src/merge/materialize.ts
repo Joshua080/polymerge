@@ -11,13 +11,16 @@
  * additions of both sides are emitted once (from ours).
  * Frames: Φ_M(c) = T_M ∘ R_M,c. A part whose frame belongs to a region (a part-motion conflict,
  * or a part motion involved in a collision) takes the region's choice: ours' R, theirs' R, or none.
+ * Scene structure (glTF nodes) and vertex ids are carried onto the result by structure.ts.
  */
 import { componentVertices } from '../diff/components.js';
 import { applyRigid, composeRigid, identityRigid, type IRigid } from '../diff/linalg.js';
 import { createMesh, groupIndexOfFace } from '../mesh.js';
+import { cloneScene } from '../scene.js';
 import type { IMergeProvenance, IMergeStats, IMesh, IMeshGroup, MergeResolution } from '../types.js';
 import type { IMergePlan } from './plan.js';
 import type { ISide } from './sides.js';
+import { carryStructure } from './structure.js';
 
 export interface IMaterialized {
   mesh: IMesh;
@@ -73,6 +76,8 @@ function copyMesh(m: IMesh, source: 0 | 1 | 2): IMaterialized {
     groups: m.groups.map((g) => ({ ...g })),
     metadata: { ...m.metadata, sourceName: 'merged' },
   });
+  if (m.scene) mesh.scene = cloneScene(m.scene);
+  if (m.vertexIds) mesh.vertexIds = [...m.vertexIds];
   return {
     mesh,
     provenance: {
@@ -91,6 +96,13 @@ function copyMesh(m: IMesh, source: 0 | 1 | 2): IMaterialized {
 }
 
 export function materialize(plan: IMergePlan, res: IResolutions): IMaterialized {
+  const m = materializeGeometry(plan, res);
+  // A lineage result is one whole input (copyMesh), which keeps that input's structure itself.
+  if (plan.lineage === null) carryStructure(plan, m.mesh, m.provenance, m.global);
+  return m;
+}
+
+function materializeGeometry(plan: IMergePlan, res: IResolutions): IMaterialized {
   const { base, ours, theirs } = plan;
   if (plan.lineage !== null) {
     const r = res.lineage;

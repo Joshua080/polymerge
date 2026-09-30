@@ -6,6 +6,7 @@ import { diffMeshes } from '../../src/diff/index.js';
 import { loadMesh } from '../../src/parsers/index.js';
 import { createMesh } from '../../src/mesh.js';
 import { formatFloat32, writeMesh, writeObj, writeStl } from '../../src/writers/index.js';
+import type { SourceFormat } from '../../src/types.js';
 import { asymmetricSolid, silent } from '../diff/util.js';
 
 describe('writers', () => {
@@ -51,8 +52,8 @@ describe('writers', () => {
     expect(stl.length).toBe(84 + 50 * f32.faceCount);
   });
 
-  it('writeMesh rejects formats it cannot write yet', () => {
-    expect(() => writeMesh(f32, 'glb')).toThrow(/not supported/);
-    expect(writeMesh(f32, 'obj').length).toBeGreaterThan(0);
+  it('writeMesh writes every source format and rejects anything else', () => {
+    expect(() => writeMesh(f32, 'ply' as SourceFormat)).toThrow(/not supported/);
+    for (const format of ['obj', 'stl', 'glb', 'gltf'] as const) expect(writeMesh(f32, format).length).toBeGreaterThan(0);
   });
 });

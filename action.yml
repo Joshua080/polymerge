@@ -1,0 +1,184 @@
+# polymerge PR diff: comments on a pull request with a rendered before / after image and a
+# structural diff summary of every STL, OBJ, glTF and GLB file it changes. One comment per pull
+# request, updated in place on every push. Setup, permissions and the fork-safe two-workflow
+# pattern: docs/github-action.md. Implementation: action/ (render.mjs, post.mjs).
+#
+# Self-contained: it builds polymerge from this action's own checkout ($GITHUB_ACTION_PATH), with
+# the build and Playwright's Chromium cached, and needs no published npm package. Every input
+# reaches the scripts through environment variables, never interpolated into shell code.
+name: polymerge 3D model diff
+description: Before / after renders and a structural diff of every STL, OBJ, glTF and GLB file a pull request changes, in one self-updating comment.
+author: Joshua Hurley
+branding:
+  icon: box
+  color: green
+
+inputs:
+  mode:
+    description: >-
+      all (default): render and comment in one job, for pull requests from branches of this
+      repository. render: render only and upload the result as an artifact, in an unprivileged
+      pull_request workflow. post: in a workflow_run workflow, download that artifact and comment.
+      render + post is the setup that also works for pull requests from forks.
+    default: all
+  github-token:
+    description: Token for the image branch and the comment (contents write, pull-requests write) and, in post mode, for downloading the artifact (actions read).
+    default: ${{ github.token }}
+  path:
+    description: The repository checkout to diff, relative to the workspace (render).
+    default: .
+  max-files:
+    description: At most this many changed models are diffed and rendered; the rest are listed.
+    default: '10'
+  max-triangles:
+    description: Models with more triangles than this (either version) are listed, not rendered.
+    default: '200000'
+  max-file-size:
+    description: Models larger than this many megabytes are listed, not rendered.
+    default: '50'
+  image-branch:
+    description: Branch of this repository the images are committed to (created if missing).
+    default: polymerge-images
+  artifact-name:
+    description: Name of the artifact that carries the result from render to post.
+    default: polymerge-pr-diff
+  comment-author:
+    description: Login that posts the comment, used to find it again. Change it only with a token other than GITHUB_TOKEN.
+    default: github-actions[bot]
+
+outputs:
+  count:
+    description: How many model files the pull request changes.
+    value: ${{ steps.list.outputs.count }}
+  rendered:
+    description: How many images were rendered.
+    value: ${{ steps.render.outputs.rendered }}
+  result-dir:
+    description: Directory with result.json and the images (render and all modes).
+    value: ${{ steps.list.outputs.result-dir }}
+  comment-url:
+    description: URL of the comment (all and post modes), when there is one.
+    value: ${{ steps.post.outputs.comment-url }}
+
+runs:
+  using: composite
+  steps:
+    - name: Check the mode
+      shell: bash
+      env:
+        MODE: ${{ inputs.mode }}
+      run: |
+        case "$MODE" in
+          all|render|post) ;;
+          *) echo "::error::polymerge: mode must be all, render or post"; exit 1 ;;
+        esac
+
+    - name: Check Node.js
+      id: node
+      shell: bash
+      run: |
+        if node -e 'process.exit(Number(process.versions.node.split(".")[0]) >= 20 ? 0 : 1)' 2>/dev/null; then
+          echo "ok=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "ok=false" >> "$GITHUB_OUTPUT"
+        fi
+
+    - name: Set up Node.js
+      if: steps.node.outputs.ok != 'true'
+      uses: actions/setup-node@v5
+      with:
+        node-version: 22
+
+    # Git only, nothing installed yet: a pull request without model changes stops here cheaply.
+    - name: Find changed models
+      id: list
+      if: inputs.mode != 'post'
+      shell: bash
+      env:
+        POLYMERGE_PATH: ${{ inputs.path }}
+        POLYMERGE_OUT: ${{ runner.temp }}/polymerge-pr-diff
+        POLYMERGE_MAX_FILES: ${{ inputs.max-files }}
+        POLYMERGE_MAX_TRIANGLES: ${{ inputs.max-triangles }}
+        POLYMERGE_MAX_FILE_MB: ${{ inputs.max-file-size }}
+      run: node "$GITHUB_ACTION_PATH/action/render.mjs" --list
+
+    - name: Cache keys
+      id: keys
+      if: inputs.mode != 'post' && steps.list.outputs.count != '0'
+      shell: bash
+      run: node "$GITHUB_ACTION_PATH/action/cache-key.mjs" >> "$GITHUB_OUTPUT"
+
+    - name: Restore the polymerge build
+      id: build-cache
+      if: steps.keys.outcome == 'success'
+      uses: actions/cache@v4
+      with:
+        path: |
+          ${{ github.action_path }}/node_modules
+          ${{ github.action_path }}/packages/core/dist
+          ${{ github.action_path }}/packages/cli/dist
+          ${{ github.action_path }}/apps/web/dist
+        key: ${{ steps.keys.outputs.build }}
+
+    - name: Build polymerge
+      if: steps.keys.outcome == 'success' && steps.build-cache.outputs.cache-hit != 'true'
+      shell: bash
+      working-directory: ${{ github.action_path }}
+      run: npm ci --no-audit --no-fund --loglevel=error && npm run build
+
+    - name: Restore Chromium
+      if: steps.keys.outcome == 'success'
+      uses: actions/cache@v4
+      with:
+        path: ${{ steps.keys.outputs.browsers-path }}
+        key: ${{ steps.keys.outputs.browser }}
+
+    # The headless shell only; system libraries are installed only if it cannot start without them.
+    - name: Install Chromium
+      if: steps.keys.outcome == 'success'
+      shell: bash
+      working-directory: ${{ github.action_path }}
+      run: |
+        npx playwright install --only-shell chromium
+        node action/render.mjs --probe || npx playwright install-deps chromium
+
+    - name: Render
+      id: render
+      if: steps.keys.outcome == 'success'
+      shell: bash
+      env:
+        POLYMERGE_PATH: ${{ inputs.path }}
+        POLYMERGE_OUT: ${{ runner.temp }}/polymerge-pr-diff
+        POLYMERGE_MAX_FILES: ${{ inputs.max-files }}
+        POLYMERGE_MAX_TRIANGLES: ${{ inputs.max-triangles }}
+        POLYMERGE_MAX_FILE_MB: ${{ inputs.max-file-size }}
+      run: node "$GITHUB_ACTION_PATH/action/render.mjs"
+
+    - name: Upload the result
+      if: inputs.mode == 'render'
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ inputs.artifact-name }}
+        path: ${{ runner.temp }}/polymerge-pr-diff
+        retention-days: 7
+        if-no-files-found: error
+
+    - name: Download the result
+      if: inputs.mode == 'post'
+      uses: actions/download-artifact@v4
+      with:
+        name: ${{ inputs.artifact-name }}
+        run-id: ${{ github.event.workflow_run.id }}
+        github-token: ${{ inputs.github-token }}
+        path: ${{ runner.temp }}/polymerge-pr-diff-artifact
+
+    - name: Comment
+      id: post
+      if: inputs.mode != 'render'
+      shell: bash
+      env:
+        POLYMERGE_TOKEN: ${{ inputs.github-token }}
+        POLYMERGE_RESULT: ${{ runner.temp }}/${{ inputs.mode == 'post' && 'polymerge-pr-diff-artifact' || 'polymerge-pr-diff' }}
+        POLYMERGE_IMAGE_BRANCH: ${{ inputs.image-branch }}
+        POLYMERGE_COMMENT_AUTHOR: ${{ inputs.comment-author }}
+      run: node "$GITHUB_ACTION_PATH/action/post.mjs"

@@ -74,10 +74,26 @@ export function formatMergeReport(r: IMergeResult, names: { base: string; ours: 
   out.push(`${c.bold('Applied')}    ours: ${side(s.movedFromOurs, s.deletedFromOurs, s.facesAddedFromOurs, s.partMotionsFromOurs)}`);
   out.push(`           theirs: ${side(s.movedFromTheirs, s.deletedFromTheirs, s.facesAddedFromTheirs, s.partMotionsFromTheirs)}`);
   out.push(`           identical on both: ${s.movedConvergent + s.deletedConvergent + s.facesAddedConvergent} change(s)`);
+  if (r.appearance) {
+    // glTF: materials, material assignment and UVs (docs/appearance-merge-design.md).
+    const a = r.appearance.stats;
+    const look = (props: number, faces: number, uvFaces: number): string =>
+      `${props} material propert(ies), ${faces} re-assigned face(s), ${uvFaces} re-UV'd face(s)`;
+    out.push(`${c.bold('Appearance')} ours: ${look(a.propertiesFromOurs, a.facesReassignedFromOurs, a.uvFacesFromOurs)}`);
+    out.push(`           theirs: ${look(a.propertiesFromTheirs, a.facesReassignedFromTheirs, a.uvFacesFromTheirs)}`);
+    out.push(`           identical on both: ${a.propertiesConvergent + a.facesReassignedConvergent + a.uvFacesConvergent} change(s) · ${a.materials} material(s) in the result`);
+  }
   if (r.conflicts.length > 0) {
     out.push(c.bold(`Conflicts (${r.conflicts.length}):`));
     for (const k of r.conflicts) {
-      const where = k.wholeModel ? 'whole model' : `${k.baseVertices.length} base vertex(es) near (${k.focus.map((x) => fmt(x, 3)).join(', ')})`;
+      const near = `near (${k.focus.map((x) => fmt(x, 3)).join(', ')})`;
+      const where = k.wholeModel
+        ? 'whole model'
+        : k.appearance?.material !== undefined
+          ? `material "${k.appearance.material}": ${(k.appearance.properties ?? []).join(', ')}`
+          : k.appearance
+            ? `${k.appearance.faces} face(s)${k.appearance.uvSet !== undefined ? ` in UV set ${k.appearance.uvSet}` : ''} ${near}`
+            : `${k.baseVertices.length} base vertex(es) ${near}`;
       const state = k.resolution ? c.added(`→ ${k.resolution}`) : c.removed('unresolved (base kept)');
       out.push(`  ${c.removed(`#${k.id}`)} [${Object.keys(k.kinds).join(', ')}] ${k.message}`);
       out.push(`      ${c.dim(where)}  ${state}`);
@@ -88,7 +104,7 @@ export function formatMergeReport(r: IMergeResult, names: { base: string; ours: 
     r.clean
       ? c.added(`Result: clean — ${r.merged.vertexCount} vertices · ${r.merged.faceCount} faces`)
       : c.removed(
-          `Result: ${s.unresolved} unresolved conflict(s) — those regions keep the BASE geometry. ` +
+          `Result: ${s.unresolved} unresolved conflict(s) — those regions keep the BASE ${r.appearance ? 'geometry and appearance' : 'geometry'}. ` +
             `Resolve with --resolve ours|theirs or --pick <id>=ours|theirs.`,
         ),
   );
@@ -111,7 +127,8 @@ export function mergeReportJson(r: IMergeResult): string {
         theirsVertices: Array.from(c.theirsVertices),
       })),
       warnings: r.warnings.map((w) => ({ ...w, mergedFaces: Array.from(w.mergedFaces) })),
-      merged: { vertices: r.merged.vertexCount, faces: r.merged.faceCount },
+      appearance: r.appearance ? { stats: r.appearance.stats } : undefined,
+      merged: { vertices: r.merged.vertexCount, faces: r.merged.faceCount, materials: r.merged.materials.length },
     },
     null,
     2,
@@ -133,6 +150,9 @@ export async function runMerge(basePath: string, oursPath: string, theirsPath: s
   if (!o.quiet) {
     process.stdout.write(formatMergeReport(result, { base: base.fileName, ours: ours.fileName, theirs: theirs.fileName }) + '\n');
     if (o.output) process.stdout.write(`Wrote ${o.output}\n`);
+    if (o.output && format && result.appearance && format !== 'gltf' && format !== 'glb') {
+      process.stdout.write(`Note: ${format.toUpperCase()} carries geometry only; the merged materials, UVs and textures are not in ${o.output}.\n`);
+    }
   }
   return result.clean ? 0 : 1;
 }
@@ -140,9 +160,10 @@ export async function runMerge(basePath: string, oursPath: string, theirsPath: s
 /**
  * git merge driver (merge.<name>.driver = "polymerge git-merge %O %A %B %P"):
  * merges ancestor %O, current %A and other %B, writes the result over %A in the format of
- * path %P, prints a summary to stderr and exits 0 (clean) or 1 (conflicts left in base state,
- * git marks the file as conflicted). With --resolve, a combination that damages the model
- * (a collision warning) also exits 1: an automatic merge must never commit it unseen.
+ * path %P (STL, OBJ, GLB or .gltf; glTF keeps the inputs' nodes), prints a summary to stderr
+ * and exits 0 (clean) or 1 (conflicts left in base state, git marks the file as conflicted).
+ * With --resolve, a combination that damages the model (a collision warning) also exits 1:
+ * an automatic merge must never commit it unseen.
  * Unwritable formats exit 2 without touching %A.
  */
 export async function runGitMerge(args: string[], o: { resolve?: string; collisionCheck?: boolean } = {}): Promise<number> {
@@ -180,16 +201,8 @@ export async function runGitMerge(args: string[], o: { resolve?: string; collisi
  * unresolved (then `git add <path>` to mark it resolved).
  */
 export async function runGitResolve(repoPath: string, o: MergeCommandOptions): Promise<number> {
-  const format = outputFormat(repoPath, o.format);
-  const load = (n: 1 | 2 | 3) => loadMesh(new Uint8Array(gitStage(n, repoPath)), { fileName: path.basename(repoPath) });
-  const [base, ours, theirs] = await Promise.all([load(1), load(2), load(3)]);
-  const result = mergeMeshes(base, ours, theirs, {
-    logger: silentLogger,
-    defaultResolution: o.resolve ? parseResolution('--resolve', o.resolve) : null,
-    resolutions: parsePicks(o.pick),
-    detectCollisions: o.collisionCheck !== false,
-  });
-  await writeFile(repoPath, writeMesh(result.merged, format, { name: path.basename(repoPath) }));
+  const { result, bytes } = await resolveStages((n) => gitStage(n, repoPath), repoPath, o);
+  await writeFile(repoPath, bytes);
   if (!o.quiet) {
     process.stdout.write(formatMergeReport(result, { base: `${repoPath} :1`, ours: `${repoPath} :2 (ours)`, theirs: `${repoPath} :3 (theirs)` }) + '\n');
     process.stdout.write(result.clean ? `Wrote ${repoPath} — run "git add ${repoPath}" to mark it resolved.\n` : `Wrote ${repoPath} (still conflicted).\n`);
@@ -197,10 +210,39 @@ export async function runGitResolve(repoPath: string, o: MergeCommandOptions): P
   return result.clean ? 0 : 1;
 }
 
-/** One index stage of a conflicted file: 1 = common ancestor, 2 = ours, 3 = theirs. */
-export function gitStage(n: 1 | 2 | 3, repoPath: string): Buffer {
+/**
+ * What `polymerge resolve` computes: the three index stages of a conflicted file merged with
+ * the given resolutions, and the bytes it writes to <path> (format from its extension). The
+ * merge review's "Save to repository" (write-back.ts) calls this too, so a save from the
+ * browser writes exactly what `polymerge resolve <path> --pick …` would.
+ */
+export async function resolveStages(
+  stage: (n: 1 | 2 | 3) => Uint8Array,
+  repoPath: string,
+  o: MergeCommandOptions,
+): Promise<{ result: IMergeResult; bytes: Uint8Array }> {
+  const format = outputFormat(repoPath, o.format);
+  const load = (n: 1 | 2 | 3) => loadMesh(new Uint8Array(stage(n)), { fileName: path.basename(repoPath) });
+  const [base, ours, theirs] = await Promise.all([load(1), load(2), load(3)]);
+  const result = mergeMeshes(base, ours, theirs, {
+    logger: silentLogger,
+    defaultResolution: o.resolve ? parseResolution('--resolve', o.resolve) : null,
+    resolutions: parsePicks(o.pick),
+    detectCollisions: o.collisionCheck !== false,
+  });
+  return { result, bytes: writeMesh(result.merged, format, { name: path.basename(repoPath) }) };
+}
+
+/**
+ * One index stage of a conflicted file: 1 = common ancestor, 2 = ours, 3 = theirs. `repoPath`
+ * is relative to `cwd` (or absolute), as the user typed it. `git show :n:<path>` reads a bare
+ * path from the repository root, so it is anchored with ./ to mean "from here".
+ */
+export function gitStage(n: 1 | 2 | 3, repoPath: string, cwd = process.cwd()): Buffer {
+  const rel = (path.isAbsolute(repoPath) ? path.relative(cwd, repoPath) : repoPath).split(path.sep).join('/');
+  const anchored = rel === '..' || rel.startsWith('./') || rel.startsWith('../') ? rel : `./${rel}`;
   try {
-    return execFileSync('git', ['show', `:${n}:${repoPath}`], { maxBuffer: 1 << 30 });
+    return execFileSync('git', ['show', `:${n}:${anchored}`], { cwd, maxBuffer: 1 << 30 });
   } catch {
     throw new Error(`git has no stage ${n} for ${repoPath} — is it an unresolved merge conflict? (git status)`);
   }

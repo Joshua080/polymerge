@@ -1,6 +1,6 @@
 # Three-way merge — design
 
-Status: designed in session 2; `collision` (§4.1) was added in session 3. The implementation in `packages/core/src/merge/` follows this document.
+Status: designed in session 2; `collision` (§4.1) was added in session 3. The implementation in `packages/core/src/merge/` follows this document. Materials, UVs and texture references have their own rules, in **[appearance-merge-design.md](appearance-merge-design.md)**: they are not geometry, and their conflicts are defined differently.
 
 Given a common ancestor **O** (base) and two derived versions **A** (ours) and **B** (theirs), produce:
 
@@ -166,11 +166,12 @@ Because a region contains *entire* change components of both sides, its boundary
 - **Vertices:** kept base vertices in base order, then ours' added vertices, then theirs' added vertices. Convergent additions are included once, from ours.
 - **Faces:** kept base faces in base order, keeping base winding and groups. Then ours' added faces, then theirs' added faces, each carrying their side's group name. Faces that became degenerate are dropped and counted.
 - **Provenance:** every merged vertex and face records where it came from (base index, or side and index) and which side changed it. This is used for review and for the viewer.
-- **Formats:** OBJ (keeps groups) and binary STL writers in core. GLB output is future work.
+- **Appearance** (glTF/GLB inputs): materials, per-face material assignment, per-corner UVs and texture references are merged by their own rules and carried on the merged mesh ([appearance-merge-design.md](appearance-merge-design.md) §8).
+- **Formats:** STL (binary or ASCII), OBJ (keeps groups), and glTF as GLB or a self-contained `.gltf` (it rebuilds the inputs' node structure, `IMesh.scene`, and writes the merged appearance: [appearance-merge-design.md](appearance-merge-design.md) §8).
 
 ## 7. Scope and honest limits (v1)
 
-- Materials, UVs and normals are not merged; only geometry and groups are. The loaders do not keep UVs or normals.
+- Normals are not merged (they are derived data): the STL writer recomputes facet normals, and the OBJ and glTF writers write none. Materials, UVs and texture references are merged for glTF/GLB only; see [appearance-merge-design.md](appearance-merge-design.md) §9 for what that does not cover.
 - A side that split a base component and moved half of it is seen as local moves, not a part motion. Edits on that half by the other side then conflict.
 - `collision` detects crossings and folds, not design intent. It does not flag coplanar contact, clearances or wall thickness (§4.1).
 - Tier 3 sides are usable only when their correspondence is one-to-one with every base face preserved: a reorder, re-export or unit conversion. A remesh produces a `lineage` conflict.

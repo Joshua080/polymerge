@@ -8,6 +8,7 @@ import {
   type IDiffResult,
   type IFace,
   type IMesh,
+  type IMeshAppearance,
   type IMeshGroup,
   type IMeshMetadata,
   type IMeshSummary,
@@ -46,6 +47,8 @@ export interface CreateMeshInit {
   faceMaterials?: Int32Array;
   vertexIds?: (string | null)[];
   metadata?: Partial<IMeshMetadata>;
+  /** Appearance layer (per-corner UVs must have faceCount × 6 values per set). */
+  appearance?: IMeshAppearance;
 }
 
 /**
@@ -95,6 +98,12 @@ export function createMesh(
   };
   if (init.faceMaterials) mesh.faceMaterials = init.faceMaterials;
   if (init.vertexIds) mesh.vertexIds = init.vertexIds;
+  if (init.appearance) {
+    for (const uv of init.appearance.uvs) {
+      if (uv.length !== faceCount * 6) throw new Error(`appearance.uvs: ${uv.length} values for ${faceCount} faces (expected ${faceCount * 6})`);
+    }
+    mesh.appearance = init.appearance;
+  }
   return mesh;
 }
 

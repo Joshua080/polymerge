@@ -4,6 +4,442 @@ A living log of milestones, architectural decisions, what works, what is stubbed
 
 ---
 
+## Session 8 — 2026-09-29 — PR comments, write-back, glTF output, appearance merge; share and STEP investigated
+
+Priorities set by the owner:
+1. **Build:** a GitHub Action that comments on PRs with a rendered before/after of changed models, reusing the README render pipeline. This is the most important item: it's how people who have never heard of polymerge see it.
+2. **Build:** write the merge review's result back to the repository (and `git add` it), with the security design done first.
+3. **Build:** glTF/GLB output for merges, preserving geometry and node structure.
+4. **Build:** materials, UVs and texture references in merge. Design what a conflict means for them, and implement it for glTF.
+5. **Investigate only:** shareable links (`polymerge share`). What are the realistic options, and who runs and pays for what?
+6. **Investigate only:** STEP support. What's involved, and what does a mesh conversion lose?
+
+Items 1–4 were built by four agents in parallel, each in its own git worktree, then integrated here. Items 3 and 4 share the glTF parser, the mesh types and the new writer, so item 4 wrote its design, parsing and merge rules in parallel, and added its data to item 3's writer only once that writer had landed. I wrote the two investigations while the agents worked.
+
+### Milestone 1 — A pull-request comment with before/after renders ✅
+
+**What it does.** When a pull request changes an STL, OBJ, glTF or GLB file (any letter case), the action posts **one comment** and updates it on every push. Each changed model gets:
+- a before/after image from one shared camera, in the diff colours (moved yellow, added green, removed red, unchanged grey);
+- a legend in the image and again in the text, so it still reads on a phone;
+- a short structural summary: tier, vertex and face counts, moved parts, unit or scale change;
+- a footer linking to the project, with the command to explore the diff locally.
+
+![Before/after card](docs/images/action-card.png)
+
+**Pieces:**
+- `action.yml` at the repository root is a composite action, usable as `Joshua080/polymerge@<ref>`, with three modes: `all`, `render` and `post`. The code is in `action/`: `render.mjs`, `post.mjs`, `cache-key.mjs` and `lib/`.
+- **Self-contained.** It builds polymerge from its own checkout, with `node_modules` + `dist` cached under a hash of the sources and Playwright's headless shell cached too, so it needs no published npm package. System libraries are installed only if a launch probe fails.
+- **Rendering reuses the README pipeline.** `scripts/viewer-capture.mjs` is the one module that starts the built CLI's server and drives headless Chromium with bounded waits; `readme-images.mjs` now uses it too.
+  - The viewer gained a capture mode (`?capture=1`): two `DiffViewer`s of the same size, given the same box and view direction, so their cameras are identical.
+  - The view is the default 3/4 view, mirrored per axis toward where the changes are, so a change on the far side isn't hidden half the time.
+  - The card is 800 CSS px at 2× (≈1600 × 678), 33–47 kB per model, on a dark background that reads in both GitHub themes.
+- **Model bytes never reach a URL or a temp file name.** Playwright serves them to the page under fixed names from one `polymerge demo` server. The summary is computed in Node before any browser starts, so a parse error or a cap shows as a row even if rendering fails.
+
+**Changed-file handling:**
+- **Diff base.** The action diffs from the merge base of the PR's base and head. It prefers the first parent of `refs/pull/N/merge` over the event's `base.sha`, which can be stale: on a branch that had merged main, main's own files showed up as PR changes. The e2e covers this and fails without the fix.
+- Added, deleted, renamed and same-content files each get a row. A rename with identical geometry gets a reason instead of an image. An unreadable file gets an error row, never a failed comment.
+- **Git LFS pointers** are resolved from the local LFS store, then `git lfs smudge`, else shown as "not fetched" with the `lfs: true` hint.
+- **Caps:** 10 files, 200 k triangles, 50 MB per file; the rest are listed.
+- **No `paths:` filter.** Without model changes, the run stops after one `git diff`, and a push that removes every model change rewrites the comment to say so.
+
+**Images in a comment.** GitHub comments don't render `data:` URIs, workflow artifacts aren't inline, and comment attachments have no API.
+- So the PNGs are committed, with git plumbing (no checkout), to a `polymerge-images` branch of the same repository.
+- They are linked by commit-pinned `…/raw/<commit>/pr-N/<head>/<n>.png` URLs.
+- Each commit holds only that run's images, parented on the branch tip; a rejected push is rebuilt on the new tip. Older comments keep working, and the branch can be deleted at any time to reclaim the space.
+
+**Security:**
+- **Fork PRs.** `render` runs in the unprivileged `pull_request` job (read-only token) and uploads an artifact. `post` runs in a `workflow_run` job from the default branch: it never checks out or runs the PR's code, and it installs nothing. Nothing uses `pull_request_target`.
+- **The artifact is untrusted.**
+  - The result is rebuilt from known fields only, each checked for type, length and allowed values.
+  - Images must have our own names, be regular files and real PNGs within size limits.
+  - The PR the artifact names must be at exactly the commit the triggering run built.
+- **Escaping.** All comment wording comes from our code. Paths, part names and parser messages appear only inside code spans, with bidi and invisible characters shown as escapes.
+- **No shell interpolation.** Inputs arrive as environment variables, and a test checks that no `run:` block contains `${{`. The token reaches git through `GIT_CONFIG_*` environment variables (an extra header), never in a URL or argument.
+- **The comment is found by marker *and* author**, since anyone can paste the marker into a comment.
+- **Permissions:** `contents: read` to render; `contents: write`, `pull-requests: write` and `actions: read` to post.
+- **Inherent limit:** a fork's author controls what their own PR's images show (any valid PNG). They cannot reach another PR.
+
+**Dogfood.** This repository uses both halves: `.github/workflows/model-diff.yml` (render) and `model-diff-comment.yml` (post). A `workflow_run` workflow runs from the default branch, so comments start once this is merged into `main`. Adopter docs: `docs/github-action.md`.
+
+**Tests:**
+- **Unit.** `action/test`: 65 tests covering change detection, LFS, markdown and escaping, artifact validation, summaries, the GitHub client, the image branch (against a local bare repo) and a lint of `action.yml` and the workflows. The action's JS is type-checked (`checkJs`) in `npm run typecheck`.
+- **End to end.** `scripts/e2e-action.mjs`, in `npm run e2e`: 73 checks on a real git repository with:
+  - a moved part, an added `.STL`, a deletion, an unchanged rename;
+  - an unreadable OBJ, an LFS pointer (and one resolvable from the local store);
+  - the caps and a `max-files` cut;
+  - a hostile file name (HTML, a pipe, a `javascript:` link, a mention, `$(…)`, U+202E, a newline);
+  - `main` advancing after the branch point.
+  
+  It checks that the images aren't blank and have the right colour classes, and that the two cameras are identical. The unchanged plate is pixel-identical in both panels: **80,125 of 80,366 grey pixels (99.7%)**.
+- **Posting,** against a mock GitHub API and a local bare repository as the image remote:
+  - the first run creates the comment; the `workflow_run` run updates the same one (found past page 1); a push with no model changes rewrites it;
+  - an artifact naming another PR, a wrong commit, an image path traversal, a fake PNG and a fork on `pull_request` are all rejected;
+  - a comment where another user pasted the marker is left alone.
+- **From a fresh copy.** From a clean `git archive`, `npm ci` + build took 11 s with a warm npm cache, and the e2e passed from that copy.
+- **GitHub's markdown.** Rendering the e2e comment with cmark-gfm gave only our images and link, with nothing hostile outside `<code>`.
+
+| # | Decision | Why |
+|---|----------|-----|
+| D26 | Images for PR comments live on a `polymerge-images` branch of the same repository, linked by commit-pinned `raw` URLs. | No third-party service and no secret beyond `GITHUB_TOKEN`; comments can't show `data:` URIs, artifacts or API uploads. |
+| D27 | Rendering (read-only `pull_request`) and posting (`workflow_run`, default-branch code) are separate jobs, and posting treats the artifact as untrusted. | Fork PRs get read-only tokens, and `pull_request_target` would run fork code with a write token. |
+| D28 | Before and after share one camera: the same box, direction and size, with the base drawn in the head's frame. | The eye can only compare two images if unchanged geometry lands on the same pixels. The e2e measures it. |
+
+**Not verified here** (no push to GitHub from the agent's worktree):
+- the composite steps, `actions/cache`, the artifact round trip and `workflow_run` on real GitHub Actions;
+- that commit-pinned `raw` image URLs render for signed-in readers of a **private** repository;
+- `git lfs smudge` actually downloading an object from a remote;
+- macOS and Windows runners.
+
+**Found by the first CI run: GitHub's runners have git-lfs, this sandbox didn't.**
+- `e2e-action` commits LFS pointer files on purpose. On the runner, the fixture's own `git checkout` ran the LFS smudge filter, which tried to download an object from a repository with no remote, and the checkout failed.
+- The action's code was fine: its `git lfs smudge` fallback failed cleanly, into the "stored in Git LFS" row.
+- **Fix.** The fixture's git now runs with `GIT_LFS_SKIP_SMUDGE=1`. The action's scripts keep the normal environment, so their smudge fallback runs for real wherever git-lfs is installed.
+- Reproduced locally by installing git-lfs with `git lfs install`, as the runner image has it. The e2e and the full `npm run verify` then pass with LFS active.
+
+The first real run is this PR's own `Model diff` render job. The comment half needs `main`.
+
+### Milestone 2 — Saving from the merge review, security design first ✅
+
+**The threat model came first.** `docs/write-back-security.md` was committed on its own before any feature code. It covers:
+- the assets;
+- seven attackers: other origins, DNS rebinding, other local accounts, same-user processes, the network, hostile repository content, and the user's own mistakes;
+- every entry point, the mitigations per threat, a status-code contract, the residual risks accepted, and a threat → test map.
+
+Writing it found three existing problems:
+- **DNS rebinding could already read the served models** in any `view` / `review` / difftool session, because nothing checked the Host header.
+- `view a.html …` served repository bytes as `text/html` on the viewer's origin.
+- Without `--literal-pathspecs`, a file named `*.stl` is a glob: `git add -- '*.stl'` stages every STL in the repository (checked against real git).
+
+**What was built: "Save to repository" in `polymerge review`** (`packages/cli/src/write-back.ts`, `review-api.ts`, `serve-guard.ts`):
+- **Two routes.** `GET /api/review/session` and `POST /api/review/save` exist only in `review` sessions bound to loopback. Everywhere else they are a 404.
+- **Checks, in order:**
+  1. a loopback Host and peer;
+  2. the method;
+  3. `Sec-Fetch-Site`;
+  4. `Origin`;
+  5. `X-Polymerge-Token`: 32 random bytes, delivered in the URL fragment, compared in constant time;
+  6. JSON only, at most 64 KiB.
+  
+  No route ever sends a CORS header, so a cross-site preflight always fails.
+- **The browser sends choices only:** `{picks, acknowledgeWarnings, expect}`. Any other field is a 400.
+  - The server recomputes the file from the conflict stages it read at startup, using the same code as `polymerge resolve` (`resolveStages`, extracted from `runGitResolve`).
+  - It writes only if the result's SHA-256 equals the viewer's `expect`.
+  - So a stolen token can only choose between versions already in the index. It can never supply bytes or name a path.
+- **The path is fixed at startup.** It must be an unmerged index entry with stages 1/2/3 inside the work tree (realpath, literal pathspecs, no case folding).
+  - The write goes to an exclusive (`wx`, 0600) temp file, followed by an atomic rename. Just before the rename, the server rechecks the parent's realpath, the file type (`lstat`), the content hash (so the user's own edits are never overwritten) and the index stages.
+  - `git add` runs through `execFile` with `--literal-pathspecs --`. A failure after the write is reported as "written, not staged" and can be retried. polymerge never commits.
+- **Meaning of a save.** Every conflict needs an explicit choice. Collision warnings need a "save anyway" acknowledgement, tied to the exact result by the digest (D18).
+- **Hardening for every session**, not just review:
+  - the Host header is checked on every request;
+  - static files are served from an allowlist built at startup, so no path traversal is possible;
+  - models are served only with model content types, under a random URL segment per session;
+  - `nosniff`, `no-referrer`, CORP `same-origin` and `frame-ancestors 'none'` on every response.
+- **Viewer.** A Save block at the top of the Result panel.
+  - It is disabled until every conflict has a choice. A warning checkbox appears when needed and resets on every new choice.
+  - It shows saving, saved (suggesting `git commit`) and failed states.
+  - The token is removed from the address bar at once.
+  - Downloads and the CLI command stay.
+
+**Tests:**
+- **Attacks.** `packages/cli/test/write-back.test.ts` runs 25 tests against the real server and real git. Every attack gets 403/400/404/409/413/415/422, with the file byte-identical, the index still unmerged and no temp files. Covered:
+  - a missing token, or one sent in the query, body, cookie or `Authorization`;
+  - a hostile Host on POST and GET;
+  - a cross-origin, `null` or missing Origin; form posts; the preflight;
+  - bodies that name a path or carry bytes;
+  - a symlinked target or parent;
+  - the file edited on disk, or resolved elsewhere;
+  - an unresolved merge, or warnings without acknowledgement;
+  - `demo` and `view`; a non-loopback bind;
+  - a writer that throws; a held `index.lock`, then a retry.
+- **Mutation check.** Each of 14 defences was disabled in turn, and every one made at least one test fail. The first run showed the loopback-only Host rule was untested, so a test was added.
+- **`e2e-git`**, in real git and headless Chromium: a conflicted merge → `polymerge review` → "Theirs" → Save. The file is byte-identical to `polymerge resolve --pick 0=theirs`, it is staged (`UU` → `M `), and it commits.
+- **`e2e-merge`** checks that a plain three-file `view` gets no token and no Save.
+
+| # | Decision | Why |
+|---|----------|-----|
+| D29 | The browser sends resolution choices only. The server recomputes the file through `resolveStages` and writes only if it hashes to the viewer's digest. | A leaked token can only choose between versions already in the index, and the file written is exactly the one the reviewer saw. |
+| D30 | The token travels in the URL fragment and a custom header: no cookie, and no CORS headers anywhere. | Nothing reaches logs or `Referer`, and a cross-site request needs a preflight that never succeeds. |
+| D31 | The Host header is checked on every route. Writes need a loopback Host, peer and bind, with no override. | Rebinding could already read models, and the network must never get a write endpoint. |
+| D32 | The writable path comes only from the command line and must be the unmerged index entry. The write is an atomic rename after rechecking parent, type, content and stages. | Nothing else on disk is reachable, and the user's own edits are never overwritten. |
+| D33 | An unresolved merge is never saved; collision warnings need an explicit acknowledgement. | Staging regions left at base would record an unreviewed merge as resolved (D18). |
+| D34 | `view` and `demo` stay read-only. | There is no git conflict state to cross-check, and `polymerge merge -o` already covers that case. |
+
+**Also fixed: `polymerge resolve` from a subdirectory** (this predates the session, and the write-back agent found it). `git show :n:<path>` reads a bare path from the repository *root*, so `cd sub && polymerge resolve part.obj` failed with "no stage 1".
+- `gitStage` now anchors the path to the working directory (`./`), and absolute paths work too.
+- `packages/cli/test/git-stage.test.ts` checks this against real git index stages: a path from the root, a path from a subdirectory (with a same-named decoy at the root), an absolute path, and the error for a missing stage. It failed 3 of 4 before the fix.
+
+**Limits found:**
+- **Windows.** The browser launcher `cmd /c start` probably cuts the URL at `&` (untested). For `review`, that means no token reaches the page, so there is no Save button: it fails safe.
+- **Other browsers.** One not using Chromium's `Math` could compute a Tier 3 merge slightly differently from Node. Save then refuses with a digest mismatch and points to `polymerge resolve`.
+- **Other host names.** The viewer's server now refuses requests addressed to anything other than `localhost` or an IP address (a reverse proxy, `myhost.local`). This is deliberate.
+
+### Milestone 3 — glTF/GLB output for merges, keeping the node structure ✅
+
+**What was missing.** A glTF merge came out as STL or OBJ: one flat, world-space mesh with no nodes. The git driver exited 2 on `.glb` / `.gltf` paths and left them to be merged by hand.
+
+**Output.**
+- `writeGlb` and `writeGltf` in core. A `.gltf` is one self-contained file, with the buffer as a base64 data URI. `writeMesh` / `WRITABLE_FORMATS` cover both.
+- These all write glTF now: `polymerge merge … -o out.glb|out.gltf`, the git driver on `.glb` / `.gltf` paths, `polymerge resolve`, and the review's **Save to repository**. The format follows the extension, as before. `git-setup` prints `merge=polymerge` for glTF too.
+- **The merge review in the viewer** now downloads `.glb` and `.gltf` too, and its "same result from the command line" suggests the base's own format. I added this at integration; the writer runs in the browser unchanged.
+  - `e2e-merge` downloads the resolved GLB in headless Chromium and checks that it re-reads with theirs' boss height, as it already did for STL.
+
+**Structure is recorded, not reconstructed.** The loader still bakes positions into world space, so the engine's contract is unchanged. It now also records the scene alongside, as an optional `IMesh.scene`:
+- the default scene's nodes: name, children, the local transform exactly as written (matrix or T/R/S), the mesh link, and the world matrix three.js baked with;
+- mesh names;
+- for every face, the node and primitive it came from. This is per face, not per group, because the merge regroups faces by name.
+
+`IMeshGroup` and `IMaterial` are unchanged, and every existing parser test passes as it was.
+
+**Un-baking is exact.** The writer rebuilds the hierarchy and writes each node's geometry in its local space.
+- World matrices are recomputed with three.js' own code from the transforms as written, which is the matrix the loader will bake with on re-read.
+- Each local float32 point is chosen so that the loader's arithmetic gives the world point back bit for bit: first the rounded inverse, then its 26 float32 neighbours, then a bounded lattice search over the thin preimage cell.
+- A plain inverse is not enough. Under an anisotropic scale the original point can lie 100+ ulps from it along a contracting axis; a ±2-ulp box left 33 of 36,480 vertices inexact.
+- **Measured** on 40 random 16-node scenes per regime:
+  - rigid, with ±1e5 translations: 0 of 32,447 vertices inexact;
+  - uniform scale 0.01: 0 of 31,123;
+  - per-axis scale 0.1–10: 0 of 36,480;
+  - only nested per-axis scales from 1e-3 to 1e3 leave some: 586 of 35,041 (1.7%), within a few float32 steps, counted and noted.
+- So glTF → IMesh → glTF → IMesh reproduces positions, faces, groups, materials, ids and the whole scene, in both containers.
+
+**Structure through the merge** (`merge/structure.ts`, one call in `materialize`). Positions are never touched; only the representation is chosen.
+- Every face keeps its source face's node, through the provenance.
+- **A moved node keeps the moving side's transform** when that transform carries more of the node's base vertices onto their merged position than the base transform does. Otherwise the base transform stays and the local data moves. A part-motion conflict left at base keeps the base transform; resolving it picks that side's.
+- **Other cases:**
+  - a node a side added comes along under its parent;
+  - faces an STL/OBJ side added next to a node join that node;
+  - faces with no node at all get one root node per group name;
+  - a node a side deleted, with no faces left, is dropped;
+  - a non-glTF base takes ours' structure.
+- Vertex ids are carried through, with fresh ids where both sides used one, so Tier 1 ID mode matches the merged file. They are written as a FLOAT `_VERTEX_ID`, since the spec forbids integer custom attributes.
+- **Instancing.** A mesh used by several nodes stays one mesh while one set of local data re-bakes exactly for every instance, solved jointly. An instance the merge edited gets its own copy.
+- **Written static, by design.** Skinned, morphed and GPU-instanced meshes are written as static triangles in the baked pose, with a note: the posed shape is what polymerge diffed and merged.
+- **Normals** are not written; clients compute flat normals. Materials, UVs and textures went in through this writer's appearance seams in milestone 4.
+
+**Tests.**
+- Every file written in the writer and merge tests passes the Khronos glTF-Validator (`gltf-validator` 2.0.0-dev.3.10, a new devDependency) with **0 errors and 0 warnings**. All 9 glTF/OBJ/STL fixtures, written as both GLB and `.gltf`, also validate cleanly and re-read bit-identically.
+- **25 new tests:**
+  - writer (9): nested TRS + matrix assemblies, shared meshes, ids, random transforms, skin/morph/instancing, loose faces, flat OBJ/STL;
+  - scene capture (4);
+  - merge structure (8): a clean merge re-reads identical; a transform move plus a local edit; a part-motion conflict under all three resolutions; a node added mid-file; a node deleted; an OBJ base; an STL side's addition; ids with Tier 1 ID mode;
+  - perf (1);
+  - CLI (3).
+- Three existing assertions pinned "GLB is unwritable" and now use `.ply` as the unwritable format.
+- **`e2e-git`** merges a real `.glb` with a nested, rotated and scaled hierarchy: clean through the driver, with both edits and the nodes kept. A conflict stops as `UU`. `polymerge resolve --pick 0=theirs` keeps the nodes, and **Save to repository** from `polymerge review` in headless Chromium writes a byte-identical file and stages it.
+- **Cost at 100k vertices / 198k faces:** the structure pass takes 40–65 ms per materialisation. The whole merge is unchanged within noise: 890 ms without structure, 853 ms with it (best of two). Writing the 2.4 MB GLB takes 59–111 ms.
+
+**Still not kept in glTF output:**
+- normals, tangents and vertex colours;
+- skins, morph targets, animations and GPU instancing (flattened into static geometry);
+- cameras, lights, `extras`, most extensions, non-default scenes, points/lines;
+- quantized or compressed data, which is written as plain float32.
+
+**Structure is not three-way merged as such.** Base names and hierarchy win: renames and re-parenting on a branch are not merged, and nodes a side added *without* geometry are not brought in. Added faces are regrouped into their node's primitive, so a merge with additions re-reads as the same model in a different face order.
+
+| # | Decision | Why |
+|---|----------|-----|
+| D35 | Scene structure is an optional `IMesh.scene` with a per-face node/primitive index; positions stay baked. | Nothing in the engine or existing tests changes; per-face survives the merge's regrouping; O(faces). |
+| D36 | The writer un-bakes with the loader's own matrices and arithmetic, choosing float32 local points that re-bake exactly. | The glTF round trip is bit-exact without storing the original local data. |
+| D37 | A moved node keeps the side's transform when it explains the merged geometry better than the base's; otherwise the base transform plus moved local data. | World positions are the merge result either way; this keeps a move where its author put it, with no separate transform merge. |
+| D38 | Geometry with no base node: a side's new node comes along; STL/OBJ additions join the adjacent node; floating faces get a root node per group name. | Nothing is dropped, and a side's structure survives. |
+| D39 | Shared meshes stay shared only while one local dataset fits every instance exactly. | Instancing is kept where it is honest, never at the cost of geometry. |
+| D40 | Normals are not written; skin, morph and GPU instances are written static in the baked pose. | IMesh carries no normals, and invented smooth normals would change shading; the posed shape is what polymerge diffed and merged. |
+
+### Milestone 4 — Materials, UVs and texture references in merge (glTF) ✅
+
+Geometry rules do not transfer to appearance, so the design was written first, in its own commit: `docs/appearance-merge-design.md`, linked from `docs/merge-design.md`. It works out the unit of meaning for each kind of appearance data:
+
+| Data | Unit of meaning | Merged |
+|---|---|---|
+| Material definition (colour, metalness, roughness, emissive, alpha mode, double-sided, extensions) | one **property**; a colour is one value, and a texture slot (image + UV set + sampler + transform) is one property | property by property |
+| Face material assignment | one **face**; paint is piecewise constant, so a boundary between materials is normal, not damage | face by face |
+| UVs | the **island**: faces glued along edges whose end corners carry the same UVs. Half an island from each side is garbage, even when no corner changed twice | whole islands, never corner by corner |
+| Images | the **whole image**, identified by content (a 64-bit hash of the bytes; an external URI by its text) | as part of a slot |
+
+**Five new conflict kinds:**
+- `material-property`: both sides changed the same property of the same material to different values. An add/add material with different values is the same case, against glTF defaults.
+- `material-assignment`: both sides re-assigned the same face to different materials. Only the faces both assigned differently conflict, grouped into connected patches.
+- `uv-layout`: changes to one island from both sides that can't be taken whole from one of them.
+- `uv-overlap`: the appearance version of `collision`. Two sides each move a *different* island into the same empty corner of a shared image: no face was changed twice, yet both islands now show the same texels.
+- `appearance-geometry`: an appearance unit that can't be decided without also deciding geometry (a repaint or re-UV on faces the other side remeshed, or new faces glued into a UV conflict). It joins a geometry region, which then decides both.
+
+**Deliberately not conflicts:**
+- different properties of one material: ours makes it metallic, theirs darkens it, and you get a dark metal;
+- neighbouring repaints: ours paints the door red, theirs paints its handle chrome, so only the handle faces conflict;
+- a deletion plus an appearance edit on the same faces: nothing is left to paint;
+- a UV edit on one side and an image edit on the other, since texels are never judged;
+- the same change on both sides (the same image is the same bytes, whatever its name or index).
+
+**Taking a UV union whole.** Where both sides' UV changes touch the same faces, the union is taken whole from the side whose changes contain the other's; otherwise it's a `uv-layout` conflict. Per-face three-way merging inside an island is never used, since it tears islands. A test proves it: edits to different corners of one island conflict as the whole island, and every resolution gives exactly one version's UVs.
+
+**Identity.**
+- Materials match by name (duplicates told apart by rank), then rename detection over the faces both versions kept, else they're new. The same new name on both sides is one material.
+- A rename on one side and an edit on the other merge into the renamed material with the edit.
+- Numbers compare at float32 precision, so a float32-widened re-export is not an edit.
+
+**Loading.**
+- `IMesh.appearance` (glTF only) holds the full material definitions in a parallel array (`IMaterial` is unchanged), images as bytes or URIs (never decoded or fetched), and per-**corner** UVs, carried through the welder: vertices weld by position, but seams give one position different UVs per side.
+- Materials are read from the glTF JSON before texture stripping, so three.js never decodes an image.
+
+**API and CLI.**
+- Appearance conflicts get ids **after** the geometry ones, so `--pick`, `--resolve`, `resolveMerge`, the git driver and write-back all work unchanged. Unresolved means base, per unit.
+- `IMergeResult.appearance` has stats; `IMergeOptions` gains `mergeAppearance` and `uvEpsilon`. A `uv-overlap` created by chosen resolutions is a warning, like `collision`.
+- The CLI reports appearance conflicts (the material and properties, or the face count and UV set) and an "Appearance" line. Merging glTF to STL or OBJ prints a note that materials, UVs and textures aren't in that file.
+- Appearance merges only when all three inputs carry it. Otherwise it merges geometry only, with a log line, so a format that can't hold materials never reads as deleting them.
+
+**Writing it back (phase 3, through item 3's `SEAM(appearance)` points in `writers/gltf.ts`).**
+- **Materials** are written from their full definitions, with glTF defaults omitted, so `metallicFactor` keeps glTF's default of 1. Only a material without a definition (STL/OBJ colours) still writes unknown metalness as 0.
+- **Images** are written as read: embedded bytes as buffer views with their mimeType, external URIs as references. Samplers and textures are rebuilt from the slots and shared by value. `extensionsUsed` is written, and `extensionsRequired` for a texture whose only source is an extension (WebP, basisu).
+- **UVs are unwelded on write.** A glTF vertex is a welded vertex plus its corner's UVs in every set, so seams duplicate positions and the loader welds them back. Primitives split by source primitive, material and which UV sets are present, so no accessor holds NaN.
+- **Guard.** An appearance layer that doesn't fit the mesh (a dangling image index, UVs of the wrong length) is ignored with a note; the output stays valid, with plain materials.
+- **Found on the way.** A local coordinate that is exactly 0 comes back from the inverse world matrix as about 1e-8 under a rotation, and the exact un-bake never reached 0: three vertices of a rotated textured panel were written a few ulps off. Noise-sized coordinates are now also tried snapped to 0.
+- **Reader change.** `alphaCutoff` is kept only in MASK mode, 0.5 elsewhere, so a write/read cycle can't invent a change for the next merge.
+
+**Tests.**
+- **44 merge scenarios** (`packages/core/test/merge/appearance.test.ts`), each written as GLB and read back face by face. They cover:
+  - property-level merge, with conflicts left at base, and rename vs edit;
+  - reordered materials, add/add, and a texture swapped on both sides (the same bytes converge, different bytes conflict);
+  - neighbouring repaints and the door/handle case;
+  - different islands moved by each side; the no-half-islands proof; two islands moved into the same texture space (`uv-overlap`), with negative controls;
+  - shape and appearance composing; a hole beating a repaint; retriangulation vs repaint (`appearance-geometry`, all three resolutions);
+  - resolution ids and mixed resolutions; symmetry and identities.
+- **Parser**, 9 tests: seam UVs, degenerate faces dropped in sync, TEXCOORD_1, quantised UVs, full definitions, an embedded image hashing like a data URI, broken references.
+- **Writer**, 23 tests in total (8 new): round trips compare definitions, image hashes and every corner's UVs; a normal map keeps its scale; a WebP-only texture gets its required extension; instances with different UVs; a real merge round-tripped; the dangling-appearance fallback.
+- **CLI**, 9 tests. The git driver on `.glb` exits 1 with the base material written for a material conflict, and 0 for `--resolve ours|theirs` or a clean appearance merge. A texture conflict writes the base image bytes, and `--pick` writes exactly the chosen side's bytes.
+- **`e2e-git`** merges a textured `.glb` in real git: a conflict stops as `UU` with the base colour, the other edits are merged, and `polymerge resolve --pick 0=theirs` writes theirs' colour and commits clean.
+- **Validator.** Every GLB and `.gltf` written in these tests has 0 errors and 0 warnings, except the normal-map test, whose one warning (`MESH_PRIMITIVE_GENERATED_TANGENT_SPACE`, since no normals are written) is asserted.
+- **Cost.**
+  - Zero for STL/OBJ.
+  - At 205k faces (60 islands moved, 10k faces repainted, 3,000 vertex edits) the appearance merge adds about 0.24 s warm to a 0.39 s geometry merge.
+  - The 100k merge perf case runs in 1.26 s quiet (2.1 s under load from the other agents), against an unchanged 15 s bound.
+  - Writing a 205k-face textured GLB takes 0.14–0.2 s, and reading it back about 0.25 s.
+
+| # | Decision | Why |
+|---|----------|-----|
+| D41 | Definitions merge per property, assignment per face, UVs only as whole islands. | Each is its data's unit of meaning: independent parameters, piecewise-constant paint, a layout that is only valid as a whole island. |
+| D42 | A UV union is taken whole from the side whose changes contain the other's; otherwise it's a `uv-layout` conflict. | It avoids false conflicts (both sides move an island, one also stitches a neighbour) without ever mixing two layouts. |
+| D43 | `uv-overlap` needs islands from different sides on a shared image, overlapping in raw UV space and new in all three versions; after resolution it's a warning. | It's provable and attributable, like `collision`. Overlap through wrapping or transforms can't be proven without judging texels. |
+| D44 | Materials match by name, then by rename over kept faces, else they're new. Images match by content hash. | Indices are meaningless after welding; a rename plus an edit must not read as delete plus add. |
+| D45 | Deletion beats an appearance edit; replacement is `appearance-geometry`, decided with the geometry region. | A hole leaves nothing to paint, but a remesh would silently drop the other side's repaint. |
+| D46 | Appearance conflicts take ids after the geometry conflicts. | Every resolution path (`--pick`, `--resolve`, the driver, write-back) works unchanged, and existing ids never move. |
+| D47 | Full definitions live in a parallel array; `IMaterial` is untouched. | Existing `toEqual` tests pass unchanged, and summaries are re-derived with three.js' mapping. |
+| D48 | Appearance merges only when all three inputs carry it. | STL/OBJ behaviour is unchanged, and a format that can't hold materials must never read as deleting them. |
+| D49 | UVs are unwelded on write, keyed by (welded vertex, the corner's UVs in every set). | A glTF vertex carries its UVs, so seams duplicate positions while un-baking stays cached per welded vertex. |
+
+**Not done:**
+- **Viewer.** The merge review lists appearance conflicts as cards and resolves them through the worker, but selecting one highlights nothing, and there is no textured render. It needs `IMergeView` to carry `appearance.faceConflict` and `faceChangedBy`, a textured render mode (decode the images in the browser; per-corner UVs map straight onto the non-indexed triangle soup), hover previews that swap material and UVs, images sent from the worker once, and a GLB merge demo with an e2e test. About 1–2 days.
+- Texel content is never merged or judged, and appearance isn't transferred across tessellations (a replacement is a conflict, and `lineage` takes a whole side).
+- Vertex colours, normals and tangents, `KHR_materials_variants`, animated material properties and morph-target UVs aren't merged.
+- Two materials can end up with the same name if one side renames a material to a name the other side newly introduces; both are kept.
+
+### Investigation — shareable links (`polymerge share`): options, not built
+
+**The need.** Someone without polymerge installed opens a link and sees the interactive diff or merge review.
+
+**What the viewer already does.** It loads `?base=<url>&target=<url>` with `fetch`, and absolute URLs work as they are.
+- Checked on 2026-09-29: the built viewer, served from one origin, diffed `examples/plate` models served from *another* origin that sends `Access-Control-Allow-Origin: *`. It reached `ready` with Tier 1, 10 moved vertices, and the diff ran in the worker.
+- `raw.githubusercontent.com` and `gist.githubusercontent.com` both send `Access-Control-Allow-Origin: *` (checked with curl the same day).
+- The viewer bundle is 1.3 MB on disk, 260 kB gzipped.
+
+**Options:**
+
+| Option | How it works | Cost / who runs it | Good | Bad |
+|---|---|---|---|---|
+| **A. Hosted static viewer + model URLs** | Publish `apps/web/dist` once to GitHub Pages. A link is `…/polymerge/?base=<raw URL @ sha>&target=<raw URL @ sha>`. `polymerge share` prints it when both versions are pushed to a public GitHub repo. | Free (Pages on a public repo). No server; the models go straight from GitHub to the browser. | Nearly no new code. Permanent, immutable links (commit SHAs). The PR comment (item 1) can link to it: "open this diff in 3D". | Public repos only: a private raw URL needs a token, and a token must never go in a link. Not "temporary". |
+| **B. Self-contained HTML export** | `polymerge export diff.html`: viewer + both models (+ optional precomputed result) in one file. Host it anywhere (Pages, S3, an intranet wiki) or attach it to an email or ticket. | Free. The user chooses where it lives. | Works for private models and offline. Nothing leaves the user's control until they put the file somewhere. | File size ≈ 0.85 MB + 1.33 × the models (base64). From `file://`, Chrome blocks module workers, so the diff uses the existing main-thread fallback. A file is not a link until someone hosts it. |
+| **C. Secret gist + hosted viewer** | Upload both files to a secret gist with the user's GitHub token, then link option A's viewer to the gist raw URLs. | Free; needs a GitHub account and the `gist` token scope. | Works for files that aren't in a public repo. | A secret gist is *unlisted, not private*: anyone with the URL can read it. No expiry (needs a `--delete`). The Gist API takes text, so binary STL/GLB needs base64 or a git push to the gist. |
+| **D. Tunnel to the local server** | `polymerge share --tunnel`: the existing local viewer server, exposed through a no-account tunnel (e.g. Cloudflare Quick Tunnels). | Free. | Truly temporary: the link dies with the process. Nothing is uploaded anywhere. | Quick Tunnels are "for testing and development only", with no SLA and a hard limit of 200 concurrent requests. Needs `cloudflared` installed. Exposes a local server to the internet: it must be a read-only mode, with item 2's write endpoint impossible and its Host check changed for the tunnel host. Often blocked on corporate networks. |
+| **E. Our own upload service** | `polymerge share` uploads to an API; links expire after N days. Cheapest real stack: Cloudflare Worker + R2 with lifecycle expiry. | Money is small: R2 free tier 10 GB-month, 1 M / 10 M operations a month, free egress; Workers free 100 k requests a day, or $5/month paid. **The owner runs it.** | The nicest UX: one command, expiring links, private repos too. | Anonymous file hosting attracts abuse (malware, illegal content, takedowns). Users would upload proprietary CAD to a bucket the owner is responsible for (POPIA, GDPR). Needs auth or rate limits, monitoring and uptime. 1–2 weeks to build properly, then ongoing operations. |
+| F. Model in the URL fragment | Encode the model into `#…`. | Free. | No server at all. | Real models are megabytes; chat tools and email break long URLs well before that. Toy-sized only. |
+
+**Recommendation.** Build **A** first. It's about a day: a Pages deploy workflow, `polymerge share` for pushed files in public repos, and a link from the PR comment. Then build **B** for private models (1–2 days). Don't run a service (E) until there's real demand *and* a decision on who operates it. D is an opt-in power-user flag at most. C is a small add-on to A if wanted.
+
+**Decisions needed from the owner:**
+1. Is it OK to publish the viewer on GitHub Pages from this repo (`joshua080.github.io/polymerge`)? The hosting identity is the owner's.
+2. Should the hosted viewer load models from any https host, or only an allowlist (GitHub raw + gists)? Loading is data-only and client-side, but the page should show where a model came from.
+3. Is "unlisted, not private" acceptable for gist sharing?
+4. Is there any appetite for operating a service? Cost ≈ $0–5/month, but with abuse and privacy obligations.
+
+### Investigation — STEP support: scope estimate, not built
+
+**What changes.** STEP (ISO 10303: AP203/214/242) stores a **B-rep**: exact analytic or NURBS surfaces trimmed by edge loops, plus units, names, colours and assembly structure. Everything in polymerge starts at triangles. Reading STEP therefore means one of two things:
+- tessellate it into a mesh, and everything existing works on the mesh; or
+- build a second, B-rep-level diff.
+
+**Parsing options** (npm, checked 2026-09-29):
+
+| Option | Gives | Size / licence | Notes |
+|---|---|---|---|
+| `occt-import-js` 0.0.23 | STEP/IGES/BREP → triangle meshes per solid, **with each B-rep face's triangle range**, names, colours, assembly tree, unit conversion | 7.6 MB wasm; LGPL-2.1 | Emscripten build of OpenCascade. Node and browser. Last release Dec 2024. |
+| `opencascade.js` 1.1.1 / `replicad-opencascadejs` | The full OpenCascade API: surface types and parameters, topology, STEP *writing* | 49–67 MB unpacked (custom builds can be smaller); LGPL-2.1 | The only route to B-rep-level data in JavaScript. |
+| Our own STEP (Part 21) text reader | The entity graph: surfaces, placements, loops | Small; MIT | Parsing is easy. *Evaluating and trimming* surfaces into triangles needs a geometry kernel, which is not realistic to write. |
+
+**Experiment** (a throwaway in the scratch directory; nothing committed):
+- **Parts.** A plate built with real B-rep operations (OpenCascade via replicad): 100 × 60 × 10 mm, corner fillets r5, two Ø8 holes, 12 B-rep faces. Variants:
+  - *ours* moves one hole 5 mm;
+  - *theirs* adds a Ø6 hole;
+  - *corner* changes the fillets r5 → r8.
+- **Pipeline.** Each part was exported as STEP (40 kB each) and tessellated with `occt-import-js` (deflection 0.1% of the bounding box). The existing `polymerge diff` / `merge` then ran on the meshes.
+
+Results:
+- **Tessellation is deterministic and fast.** The same file tessellated twice gives identical triangles. The plate took 0.05 s. A 432 kB, 18-part CAx-IF test assembly (160 B-rep faces, 5 040 triangles) took 0.46 s. Units are normalised (an inch file comes out in mm).
+- **A local B-rep edit re-tessellates whole faces.** Moving one hole left 9 of 12 B-rep faces tessellated identically, but only **126 of 364 triangles (35%)**. The top and bottom faces carry most triangles, and both were re-triangulated around the moved hole. The fillet change left 2 of 12 faces identical.
+- **Diff.**
+  - Hole moved → Tier 2. It correctly reports 50 vertices moved by exactly 5.000 mm. It also reports 104 "modified" and 30 added/removed faces, all re-triangulation of the planar faces (46 vertices slid).
+  - Hole added → Tier 2: 52 vertices added, 146 faces added and 38 removed.
+  - Fillets r5 → r8 → Tier 3 (treated as a remesh), reported as 24 vertices removed.
+- **Merge.** Ours (hole moved) + theirs (hole added), which is trivially compatible in CAD, gives **1 conflict**: competing and overlapping additions on the re-triangulated top and bottom faces, 86 base vertices. Fillets + a hole gives a whole-model `lineage` conflict.
+
+**What a mesh conversion loses:**
+1. **Shape precision: bounded, and fine for viewing and diffing.** Tessellation vertices lie exactly on the true surfaces, and the chord error is at most the deflection, which we choose.
+2. **Meaning: the real loss.**
+   - Exact parameters (hole Ø8.00 → Ø8.10, fillet r5 → r8) become "vertices moved".
+   - Face identity is lost.
+   - A planar face that didn't change shows up as changed, because its triangles did.
+   
+   A CAD user wants "hole moved +5 mm in X", not "104 faces modified".
+3. **Merge output.** A mesh cannot be written back as STEP. A merged STEP would come out as STL or GLB, a downgrade no CAD user would accept. As measured above, mesh-level merging also invents conflicts that CAD would not have.
+
+**Scope estimate:**
+
+| Level | What | Estimate | Verdict |
+|---|---|---|---|
+| **A. View + diff through tessellation** | `.step`/`.stp` accepted by `diff`, `view` and the PR action. <br>`occt-import-js` is an optional, lazily loaded dependency in the CLI, and a separately fetched wasm in the viewer. <br>Both versions are tessellated with one *absolute* deflection derived from the base: a bounding-box ratio would tessellate two versions differently and invent changes. <br>Groups = solids / B-rep faces; names and colours kept. <br>`merge` refuses STEP with a clear message. | **3–5 days**, including generated STEP fixtures (replicad as a devDependency), tests, licence notices and the viewer bundle split | Feasible, and useful for review and PR images. Noisy on planar faces. |
+| **B. Face-aware diff** | Use the per-face triangle ranges to report changes per CAD face. Suppress re-triangulation noise: a face whose surface and boundary didn't change is unchanged. Report parameter changes for analytic surfaces (plane, cylinder, cone, sphere, torus). | **2–4 weeks** on top of A. It needs surface types and parameters: either the full OpenCascade build (~50 MB) or our own Part 21 reader for analytic surfaces. Matching faces across versions is CAD's "persistent naming" problem. | Where the real value is: a second engine beside the mesh one. |
+| **C. STEP merge (writing STEP)** | Merge B-rep edits and write a valid STEP. | **Months, with an uncertain outcome.** B-rep edits don't compose like mesh edits: a moved hole and an added hole both rebuild the same trimmed face. Parametric CAD tools merge at the feature-history level, not the B-rep. | Not recommended. |
+
+**Licence.** Both OpenCascade builds are LGPL-2.1. The usual approach alongside an MIT tool is to ship the unmodified wasm as a separately loaded, replaceable module, with its licence text. That needs a conscious decision; this is not legal advice.
+
+**Recommendation.** If STEP matters, build **A** first: it's small, and it makes STEP visible in the PR action. Decide on **B** after trying it on real exported parts. Don't do **C**.
+
+**Decisions needed from the owner:**
+1. Is ~8 MB of LGPL wasm, as an optional download, acceptable?
+2. Should STEP be view/diff only, with merge refusing it?
+3. Which CAD tools' STEP exports matter? They decide the fixtures.
+
+### State at end of session 8
+
+**Verified.** `npm run verify` passes locally on the integrated branch in 2m45s (1m40s when nothing else was running), and CI is green on GitHub, including the new `Model diff` render job. It covers:
+- typecheck, including the action's JavaScript;
+- 647 unit / fixture / merge / web / action tests (+100 conditional fixture skips) and 6 perf tests;
+- build;
+- smoke (21/21 browser cases), e2e-view, e2e-worker, e2e-merge, e2e-git (including saving from the review, and glTF and textured-glTF merges in real git), e2e-action and e2e-pack.
+
+**Not verified** (needs the real thing):
+- **The pull-request comment on real GitHub.** The render half ran on this PR's own runs, but with no model changes. The comment half needs the workflow on `main`, plus a PR that changes a model. Whether the commit-pinned `raw` image URLs render for signed-in readers of a **private** repository is unverified.
+- Git LFS downloading from a real remote, and macOS/Windows runners for the action.
+- The review's Save on Windows (the browser launcher `cmd /c start` probably cuts the URL at `&`, so no token reaches the page: no Save, and it fails safe), and in browsers other than Chromium.
+
+**Known limits / next steps**
+1. **Merge review for appearance:** highlight appearance conflicts and show textures (about 1–2 days).
+2. **Publishing.** Session 6's release is still pending on the owner's `NPM_TOKEN` and a `v0.1.1` tag. This session's work would go out as **0.2.0** (new features: glTF output, appearance merge, write-back, the action), and the action's docs assume a `v1` tag that doesn't exist yet.
+3. **The Action's first live run.** After merging to `main`, open a small PR that changes a model and check the comment, the image branch and the private-repo behaviour.
+4. **Shareable links and STEP:** written up above, with decisions needed from the owner.
+5. Deformation transfer for `lineage` conflicts, and transferring appearance across tessellations.
+6. Carried over: parsing in the worker; chunked scene building for very large results; per-model Z-up in the viewer.
+7. The CLI doesn't print the glTF writer's notes (static skin geometry, faces with no node).
+
+---
+
 ## Session 7 — 2026-09-29 — README ready for the first release
 
 - **Pre-release note removed before tagging.** The Install section no longer says the packages are "not on npm yet". Its from-source steps (clone, build, `npm link -w @joshuahurley/polymerge`) moved to Development.

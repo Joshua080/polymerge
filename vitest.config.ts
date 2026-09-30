@@ -9,7 +9,7 @@ export default defineConfig({
     alias: coreAlias,
   },
   test: {
-    include: ['packages/*/test/**/*.test.ts', 'fixtures/**/*.test.ts', 'apps/web/test/**/*.test.ts'],
+    include: ['packages/*/test/**/*.test.ts', 'fixtures/**/*.test.ts', 'apps/web/test/**/*.test.ts', 'action/test/**/*.test.ts'],
     // Timing-bounded perf tests run separately (vitest.perf.config.ts), alone, so their bounds
     // measure the engine rather than contention with other test files running in parallel.
     exclude: [...configDefaults.exclude, '**/perf.test.ts'],

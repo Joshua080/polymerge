@@ -8,7 +8,7 @@
  *   polymerge review <path>              (merge review of a conflicted git merge)
  *   polymerge demo [example]             (the viewer on a built-in example)
  *   polymerge info <file>
- *   polymerge merge <base> <ours> <theirs> [-o merged.stl] [--resolve ours|theirs|base] [--pick id=side]
+ *   polymerge merge <base> <ours> <theirs> [-o merged.stl|obj|glb|gltf] [--resolve ours|theirs|base] [--pick id=side]
  *   polymerge git-diff <git external-diff args...>
  *   polymerge git-merge %O %A %B %P
  *   polymerge git-setup
@@ -17,7 +17,7 @@ import { parseArgs } from 'node:util';
 import { runDiff } from './commands/diff.js';
 import { gitSetupText, runGitDiff } from './commands/git.js';
 import { runInfo } from './commands/info.js';
-import { gitStage, runGitMerge, runGitResolve, runMerge } from './commands/merge.js';
+import { runGitMerge, runGitResolve, runMerge } from './commands/merge.js';
 import { createRequire } from 'node:module';
 import { MERGE_DEMOS, runDemo, runReview, runView } from './commands/view.js';
 
@@ -44,14 +44,17 @@ Usage:
       --no-open              Do not launch a browser, just print the URL
       --web-dist <dir>       Path to a built viewer (default: the one bundled with polymerge)
   polymerge merge <base> <ours> <theirs> [options]   Three-way merge (exit 1 = unresolved conflicts)
-      -o, --output <file>    Write the merged model (.stl or .obj)
+      -o, --output <file>    Write the merged model: .stl, .obj, .glb or .gltf (glTF keeps the nodes)
       --resolve <side>       Resolve every conflict with ours | theirs | base
       --pick <id>=<side>     Resolve one conflict (repeatable), e.g. --pick 0=theirs
       --report <file>        Write the conflicts and statistics as JSON
       --no-collision-check   Don't check the combined edits for surfaces passing through each other
       -q, --quiet            No report
+                             glTF/GLB inputs also merge materials, UVs and texture references; their
+                             conflicts are numbered after the geometry ones and resolved the same way
   polymerge review <path> [--port N] [--no-open]
-                                             Open the merge review on a conflicted git merge of <path>
+                                             Open the merge review on a conflicted git merge of <path>;
+                                             "Save to repository" writes <path> and stages it (git add)
   polymerge resolve <path> --pick <id>=<side> | --resolve <side>
                                              Finish a conflicted git merge of <path> (reads git's index stages)
   polymerge demo [example] [--port N] [--no-open]
@@ -184,7 +187,7 @@ async function main(argv: string[]): Promise<number> {
         },
       });
       requirePositionals('review', positionals, 1);
-      return runReview(positionals[0], { port: values.port, host: values.host, open: !values['no-open'], webDist: values['web-dist'] }, gitStage);
+      return runReview(positionals[0], { port: values.port, host: values.host, open: !values['no-open'], webDist: values['web-dist'] });
     }
     case 'resolve': {
       const { values, positionals } = parseArgs({

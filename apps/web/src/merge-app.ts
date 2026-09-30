@@ -3,16 +3,20 @@
  * worker and show the merged model coloured by who shaped each face (MERGE_COLORS). Conflict
  * regions are orange until resolved. Click a region (or its card) to select it: its versions
  * appear as ghosts (ours blue, theirs purple, base grey), and Ours / Theirs / Base — buttons or
- * keys 1 / 2 / 3 — resolve it. The result downloads as STL / OBJ, and the equivalent CLI command
- * reproduces it.
+ * keys 1 / 2 / 3 — resolve it. The result downloads as STL / OBJ / GLB / glTF, and the equivalent CLI command
+ * reproduces it. Opened by `polymerge review <path>`, it can also save the result to <path> and
+ * stage it ("Save to repository"; the server side and its checks: docs/write-back-security.md).
  */
 import {
   MERGE_COLORS,
   MeshLoadError,
+  WRITABLE_FORMATS,
   writeMesh,
   type IMergeConflict,
   type MergeResolution,
+  type SourceFormat,
   type Vec3,
+  type WritableFormat,
 } from 'polymerge-core';
 import * as THREE from 'three';
 import { findMergeDemo, MERGE_DEMOS } from './dev/merge-demos.js';
@@ -30,6 +34,53 @@ const SIDES: MergeSide[] = ['base', 'ours', 'theirs'];
 const SIDE_LABEL: Record<MergeSide, string> = { base: 'Base (common ancestor)', ours: 'Ours', theirs: 'Theirs' };
 const RESOLUTIONS: MergeResolution[] = ['ours', 'theirs', 'base'];
 const RESOLUTION_COLOR: Record<MergeResolution, string> = { ours: MERGE_COLORS.ours, theirs: MERGE_COLORS.theirs, base: MERGE_COLORS.unchanged };
+
+/** What `polymerge review` says this session can save (GET /api/review/session). */
+interface IReviewSessionInfo {
+  path: string;
+  name: string;
+  format?: string;
+  writable: boolean;
+  reason?: string;
+}
+
+/** "Save to repository": where the last attempt got to. `picks` = the choices it saved. */
+interface ISaveState {
+  state: 'idle' | 'saving' | 'saved' | 'error';
+  message?: string;
+  written?: boolean;
+  picks?: string;
+}
+
+const TOKEN_HEADER = 'x-polymerge-token';
+const TOKEN_STORAGE = 'polymerge-review-token';
+
+/**
+ * The review session's token: from the URL fragment (`#token=…`, put there by `polymerge
+ * review`), which is then removed from the address bar at once, or — after a reload of this tab
+ * — from sessionStorage (per tab and origin). Never in the query, a cookie or localStorage.
+ */
+function takeSessionToken(): string | null {
+  const m = /(?:^#|&)token=([A-Za-z0-9_-]{16,128})(?:&|$)/.exec(location.hash);
+  if (m) {
+    const url = new URL(location.href);
+    url.hash = '';
+    history.replaceState(history.state, '', url);
+    try {
+      sessionStorage.setItem(TOKEN_STORAGE, m[1]);
+    } catch {
+      // storage unavailable: the token lives in memory only (a reload loses the Save button)
+    }
+    return m[1];
+  }
+  try {
+    return sessionStorage.getItem(TOKEN_STORAGE);
+  } catch {
+    return null;
+  }
+}
+
+const hex = (buf: ArrayBuffer): string => Array.from(new Uint8Array(buf), (b) => b.toString(16).padStart(2, '0')).join('');
 
 const LAYER_DEFS: { key: keyof IMergeLayerVisibility; label: string; color?: string; hint: string }[] = [
   { key: 'previewOurs', label: 'Preview: ours', color: MERGE_COLORS.ours, hint: "The selected conflict region as ours has it" },
@@ -52,6 +103,13 @@ export class MergeApp {
   private source = '';
   /** Path of the model in its repository (from `polymerge view`), for the resolve command. */
   private repoPath: string | null = null;
+  /** Set when `polymerge review` offers saving: its token and what it can save. */
+  private saveSession: { token: string; info: IReviewSessionInfo } | null = null;
+  private saveState: ISaveState = { state: 'idle' };
+  /** Other models were loaded: this tab no longer shows the review session's merge. */
+  private saveEnded = false;
+  /** The reviewer confirmed saving despite collision warnings (reset by every new choice). */
+  private warningsAcknowledged = false;
   private seq = 0;
   private log: string[] = [];
 
@@ -221,10 +279,12 @@ export class MergeApp {
 
   async start(params: URLSearchParams): Promise<void> {
     const demo = params.get('demo');
+    const token = takeSessionToken();
     this.repoPath = params.get('path');
     if (demo) return this.loadDemo(demo);
     const urls = SIDES.map((s) => params.get(s));
     if (urls.every(Boolean)) {
+      if (token) void this.openSaveSession(token);
       return this.loadTriple(
         Object.fromEntries(SIDES.map((s, i) => [s, () => loadFromUrl(urls[i]!, params.get(`${s}Name`) ?? undefined)])) as Record<
           MergeSide,
@@ -235,12 +295,42 @@ export class MergeApp {
     }
   }
 
+  /**
+   * Ask the server what this review session can save. Anything but a clear answer (a `view` or
+   * `demo` server has no such route, a stale token is refused) leaves saving off.
+   */
+  private async openSaveSession(token: string): Promise<void> {
+    try {
+      const res = await fetch('/api/review/session', { headers: { [TOKEN_HEADER]: token }, cache: 'no-store', credentials: 'omit' });
+      if (!res.ok) return;
+      const info = (await res.json()) as IReviewSessionInfo;
+      if (typeof info?.path !== 'string' || this.saveEnded) return;
+      this.saveSession = { token, info };
+      // Still loading: show() renders it with the merge.
+      if (this.view) {
+        this.renderOutput();
+        this.publishState('ready');
+      }
+    } catch {
+      // not a review session: no saving
+    }
+  }
+
+  /** The viewer now shows other models than the review session's: saving them is not offered. */
+  private endSaveSession(): void {
+    this.saveEnded = true;
+    this.saveSession = null;
+    this.saveState = { state: 'idle' };
+    this.repoPath = null;
+  }
+
   private async loadDemo(id: string): Promise<void> {
     const demo = findMergeDemo(id);
     if (!demo) {
       this.fail('Unknown example', new Error(`no merge example "${id}" (known: ${MERGE_DEMOS.map((d) => d.id).join(', ')})`));
       return;
     }
+    this.endSaveSession();
     this.el.examples.value = id;
     setChildren(this.el.exampleInfo, h('span', { class: 'desc expanded' }, demo.description));
     this.setUrl({ mode: 'merge', demo: id });
@@ -255,6 +345,7 @@ export class MergeApp {
   }
 
   private async loadFiles(entries: [MergeSide, File][]): Promise<void> {
+    this.endSaveSession();
     this.el.examples.value = '';
     this.el.exampleInfo.replaceChildren();
     this.setUrl({ mode: 'merge' });
@@ -349,6 +440,8 @@ export class MergeApp {
   private async applyResolutions(next: Record<number, MergeResolution>): Promise<void> {
     const seq = ++this.seq;
     this.resolutions = next;
+    // A confirmation covers the result it was given for, not the next one.
+    this.warningsAcknowledged = false;
     this.el.busy.classList.remove('hidden');
     this.publishState('loading');
     let view: IMergeView;
@@ -570,22 +663,121 @@ export class MergeApp {
       setChildren(this.el.output, h('p', { class: 'muted' }, 'The merged model can be downloaded once the merge has run.'));
       return;
     }
-    const download = (format: 'stl' | 'obj'): HTMLElement =>
+    const download = (format: WritableFormat): HTMLElement =>
       h('button', { class: 'small', dataset: { download: format }, onclick: () => this.download(format) }, `Download .${format}`);
     const command = this.command();
     const copy = h('button', { class: 'small', onclick: () => void navigator.clipboard?.writeText(command.join('\n')) }, 'Copy');
     setChildren(
       this.el.output,
+      this.saveBlock(v),
       h(
         'p',
         { class: 'muted small' },
         v.clean ? 'Nothing is unresolved.' : 'Unresolved regions are written in their BASE state (as the CLI does).',
       ),
-      h('div', { class: 'row buttons' }, download('stl'), download('obj')),
+      h('div', { class: 'row buttons' }, ...WRITABLE_FORMATS.map(download)),
       h('p', { class: 'muted small' }, 'Same result from the command line:'),
       h('pre', { class: 'merge-command' }, command.join('\n')),
       h('div', { class: 'row' }, copy),
     );
+  }
+
+  /** Picks as a stable string, to tell whether the choices changed since a save. */
+  private static picksKey(v: IMergeView): string {
+    return v.conflicts.map((c) => `${c.id}=${c.resolution ?? '-'}`).join(' ');
+  }
+
+  /**
+   * "Save to repository" (only in a `polymerge review` session that can save): enabled once every
+   * conflict is resolved; collision warnings need an explicit "save anyway" first.
+   */
+  private saveBlock(v: IMergeView): HTMLElement | null {
+    const session = this.saveSession;
+    if (!session) return null;
+    const { info } = session;
+    const s = this.saveState;
+    const block = h(
+      'div',
+      { class: 'save-repo', dataset: { saveState: s.state } },
+      h('div', { class: 'save-title' }, 'Save to repository'),
+      h('p', { class: 'muted small' }, `Writes `, h('code', null, info.path), ` and stages it (git add). Nothing is committed.`),
+    );
+    if (!info.writable) {
+      block.append(h('p', { class: 'save-status bad' }, `Unavailable: ${info.reason ?? 'this session cannot save'}. Download the result or use the command below.`));
+      return block;
+    }
+    if (s.state === 'saved') {
+      block.append(
+        h('p', { class: 'save-status ok', role: 'status' }, s.message ?? `Saved ${info.path}.`),
+        h('p', { class: 'muted small' }, 'Next, conclude the merge:'),
+        h('pre', { class: 'merge-command' }, 'git commit'),
+      );
+      if (s.picks !== MergeApp.picksKey(v)) {
+        block.append(h('p', { class: 'save-status bad' }, 'Your choices changed after saving: the file in the repository still has the earlier ones.'));
+      }
+      return block;
+    }
+    const unresolved = v.conflicts.filter((c) => c.resolution === null).length;
+    const warned = v.warnings.length > 0;
+    const blocked =
+      unresolved > 0
+        ? `Resolve every conflict first (${unresolved} left): saving now would mark regions still at base as resolved.`
+        : warned && !this.warningsAcknowledged
+          ? 'Your choices combine into a collision (see the warning above). Confirm to save anyway.'
+          : null;
+    if (warned && unresolved === 0) {
+      const ack = h('input', { type: 'checkbox', checked: this.warningsAcknowledged, dataset: { saveAck: '' } });
+      ack.addEventListener('change', () => {
+        this.warningsAcknowledged = ack.checked;
+        this.renderOutput();
+        this.publishState('ready');
+      });
+      block.append(h('label', { class: 'save-ack' }, ack, h('span', null, 'Save anyway: I have reviewed the collision warning.')));
+    }
+    const saving = s.state === 'saving';
+    block.append(
+      h('div', { class: 'row buttons' }, h('button', { class: 'save-button', dataset: { save: 'repo' }, disabled: blocked !== null || saving, onclick: () => void this.saveToRepository() }, saving ? 'Saving…' : 'Save to repository')),
+    );
+    if (s.state === 'error') block.append(h('p', { class: 'save-status bad', role: 'alert' }, s.written ? 'Saved, but not staged: ' : 'Not saved: ', s.message ?? 'unknown error'));
+    else if (blocked) block.append(h('p', { class: 'muted small' }, blocked));
+    return block;
+  }
+
+  /**
+   * Save through `polymerge review`: send the choices (never bytes or a path) plus the SHA-256 of
+   * the file this view would write; the server recomputes the file and writes it only if its own
+   * result hashes the same.
+   */
+  private async saveToRepository(): Promise<void> {
+    const session = this.saveSession;
+    const v = this.view;
+    if (!session || !v || !session.info.writable || !session.info.format || this.saveState.state === 'saving') return;
+    const picks: Record<string, MergeResolution> = {};
+    for (const c of v.conflicts) if (c.resolution) picks[c.id] = c.resolution;
+    const key = MergeApp.picksKey(v);
+    this.setSaveState({ state: 'saving' });
+    try {
+      const bytes = writeMesh(v.merged, session.info.format as SourceFormat, { name: session.info.name });
+      const expect = hex(await crypto.subtle.digest('SHA-256', bytes as BufferSource));
+      const res = await fetch('/api/review/save', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', [TOKEN_HEADER]: session.token },
+        body: JSON.stringify({ picks, acknowledgeWarnings: v.warnings.length > 0 && this.warningsAcknowledged, expect }),
+        cache: 'no-store',
+        credentials: 'omit',
+      });
+      const body = (await res.json().catch(() => null)) as { ok?: boolean; written?: boolean; message?: string; error?: string } | null;
+      if (res.ok && body?.ok) this.setSaveState({ state: 'saved', message: body.message, picks: key });
+      else this.setSaveState({ state: 'error', written: body?.written === true, message: body?.message ?? body?.error ?? `HTTP ${res.status}` });
+    } catch (err) {
+      this.setSaveState({ state: 'error', message: errorMessage(err) });
+    }
+  }
+
+  private setSaveState(next: ISaveState): void {
+    this.saveState = next;
+    this.renderOutput();
+    this.publishState(this.view ? 'ready' : 'idle');
   }
 
   private renderLayers(): void {
@@ -645,12 +837,15 @@ export class MergeApp {
       .sort(([a], [b]) => Number(a) - Number(b))
       .map(([id, r]) => `--pick ${id}=${r}`);
     const name = (s: MergeSide): string => q(this.models[s]?.name ?? `${s}.stl`);
-    const out = [[`polymerge merge ${name('base')} ${name('ours')} ${name('theirs')}`, '-o merged.stl', ...picks].join(' ')];
+    // Suggest the base's own format when it is writable (a glTF base keeps its nodes that way).
+    const ext = (this.models.base?.name ?? '').toLowerCase().match(/\.([^.]+)$/)?.[1];
+    const format = WRITABLE_FORMATS.find((f) => f === ext) ?? 'stl';
+    const out = [[`polymerge merge ${name('base')} ${name('ours')} ${name('theirs')}`, `-o merged.${format}`, ...picks].join(' ')];
     if (this.repoPath) out.push([`polymerge resolve ${q(this.repoPath)}`, ...picks].join(' '));
     return out;
   }
 
-  private download(format: 'stl' | 'obj'): void {
+  private download(format: WritableFormat): void {
     const v = this.view;
     if (!v) return;
     const stem = (this.models.base?.name ?? 'model').replace(/\.[^.]+$/, '');
@@ -729,6 +924,15 @@ export class MergeApp {
       faceKinds,
       selected: this.selected,
       command: this.command().join('\n'),
+      save: this.saveSession
+        ? {
+            path: this.saveSession.info.path,
+            writable: this.saveSession.info.writable,
+            enabled: this.el.output.querySelector<HTMLButtonElement>('[data-save="repo"]')?.disabled === false,
+            state: this.saveState.state,
+            message: this.saveState.message,
+          }
+        : undefined,
     };
   }
 
