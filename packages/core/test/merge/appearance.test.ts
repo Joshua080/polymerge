@@ -779,4 +779,51 @@ describe('appearance merge · glTF files end to end (parse → merge)', () => {
     const t = resolveMerge(r, { 0: 'theirs' });
     expect(Array.from(t.merged.appearance!.images[0].data!)).toEqual(Array.from(new TextEncoder().encode('albedo v3')));
   });
+
+  /**
+   * Two nodes ("Left", "Right"), each a quad of two triangles with its own material and UVs: Left is
+   * "Wood" (textured, its UV island at `leftU`), Right is "Steel" (a colour, `steel`).
+   */
+  function twoParts(leftU: number, steel: number[]): Uint8Array {
+    const quad = (x0: number, u0: number) => ({
+      positions: [x0, 0, 0, x0 + 1, 0, 0, x0 + 1, 1, 0, x0, 0, 0, x0 + 1, 1, 0, x0, 1, 0],
+      attributes: { TEXCOORD_0: { data: [u0, 0, u0 + 0.25, 0, u0 + 0.25, 0.25, u0, 0, u0 + 0.25, 0.25, u0, 0.25], type: 'VEC2' as const, componentType: 5126 } },
+    });
+    return glbBytes(
+      buildGltf({
+        meshes: [
+          { name: 'LeftMesh', primitives: [{ ...quad(0, leftU), material: 0 }] },
+          { name: 'RightMesh', primitives: [{ ...quad(3, 0), material: 1 }] },
+        ],
+        nodes: [{ name: 'Left', mesh: 0 }, { name: 'Right', mesh: 1, translation: [0, 2, 0] }],
+        materials: [
+          { name: 'Wood', pbrMetallicRoughness: { baseColorTexture: { index: 0 } } },
+          { name: 'Steel', pbrMetallicRoughness: { baseColorFactor: steel, metallicFactor: 1 } },
+        ],
+        extra: { images: [{ uri: `data:image/png;base64,${btoa('wood')}` }], textures: [{ source: 0 }] },
+      }),
+    );
+  }
+
+  it('node structure and appearance travel together: faces keep their node, material and UVs through merge, write and read', async () => {
+    const base = await load(twoParts(0, [0.5, 0.5, 0.5, 1]), 'base.glb');
+    const ours = await load(twoParts(0.5, [0.5, 0.5, 0.5, 1]), 'ours.glb'); // Left's island moved
+    const theirs = await load(twoParts(0, [0.9, 0.9, 1, 1]), 'theirs.glb'); // Steel recoloured
+    expect(base.scene!.nodes.map((n) => n.name)).toEqual(['Left', 'Right']);
+    const r = mergeMeshes(base, ours, theirs, opts);
+    await checkAppearance(r);
+    expect(r.clean).toBe(true);
+    const m = r.merged;
+    // Materials and faceMaterials reach the merged mesh, and each node's faces keep their own.
+    expect(m.materials.map((x) => x.name)).toEqual(['Wood', 'Steel']);
+    expect(Array.from(m.faceMaterials!)).toEqual([0, 0, 1, 1]);
+    expect(m.scene!.nodes.map((n) => n.name)).toEqual(['Left', 'Right']);
+    expect(Array.from(m.scene!.faceSources, (s) => m.scene!.sources[s].node)).toEqual([0, 0, 1, 1]);
+    expect(m.appearance!.materials[1].baseColorFactor.map((x) => Number(x.toFixed(3)))).toEqual([0.9, 0.9, 1, 1]);
+    expect(close(faceUv(m, 0), faceUv(ours, 0))).toBe(true); // Left's island: ours
+    const back = await load(writeGlb(m), 'merged.glb');
+    expect(back.scene!.nodes.map((n) => [n.name, n.translation])).toEqual([['Left', undefined], ['Right', [0, 2, 0]]]);
+    expect(back.groups.map((g) => g.name)).toEqual(['Left', 'Right']);
+    expect(sortedFaces(back)).toEqual(sortedFaces(m));
+  });
 });
