@@ -50,6 +50,8 @@ Usage:
       --report <file>        Write the conflicts and statistics as JSON
       --no-collision-check   Don't check the combined edits for surfaces passing through each other
       -q, --quiet            No report
+                             glTF/GLB inputs also merge materials, UVs and texture references; their
+                             conflicts are numbered after the geometry ones and resolved the same way
   polymerge review <path> [--port N] [--no-open]
                                              Open the merge review on a conflicted git merge of <path>;
                                              "Save to repository" writes <path> and stages it (git add)

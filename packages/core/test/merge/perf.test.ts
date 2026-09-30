@@ -1,6 +1,7 @@
 /**
  * Merge performance at ~100k vertices, including the combined-edit (collision) check, which
- * examines every face pair near geometry that differs from both sides. Runs in the perf pass
+ * examines every face pair near geometry that differs from both sides, and the appearance merge
+ * (islands, assignment, texture-space overlap search). Runs in the perf pass
  * (vitest.perf.config.ts), alone, so the bound measures the merge rather than the scheduler.
  */
 import { describe, expect, it } from 'vitest';
@@ -9,6 +10,7 @@ import { createMesh } from '../../src/mesh.js';
 import type { IMesh, IMeshScene, Vec3 } from '../../src/types.js';
 import { writeGlb } from '../../src/writers/index.js';
 import { grid, silent, withMoves } from '../diff/util.js';
+import { def, image, tex, textured, type ILookSpec } from './appearance-util.js';
 
 /** Two wavy sheets (two parts), and the edits of the scenario below. */
 function scenario(): { base: IMesh; ours: IMesh; theirs: IMesh; local: Record<number, [number, number, number]> } {
@@ -77,6 +79,67 @@ describe('merge performance (~100k vertices)', () => {
     expect(r.clean).toBe(true);
     expect(r.stats.partMotionsFromOurs).toBe(1);
     expect(r.stats.movedFromTheirs).toBe(Object.keys(local).length);
+    expect(ms).toBeLessThan(15_000);
+  });
+
+  it('appearance (glTF-like, ~100k vertices, per-corner UVs in 256 islands): both sides re-UV, repaint and edit, clean within seconds', () => {
+    // 321 × 321 vertices = 320 × 320 quads = 204.8k faces; islands of 20 × 20 quads, each in its own
+    // cell of texture space; 4 materials by quadrant, all sampling one image.
+    const n = 321;
+    const cell = 1 / 16;
+    const island = (i: number, j: number): number => Math.floor(i / 20) + 16 * Math.floor(j / 20);
+    const s = (cell / 20) * 0.95; // a margin between the cells, so islands are separate
+    const place = (k: number, moved: Set<number>): [number, number, number] => {
+      const [ci, cj] = [k % 16, Math.floor(k / 16)];
+      const shift = moved.has(k) ? 2 : 0; // moved islands go to a free area beyond u = 1
+      return [shift + ci * cell - ci * 20 * s, cj * cell - cj * 20 * s, s];
+    };
+    const albedo = image('albedo');
+    const materials = ['A', 'B', 'C', 'D'].map((name) => def(name, { baseColorTexture: tex(0) }));
+    const spec = (moved: Set<number>, paint: (i: number, j: number) => number, extra: Partial<ILookSpec> = {}): ILookSpec => ({
+      nx: n,
+      ny: n,
+      island,
+      place: (k) => place(k, moved),
+      materials,
+      images: [albedo],
+      material: (i, j) => paint(i, j),
+      ...extra,
+    });
+    const quadrantPaint = (i: number, j: number): number => (i < 160 ? 0 : 1) + (j < 160 ? 0 : 2);
+    const t0 = performance.now();
+    const base = textured(spec(new Set(), quadrantPaint));
+    // Ours: 30 islands moved in texture space, a 50 × 50-quad patch repainted, a roughness change.
+    const oursMoved = new Set(Array.from({ length: 30 }, (_, k) => k * 3));
+    const ours = textured(
+      spec(oursMoved, (i, j) => (i >= 40 && i < 90 && j >= 40 && j < 90 ? 3 : quadrantPaint(i, j)), {
+        materials: [{ ...materials[0], roughnessFactor: 0.2 }, ...materials.slice(1)],
+      }),
+    );
+    // Theirs: 30 other islands moved, another patch repainted, 3000 local vertex edits.
+    const theirsMoved = new Set(Array.from({ length: 30 }, (_, k) => 128 + k * 3));
+    let seed = 11;
+    const rand = (): number => (seed = (seed * 1103515245 + 12345) >>> 0) / 2 ** 32;
+    const moves: Record<number, [number, number, number]> = {};
+    for (let k = 0; k < 3000; k++) moves[Math.floor(rand() * n * n)] = [0, 0, (rand() < 0.5 ? -1 : 1) * (0.05 + 0.2 * rand())];
+    const theirs = textured(spec(theirsMoved, (i, j) => (i >= 200 && i < 250 && j >= 200 && j < 250 ? 2 : quadrantPaint(i, j)), { moves }));
+    const built = performance.now() - t0;
+    const t1 = performance.now();
+    const geometryOnly = mergeMeshes(base, ours, theirs, { logger: silent, mergeAppearance: false });
+    const tGeometry = performance.now() - t1;
+    const t2 = performance.now();
+    const r = mergeMeshes(base, ours, theirs, { logger: silent });
+    const ms = performance.now() - t2;
+    console.info(
+      `[perf] merge with appearance ${base.vertexCount} vertices / ${base.faceCount} faces: ${ms.toFixed(0)} ms ` +
+        `(geometry only ${tGeometry.toFixed(0)} ms; building the inputs ${built.toFixed(0)} ms)`,
+    );
+    expect(geometryOnly.clean).toBe(true);
+    expect(r.clean).toBe(true);
+    expect(r.stats.movedFromTheirs).toBe(Object.keys(moves).length);
+    expect(r.appearance!.stats).toMatchObject({ uvFacesFromOurs: 30 * 800, uvFacesFromTheirs: 30 * 800, propertiesFromOurs: 1 });
+    expect(r.appearance!.stats.facesReassignedFromOurs).toBe(50 * 50 * 2);
+    expect(r.appearance!.stats.facesReassignedFromTheirs).toBe(50 * 50 * 2);
     expect(ms).toBeLessThan(15_000);
   });
 });

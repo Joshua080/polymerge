@@ -9,6 +9,12 @@
  * conflict region stays in its BASE state until a resolution chooses 'ours' / 'theirs'.
  * The combination is then checked for damage neither side has (collide.ts): collision
  * conflicts before resolution, warnings after it.
+ *
+ * When base, ours and theirs all carry appearance data (glTF), materials, material assignment,
+ * per-corner UVs and texture references are merged too (appearance.ts; semantics:
+ * docs/appearance-merge-design.md). Their conflicts follow the geometry ones in id order; the ones
+ * that also need the geometry (`appearance-geometry`) join the geometry regions before the collision
+ * check runs.
  */
 import { buildComponents } from '../diff/components.js';
 import { diffMeshes } from '../diff/engine.js';
@@ -24,9 +30,10 @@ import type {
   MergeMeshesFn,
   MergeResolution,
 } from '../types.js';
+import { materializeAppearance, planAppearance, type IAppearancePlan } from './appearance.js';
 import { addCollisionConflicts, collisionWarning } from './collide.js';
 import { materialize, type IResolutions } from './materialize.js';
-import { buildPlan, type IMergePlan, type IRegion } from './plan.js';
+import { addAtomics, buildPlan, type IMergePlan, type IRegion } from './plan.js';
 import { decomposeSide } from './sides.js';
 
 const now: () => number =
@@ -34,6 +41,8 @@ const now: () => number =
 
 /** Plans kept for resolveMerge (not serialisable, not part of the contract). */
 const PLANS = new WeakMap<IMergeResult, IMergePlan>();
+/** The appearance plan of a merge plan, when the appearance merge runs. */
+const LOOKS = new WeakMap<IMergePlan, IAppearancePlan>();
 
 const KIND_TEXT: Record<MergeConflictKind, (n: number) => string> = {
   'move-move': (n) => `${n} vertex(es) moved to different places by ours and theirs`,
@@ -45,6 +54,11 @@ const KIND_TEXT: Record<MergeConflictKind, (n: number) => string> = {
   'global-transform': () => 'both sides transformed the whole model differently',
   lineage: () => 'vertex identity was lost on one side, so edits cannot be merged vertex by vertex',
   collision: () => 'edits that are fine on each side make the surface pass through itself or fold over when combined',
+  'material-property': (n) => `both sides changed the same material propert(ies) differently (${n})`,
+  'material-assignment': (n) => `${n} face(s) given different materials by ours and theirs`,
+  'uv-layout': (n) => `both sides changed the UV layout of the same island(s) differently (${n} face(s))`,
+  'uv-overlap': (n) => `islands changed by different sides now overlap in texture space on a shared image (${n} face pair(s))`,
+  'appearance-geometry': (n) => `materials or UVs one side changed cannot be merged without deciding the other side's geometry change (${n})`,
 };
 
 function regionMessage(r: IRegion): string {
@@ -171,12 +185,20 @@ function assemble(
   };
   const nothingChosen = provisional.every((c) => choiceOf(c.id) === null);
   const m = nothingChosen && plan.unresolvedMerge ? plan.unresolvedMerge : materialize(plan, res);
-  const conflicts = buildConflicts(plan, m.global).map((c) => ({ ...c, resolution: choiceOf(c.id) }));
+  const geometry = buildConflicts(plan, m.global).map((c) => ({ ...c, resolution: choiceOf(c.id) }));
+  // Appearance conflicts follow the geometry ones: ids geometry.length + k.
+  const look = LOOKS.get(plan);
+  const offset = geometry.length;
+  const anyChosen = geometry.some((c) => c.resolution !== null) || (look?.conflicts.some((_, k) => choiceOf(offset + k) !== null) ?? false);
+  const appearance = look
+    ? materializeAppearance(look, plan, m, { region: res.region, conflict: (k) => choiceOf(offset + k) }, offset, anyChosen)
+    : null;
+  const conflicts = appearance ? [...geometry, ...appearance.conflicts] : geometry;
   const unresolved = conflicts.filter((c) => c.resolution === null).length;
   // Unresolved regions are base and the unresolved merge was checked when planning; chosen
   // resolutions can still combine badly with each other or with the automatic changes.
   const warning =
-    plan.detectCollisions && plan.lineage === null && conflicts.some((c) => c.resolution !== null && !c.wholeModel)
+    plan.detectCollisions && plan.lineage === null && geometry.some((c) => c.resolution !== null && !c.wholeModel)
       ? collisionWarning(plan, m)
       : null;
   const isIdentity = plan.global.source === 'base' || (plan.global.source === 'conflict' && res.global !== 'ours' && res.global !== 'theirs');
@@ -191,7 +213,7 @@ function assemble(
             ? (plan.ours.unitOnly ? plan.ours : plan.theirs).diff.alignment.units
             : undefined;
   const result: IMergeResult = {
-    merged: m.mesh,
+    merged: appearance ? appearance.mesh : m.mesh,
     clean: unresolved === 0,
     conflicts,
     stats: { ...m.stats, conflicts: conflicts.length, unresolved },
@@ -207,11 +229,12 @@ function assemble(
       },
     },
     provenance: m.provenance,
-    warnings: warning ? [warning] : [],
+    warnings: [warning, appearance?.warning ?? null].filter((w): w is NonNullable<typeof w> => w !== null),
     ours: plan.ours.diff,
     theirs: plan.theirs.diff,
     durationMs: now() - t0,
   };
+  if (appearance) result.appearance = appearance.info;
   PLANS.set(result, plan);
   if (logger) {
     const s = result.stats;
@@ -221,6 +244,14 @@ function assemble(
         `${s.movedConvergent + s.deletedConvergent + s.facesAddedConvergent} identical on both; ` +
         `${conflicts.length} conflict(s)${unresolved > 0 ? `, ${unresolved} unresolved (left in base state)` : ''}`,
     );
+    if (result.appearance) {
+      const a = result.appearance.stats;
+      logger.info(
+        `[polymerge] merge: appearance: ${a.materials} material(s); from ours ${a.propertiesFromOurs} propert(ies), ` +
+          `${a.facesReassignedFromOurs} re-assigned and ${a.uvFacesFromOurs} re-UV'd face(s); from theirs ${a.propertiesFromTheirs}, ` +
+          `${a.facesReassignedFromTheirs} and ${a.uvFacesFromTheirs}; identical on both ${a.propertiesConvergent + a.facesReassignedConvergent + a.uvFacesConvergent}`,
+      );
+    }
     for (const c of conflicts) {
       logger.info(`[polymerge]   conflict #${c.id}${c.resolution ? ` → ${c.resolution}` : ''}: ${c.message}`);
     }
@@ -244,6 +275,12 @@ export const mergeMeshes: MergeMeshesFn = (base: IMesh, ours: IMesh, theirs: IMe
   const sideB = decomposeSide('theirs', base, theirs, dB, baseComponents, baseFaceSet);
   const plan = buildPlan(base, sideA, sideB, baseComponents);
   plan.detectCollisions = options.detectCollisions !== false;
+  const look = options.mergeAppearance === false ? null : planAppearance(plan, { uvEpsilon: options.uvEpsilon, logger });
+  if (look) {
+    LOOKS.set(plan, look);
+    // Appearance units that need the geometry join the regions before the collision check sees them.
+    if (look.coupled.length > 0) addAtomics(plan, look.coupled.map((c) => c.atomic));
+  }
   if (plan.detectCollisions) addCollisionConflicts(plan, logger);
   return assemble(plan, options.resolutions ?? {}, options.defaultResolution ?? null, t0, logger);
 };

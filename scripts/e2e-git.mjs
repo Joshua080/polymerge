@@ -10,6 +10,8 @@
  *      resolve output and stages it (no longer UU); `git commit` finishes it.
  *   4. the same for a .glb with a node hierarchy: the driver writes GLB and keeps the nodes; a
  *      conflict is saved from the review exactly as `polymerge resolve` writes it.
+ *   5. a textured .glb: material properties, textures and UVs merge in the driver; a material
+ *      conflict keeps the base colour, and `polymerge resolve` writes the chosen side's.
  *
  *   node scripts/e2e-git.mjs        (needs `npm run build` first)
  */
@@ -18,6 +20,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import zlib from 'node:zlib';
 import { chromium } from 'playwright';
 import { watchdog } from './watchdog.mjs';
 
@@ -203,6 +206,114 @@ async function checkGlb() {
   check(git('status', '--short').trim() === '', '.glb merge committed, working tree clean');
 }
 
+/** A valid size × size RGB PNG of one colour (polymerge never decodes images, but validators do). */
+function png(rgb, size = 2) {
+  const table = Array.from({ length: 256 }, (_, n) => {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    return c >>> 0;
+  });
+  const crc = (bytes) => {
+    let c = 0xffffffff;
+    for (const b of bytes) c = table[(c ^ b) & 0xff] ^ (c >>> 8);
+    return (c ^ 0xffffffff) >>> 0;
+  };
+  const chunk = (type, data) => {
+    const body = Buffer.concat([Buffer.from(type), data]);
+    const out = Buffer.alloc(12 + data.length);
+    out.writeUInt32BE(data.length, 0);
+    body.copy(out, 4);
+    out.writeUInt32BE(crc(body), 8 + data.length);
+    return out;
+  };
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(size, 0);
+  ihdr.writeUInt32BE(size, 4);
+  ihdr.set([8, 2, 0, 0, 0], 8);
+  const rows = Buffer.alloc(size * (1 + size * 3));
+  for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) rows.set(rgb, y * (1 + size * 3) + 1 + x * 3);
+  return new Uint8Array(
+    Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), chunk('IHDR', ihdr), chunk('IDAT', zlib.deflateSync(rows)), chunk('IEND', Buffer.alloc(0))]),
+  );
+}
+
+/**
+ * 5. A textured .glb (material "Paint" with a base colour, roughness and a base colour texture, UVs)
+ * in real git. Clean: one side recolours and swaps the texture, the other changes the roughness; the
+ * driver merges both into the GLB. Conflict: both recolour differently; the driver keeps the base
+ * colour (and applies the other edits: the texture swap, a raised vertex) and reports a
+ * material-property conflict; `polymerge resolve --pick 0=theirs` writes theirs' colour.
+ */
+async function checkGlbAppearance() {
+  const imageA = png([200, 200, 200]);
+  const imageB = png([220, 20, 20]);
+  /** A 5 × 5-vertex panel, one island of UVs, material "Paint" textured with `image`; the centre raised by `lift`. */
+  const panel = ({ color = [0.8, 0.8, 0.8, 1], roughness = 0.5, image = imageA, lift = 0 } = {}) => {
+    const positions = [];
+    for (let j = 0; j < 5; j++) for (let i = 0; i < 5; i++) positions.push(i, j, i === 2 && j === 2 ? lift : 0);
+    const faces = [];
+    const uv = [];
+    const at = (v) => [(v % 5) / 4, Math.floor(v / 5) / 4];
+    for (let j = 0; j < 4; j++) {
+      for (let i = 0; i < 4; i++) {
+        const a = j * 5 + i;
+        const tri = [a, a + 1, a + 6, a, a + 6, a + 5];
+        faces.push(...tri);
+        for (const v of tri) uv.push(...at(v));
+      }
+    }
+    const def = { ...core.defaultMaterialDefinition(), name: 'Paint', baseColorFactor: color, roughnessFactor: roughness, baseColorTexture: { image: 0, texCoord: 0 } };
+    const mesh = core.createMesh(positions, faces, {
+      materials: [core.materialSummary(def, 'material_0')],
+      faceMaterials: new Int32Array(faces.length / 3),
+      appearance: { materials: [def], images: [{ hash: core.hashBytes(image), data: image, mimeType: 'image/png' }], uvs: [Float32Array.from(uv)] },
+      metadata: { format: 'glb', sourceName: 'panel.glb' },
+    });
+    return core.writeGlb(mesh);
+  };
+  const file = path.join(dir, 'panel.glb');
+  const read = () => core.loadMesh(fs.readFileSync(file), { fileName: 'panel.glb' });
+  const close = (a, b) => a.length === b.length && b.every((x, i) => Math.abs(a[i] - x) < 1e-6);
+  const topZ = (m) => Math.max(...Array.from(m.positions).filter((_, i) => i % 3 === 2));
+  const paint = (m) => m.appearance.materials[0];
+  const imageHash = (m) => m.appearance.images[paint(m).baseColorTexture.image].hash;
+
+  fs.writeFileSync(file, panel());
+  git('add', '-A');
+  git('commit', '-qm', 'panel base');
+  const panelBase = git('rev-parse', 'HEAD').trim();
+  git('checkout', '-q', '-b', 'look-theirs');
+  fs.writeFileSync(file, panel({ roughness: 0.9 }));
+  git('commit', '-qam', 'theirs: rougher');
+  git('checkout', '-q', 'main');
+  fs.writeFileSync(file, panel({ color: [1, 0, 0, 1], image: imageB }));
+  git('commit', '-qam', 'ours: red, another texture');
+  const clean = gitRaw('merge', '--no-edit', 'look-theirs');
+  check(clean.status === 0, `clean appearance merge of a textured .glb exits 0 (got ${clean.status})`);
+  let m = await read();
+  check(close(paint(m).baseColorFactor, [1, 0, 0, 1]) && Math.abs(paint(m).roughnessFactor - 0.9) < 1e-6, 'it has ours\' colour and theirs\' roughness');
+  check(imageHash(m) === core.hashBytes(imageB), 'and ours\' texture, byte for byte');
+
+  git('checkout', '-q', '-b', 'look-clash', panelBase);
+  fs.writeFileSync(file, panel({ color: [0, 0, 1, 1], lift: 0.5 }));
+  git('commit', '-qam', 'theirs: blue, raise the centre');
+  git('checkout', '-q', 'main');
+  const clash = gitRaw('merge', '--no-edit', 'look-clash');
+  check(clash.status !== 0 && /CONFLICT/.test(clash.stdout + clash.stderr), 'a material conflict in a .glb stops the merge with CONFLICT');
+  check(/material-property/.test(clash.stderr) && /baseColorFactor/.test(clash.stderr), 'the driver names the conflict (material-property, baseColorFactor)');
+  check(git('status', '--short').trim() === 'UU panel.glb', 'the model is marked unmerged (UU)');
+  m = await read();
+  check(close(paint(m).baseColorFactor, [0.8, 0.8, 0.8, 1]), 'the conflicting colour stays at its base value in the file');
+  check(topZ(m) === 0.5 && imageHash(m) === core.hashBytes(imageB) && Math.abs(paint(m).roughnessFactor - 0.9) < 1e-6, 'the other edits merged: theirs\' raised vertex, ours\' texture and roughness');
+  const res = polymerge('resolve', 'panel.glb', '--pick', '0=theirs', '-q');
+  check(res.status === 0, `polymerge resolve panel.glb exits 0 (got ${res.status}: ${res.stderr.trim()})`);
+  m = await read();
+  check(close(paint(m).baseColorFactor, [0, 0, 1, 1]) && topZ(m) === 0.5 && imageHash(m) === core.hashBytes(imageB), 'resolve writes theirs\' colour into the .glb; the rest stays');
+  git('add', 'panel.glb');
+  git('commit', '-qm', 'merge look-clash (theirs)');
+  check(git('status', '--short').trim() === '', 'textured .glb merge committed, working tree clean');
+}
+
 try {
   git('init', '-q', '-b', 'main');
   git('config', 'user.email', 'e2e@polymerge.test');
@@ -259,6 +370,7 @@ try {
   check(git('status', '--short').trim() === '', 'merge committed, working tree clean');
 
   await checkGlb();
+  await checkGlbAppearance();
 } catch (err) {
   console.error(err.stderr ?? err);
   failures++;

@@ -23,6 +23,10 @@
  *
  * Vertex ids: the custom attribute `_VERTEX_ID` (three lowercases it to `_vertex_id`).
  *
+ * Appearance (gltf-appearance.ts): the full definition of every IMaterial, the images its texture
+ * slots reference (bytes carried as-is, never decoded; external URIs kept as references) and the
+ * TEXCOORD_n sets, which the welder turns into per-corner data. Always set, possibly empty.
+ *
  * Scene structure (nodes, local transforms, meshes, the node + primitive of every face) is
  * recorded as `IMesh.scene` by gltf-scene.ts, for the glTF writer.
  */
@@ -30,8 +34,10 @@ import type { Material, Mesh, Object3D } from 'three';
 import { Group } from 'three';
 import { GLTFLoader, type GLTF } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { defaultGroupName } from '../mesh.js';
-import { MeshLoadError, type IMaterial, type IMesh, type ISceneSource } from '../types.js';
+import { defaultMaterialDefinition, pruneImages } from '../appearance.js';
+import { MeshLoadError, type IMaterial, type IMaterialDefinition, type IMesh, type ISceneSource } from '../types.js';
 import { namePrefix, toMeshLoadError, type FormatLoadContext } from './bytes.js';
+import { captureGltfAppearance, readUvSets, resolveGltfAppearance } from './gltf-appearance.js';
 import { prepareGltf, readGltfContainer } from './gltf-container.js';
 import { SceneCapture } from './gltf-scene.js';
 import { meshToPart } from './three-mesh.js';
@@ -71,7 +77,10 @@ export async function loadGltf(buffer: ArrayBuffer, ctx: FormatLoadContext): Pro
   const fallbackName = defaultGroupName(ctx.fileName);
   const warnings: string[] = [];
   const container = readGltfContainer(buffer);
-  const { glb, json, format } = prepareGltf(container, warnings);
+  const captured = captureGltfAppearance(container.json);
+  const prepared = prepareGltf(container, warnings);
+  const { glb, json, format } = prepared;
+  const look = resolveGltfAppearance(captured, prepared, warnings);
 
   let gltf: GLTF;
   try {
@@ -98,6 +107,7 @@ export async function loadGltf(buffer: ArrayBuffer, ctx: FormatLoadContext): Pro
   const capture = gltf.scene ? new SceneCapture(json, parser, root, typeof json.scene === 'number' ? json.scene : 0) : null;
 
   const materials: IMaterial[] = [];
+  const definitions: IMaterialDefinition[] = [];
   const materialByGltfIndex = new Map<number, number>();
   const resolveMaterial = (material: Material | undefined): number => {
     if (!material) return -1;
@@ -109,6 +119,7 @@ export async function loadGltf(buffer: ArrayBuffer, ctx: FormatLoadContext): Pro
       index = materials.length;
       materialByGltfIndex.set(gltfIndex, index);
       materials.push(toIMaterial(material, `material_${gltfIndex}`));
+      definitions.push(look.materials[gltfIndex] ?? defaultMaterialDefinition());
     }
     return index;
   };
@@ -142,6 +153,8 @@ export async function loadGltf(buffer: ArrayBuffer, ctx: FormatLoadContext): Pro
       const name = groupName(mesh);
       const info = meshToPart(mesh, { name, resolveMaterial, idAttribute: VERTEX_ID_ATTRIBUTE });
       if (!info) return;
+      const uvs = readUvSets(mesh.geometry, mesh.geometry.getAttribute('position').count, info.instances);
+      if (uvs) info.part.uvs = uvs;
       parts.push(info.part);
       partSources.push(capture ? capture.sourceOf(mesh, info) : null);
       if (info.skinned) skinned.push(name);
@@ -187,8 +200,10 @@ export async function loadGltf(buffer: ArrayBuffer, ctx: FormatLoadContext): Pro
     weldEpsilon: ctx.weldEpsilon,
     warnings,
     extras,
+    appearance: { materials: definitions, images: look.images },
     groupParts,
   });
+  if (mesh.appearance) mesh.appearance = pruneImages(mesh.appearance);
   capture?.attach(mesh, partSources, groupParts);
   return mesh;
 }

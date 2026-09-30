@@ -21,9 +21,21 @@
  *    triangles were dropped after welding, a second O(n) pass renumbers the vertices so
  *    that a dropped triangle can neither leave an unreferenced vertex behind nor
  *    perturb the order.
+ *  - Texture coordinates (optional, per source vertex) become PER-CORNER data of the kept
+ *    triangles: welding merges positions only, so a vertex on a UV seam keeps different
+ *    coordinates in the faces on either side, and dropped triangles drop their corners too.
  */
 import { createMesh } from '../mesh.js';
-import { MeshLoadError, type IMaterial, type IMesh, type IMeshGroup, type SourceFormat } from '../types.js';
+import {
+  MeshLoadError,
+  type IMaterial,
+  type IMaterialDefinition,
+  type IMesh,
+  type IMeshAppearance,
+  type IMeshGroup,
+  type ITextureImage,
+  type SourceFormat,
+} from '../types.js';
 
 /** One named sub-mesh of the triangle soup (becomes one IMeshGroup if any face survives). */
 export interface TrianglePart {
@@ -42,6 +54,11 @@ export interface TrianglePart {
   material?: number;
   /** Per-triangle material index (overrides `material`), -1 = none. */
   faceMaterials?: ArrayLike<number> | null;
+  /**
+   * Texture coordinates per UV set (index = TEXCOORD_n): 2 values (u, v) per SOURCE vertex, or
+   * null when the part has no such set. Only kept when `WeldInput.appearance` is given.
+   */
+  uvs?: readonly (ArrayLike<number> | null)[] | null;
 }
 
 export interface WeldInput {
@@ -58,6 +75,12 @@ export interface WeldInput {
   warnings?: readonly string[];
   /** Format-specific metadata extras. */
   extras?: Record<string, unknown>;
+  /**
+   * Appearance layer (glTF): the definition of every candidate material (same index as `materials`)
+   * and the images they reference. When given, the mesh gets `appearance` with the definitions of
+   * the kept materials (in the same order as `IMesh.materials`) and the parts' UVs per face corner.
+   */
+  appearance?: { materials: readonly IMaterialDefinition[]; images: readonly ITextureImage[] };
   /** Output, when given: filled with the index into `parts` of each group of the result, in group order. */
   groupParts?: number[];
 }
@@ -420,6 +443,7 @@ export function buildWeldedMesh(input: WeldInput): IMesh {
   let sourceVertexCount = 0;
   let expectedVertices = 0;
   let hasIds = false;
+  let uvSets = 0;
   for (const part of parts) {
     const nv = Math.floor(part.positions.length / 3);
     const nt = part.indices ? Math.floor(part.indices.length / 3) : Math.floor(nv / 3);
@@ -428,6 +452,7 @@ export function buildWeldedMesh(input: WeldInput): IMesh {
     // Indexed parts rarely weld much further; non-indexed soups have ~6 corners per vertex.
     expectedVertices += part.indices ? nv : Math.ceil(nv / 4);
     if (part.vertexIds) hasIds = true;
+    if (input.appearance && part.uvs) uvSets = Math.max(uvSets, part.uvs.length);
     const leftover = part.indices ? part.indices.length % 3 : nv % 3;
     if (leftover !== 0) {
       const what = part.indices ? 'index value(s)' : 'vertex position(s)';
@@ -440,6 +465,9 @@ export function buildWeldedMesh(input: WeldInput): IMesh {
   const faceMat = new Int32Array(totalTris);
   // Global source-vertex index of each kept corner (only needed to resolve vertex ids).
   const cornerSrc = hasIds ? new Int32Array(totalTris * 3) : null;
+  // Per-corner UVs of the kept triangles (NaN where a part lacks the set).
+  const uvOut: Float32Array[] = [];
+  for (let k = 0; k < uvSets; k++) uvOut.push(new Float32Array(totalTris * 6).fill(NaN));
   const ranges: { name: string; start: number; count: number; part: number }[] = [];
 
   const f = new Float32Array(9);
@@ -459,6 +487,7 @@ export function buildWeldedMesh(input: WeldInput): IMesh {
     const nt = idx ? Math.floor(idx.length / 3) : Math.floor(nv / 3);
     const perFace = part.faceMaterials ?? null;
     const partMat = part.material ?? -1;
+    const partUvs = uvSets > 0 ? (part.uvs ?? null) : null;
     const start = nf;
 
     for (let t = 0; t < nt; t++) {
@@ -506,6 +535,18 @@ export function buildWeldedMesh(input: WeldInput): IMesh {
         cornerSrc[o + 2] = srcBase + src[2];
       }
       faceMat[nf] = perFace ? (perFace[t] ?? -1) : partMat;
+      if (partUvs) {
+        for (let k = 0; k < partUvs.length; k++) {
+          const uv = partUvs[k];
+          if (!uv) continue;
+          const out = uvOut[k];
+          for (let c = 0; c < 3; c++) {
+            const s2 = src[c] * 2;
+            out[o * 2 + c * 2] = s2 + 1 < uv.length ? uv[s2] : NaN;
+            out[o * 2 + c * 2 + 1] = s2 + 1 < uv.length ? uv[s2 + 1] : NaN;
+          }
+        }
+      }
       nf++;
     }
     if (nf > start) ranges.push({ name: part.name, start, count: nf - start, part: partIndex });
@@ -555,6 +596,7 @@ export function buildWeldedMesh(input: WeldInput): IMesh {
   // Materials: keep only referenced ones, in first-use (face) order.
   const matRemap = new Int32Array(srcMaterials.length).fill(-1);
   const materials: IMaterial[] = [];
+  const definitions: IMaterialDefinition[] = [];
   const faceMaterials = new Int32Array(nf);
   let anyMaterial = false;
   for (let i = 0; i < nf; i++) {
@@ -565,6 +607,7 @@ export function buildWeldedMesh(input: WeldInput): IMesh {
         r = materials.length;
         matRemap[m] = r;
         materials.push(srcMaterials[m]);
+        if (input.appearance) definitions.push(input.appearance.materials[m]);
       }
       faceMaterials[i] = r;
       anyMaterial = true;
@@ -619,10 +662,20 @@ export function buildWeldedMesh(input: WeldInput): IMesh {
   const extras: Record<string, unknown> | undefined =
     invalid > 0 ? { ...(input.extras ?? {}), invalidFacesDropped: invalid } : input.extras;
 
+  let appearance: IMeshAppearance | undefined;
+  if (input.appearance) {
+    appearance = {
+      materials: definitions,
+      images: [...input.appearance.images],
+      uvs: uvOut.map((uv) => (nf * 6 === uv.length ? uv : uv.slice(0, nf * 6))),
+    };
+  }
+
   return createMesh(positions, outFaces, {
     groups,
     materials,
     faceMaterials: anyMaterial ? faceMaterials : undefined,
+    appearance,
     vertexIds,
     metadata: {
       format,
