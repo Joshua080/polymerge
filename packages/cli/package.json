@@ -1,6 +1,6 @@
 {
   "name": "@joshuahurley/polymerge",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "Structural diff and three-way merge for 3D models (STL, OBJ, glTF/GLB), with a browser viewer and git drivers.",
   "keywords": [
     "3d",
@@ -28,7 +28,7 @@
   },
   "type": "module",
   "bin": {
-    "polymerge": "./dist/cli.js"
+    "polymerge": "dist/cli.js"
   },
   "files": [
     "dist",
@@ -46,6 +46,6 @@
     "prepack": "node scripts/prepack.mjs"
   },
   "dependencies": {
-    "polymerge-core": "0.1.1"
+    "polymerge-core": "0.2.0"
   }
 }
