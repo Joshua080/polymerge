@@ -19,11 +19,12 @@
     "test:watch": "vitest",
     "dev": "npm run dev -w @polymerge/web",
     "fixtures": "tsx fixtures/generate.ts",
-    "e2e": "node apps/web/e2e/smoke.mjs && node scripts/e2e-view.mjs && node scripts/e2e-worker.mjs && node scripts/e2e-merge.mjs && node scripts/e2e-git.mjs && node scripts/e2e-action.mjs && node scripts/e2e-pack.mjs",
+    "e2e": "node apps/web/e2e/smoke.mjs && node scripts/e2e-view.mjs && node scripts/e2e-worker.mjs && node scripts/e2e-merge.mjs && node scripts/e2e-git.mjs && node scripts/e2e-action.mjs && node scripts/e2e-pages.mjs && node scripts/e2e-pack.mjs",
     "polymerge": "node packages/cli/dist/cli.js",
     "verify": "npm run typecheck && npm test && npm run build && npm run e2e",
     "test:perf": "vitest run -c vitest.perf.config.ts",
     "e2e:pack": "node scripts/e2e-pack.mjs",
+    "e2e:pages": "node scripts/e2e-pages.mjs",
     "e2e:action": "node scripts/e2e-action.mjs"
   },
   "devDependencies": {

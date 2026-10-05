@@ -235,7 +235,26 @@ jobs:
       - uses: Joshua080/polymerge@v1
 ```
 
-For pull requests from forks, use the two-workflow setup in [docs/github-action.md](docs/github-action.md), which also covers image hosting, Git LFS and security. `@v1` will be tagged with the first release; until then, pin a commit SHA.
+For pull requests from forks, use the two-workflow setup in [docs/github-action.md](docs/github-action.md), which also covers image hosting, Git LFS and security. `@v1` is a floating tag that always points at the latest release; pin a full commit SHA instead if you want it frozen.
+
+### Open a diff by link
+
+The viewer is also hosted as a static page, so someone can look at a diff **without installing anything**:
+
+```
+https://joshua080.github.io/polymerge/?base=<address of the old model>&target=<address of the new one>
+https://joshua080.github.io/polymerge/?mode=merge&base=<…>&ours=<…>&theirs=<…>
+```
+
+For example, the plate example from this repository, as of release 0.2.0:
+
+```
+https://joshua080.github.io/polymerge/?base=https://raw.githubusercontent.com/Joshua080/polymerge/v0.2.0/examples/plate/base.stl&target=https://raw.githubusercontent.com/Joshua080/polymerge/v0.2.0/examples/plate/ours.stl
+```
+
+- The models can be on **any site**, as long as it is https, public, and allows other sites to read its files (CORS). `raw.githubusercontent.com` and `gist.githubusercontent.com` do. Pin a commit or tag in the address, so the link keeps showing the same diff.
+- Everything runs in the visitor's browser. Nothing is uploaded, and nobody runs a server for it. The panel's "Loaded from" row shows which site each model came from.
+- A host that doesn't allow cross-origin reads gives an error that says so. Private files can't be opened this way; use `polymerge view` locally for those.
 
 ### Use it as a library
 

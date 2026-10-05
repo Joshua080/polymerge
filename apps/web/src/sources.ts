@@ -63,7 +63,10 @@ export async function loadFromUrl(url: string, displayName?: string): Promise<IL
   try {
     res = await fetch(resolved);
   } catch (err) {
-    throw new SourceError(`Network error fetching ${url}: ${(err as Error).message}`);
+    // A blocked cross-origin request and a wrong address both surface as a bare TypeError.
+    const foreign = new URL(resolved).origin !== location.origin;
+    const hint = foreign ? ' The address may be wrong, or that server does not allow other sites to read its files (CORS), or it is http while this page is https.' : '';
+    throw new SourceError(`Network error fetching ${url}: ${(err as Error).message}.${hint}`);
   }
   if (!res.ok) throw new SourceError(`HTTP ${res.status} ${res.statusText} fetching ${url}`);
   // SPA-style servers (incl. `vite preview`) answer unknown paths with index.html + 200.

@@ -35,3 +35,19 @@ export function fmtBytes(n: number): string {
 export function vecLength(v: Vec3): number {
   return Math.hypot(v[0], v[1], v[2]);
 }
+
+/**
+ * Where a loaded model came from, for the panel: the host of an http(s) address that is NOT the
+ * page's own host (the hosted viewer opens models from any site, so the reader should see which
+ * one), else null. Never throws.
+ */
+export function fmtSource(origin: string | undefined, pageHost: string): string | null {
+  if (!origin) return null;
+  try {
+    const url = new URL(origin, `http://${pageHost}/`);
+    if ((url.protocol !== 'http:' && url.protocol !== 'https:') || url.host === pageHost) return null;
+    return url.host;
+  } catch {
+    return null;
+  }
+}
