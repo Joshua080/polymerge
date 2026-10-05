@@ -4,7 +4,7 @@
  */
 export * from './types.js';
 export * from './mesh.js';
-export { detectFormat, loadMesh, STEP_ANGULAR_DEFLECTION, STEP_DEFLECTION_RATIO, stepDeflectionFor, stepInfo } from './parsers/index.js';
+export { detectFormat, formatFromFileName, loadMesh, STEP_ANGULAR_DEFLECTION, STEP_DEFLECTION_RATIO, stepDeflectionFor, stepInfo } from './parsers/index.js';
 export { diffMeshes, serializeDiff, deserializeDiff } from './diff/index.js';
 export { mergeMeshes, resolveMerge } from './merge/index.js';
 export {

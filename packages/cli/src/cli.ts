@@ -23,7 +23,7 @@ import { MERGE_DEMOS, runDemo, runReview, runView } from './commands/view.js';
 
 const VERSION: string = (createRequire(import.meta.url)('../package.json') as { version: string }).version;
 
-const HELP = `polymerge ${VERSION} — structural (vertex-correspondence) diff for STL, OBJ, glTF/GLB
+const HELP = `polymerge ${VERSION} — structural (vertex-correspondence) diff for STL, OBJ, glTF/GLB and STEP
 
 Usage:
   polymerge diff <base> <target> [options]   Diff two models and print a report
@@ -66,6 +66,9 @@ Usage:
   polymerge git-merge %O %A %B %P            git merge driver (merge.<name>.driver)
   polymerge git-setup                        Print the git configuration snippet
   polymerge --version | --help
+
+STEP (.step, .stp) works with diff, view, info and git-diff, not with merge. It needs OpenCascade,
+an optional download: npm install -g occt-import-js (LGPL-2.1, about 8 MB).
 `;
 
 async function main(argv: string[]): Promise<number> {

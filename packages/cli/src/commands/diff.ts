@@ -1,6 +1,6 @@
 import { writeFile } from 'node:fs/promises';
 import { diffMeshes, serializeDiff, type IDiffOptions, type MatchTier } from 'polymerge-core';
-import { loadMeshFile } from '../io.js';
+import { loadMeshPair } from '../io.js';
 import { formatDiffReport, hasChanges, silentLogger, stderrLogger } from '../report.js';
 
 export interface DiffCommandOptions {
@@ -36,7 +36,7 @@ function positiveNumber(flag: string, raw: string): number {
 export async function runDiff(basePath: string, targetPath: string, o: DiffCommandOptions): Promise<number> {
   const jsonToStdout = o.json === '-';
   const quiet = o.quiet === true;
-  const [base, target] = await Promise.all([loadMeshFile(basePath), loadMeshFile(targetPath)]);
+  const [base, target] = await loadMeshPair({ path: basePath }, { path: targetPath });
   const result = diffMeshes(base.mesh, target.mesh, parseDiffOptions(o, quiet));
 
   if (o.json !== undefined) {
