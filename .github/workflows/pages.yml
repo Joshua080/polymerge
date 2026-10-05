@@ -1,0 +1,72 @@
+# Publishes the browser viewer (apps/web) as a static site on GitHub Pages:
+#
+#   https://joshua080.github.io/polymerge/
+#
+# The viewer opens models straight from other sites, so a link needs no polymerge install and no
+# server of ours:
+#
+#   https://joshua080.github.io/polymerge/?base=<url of the old model>&target=<url of the new one>
+#
+# The model's host must allow cross-origin reads (raw.githubusercontent.com and gist.githubusercontent.com
+# do), and be https. Everything runs in the visitor's browser; nothing is uploaded.
+#
+# One-time setup, in the repository: Settings → Pages → Build and deployment → Source: GitHub Actions.
+name: Pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - apps/web/**
+      - packages/core/**
+      - fixtures/**
+      - package.json
+      - package-lock.json
+      - .github/workflows/pages.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: github.repository == 'Joshua080/polymerge'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # The viewer consumes polymerge-core from source (a Vite alias), so only the viewer is built.
+      # Its asset paths are relative, so it works from /polymerge/ as well as from a site root.
+      - name: Build the viewer
+        run: npm run build -w @polymerge/web
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: apps/web/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      pages: write # publish
+      id-token: write # prove to Pages that the artifact came from this workflow
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

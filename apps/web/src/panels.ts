@@ -11,7 +11,7 @@ import {
   type Vec3,
 } from 'polymerge-core';
 import { h, swatch } from './dom.js';
-import { fmtBytes, fmtInt, fmtMs, fmtNum, fmtVec } from './format.js';
+import { fmtBytes, fmtInt, fmtMs, fmtNum, fmtSource, fmtVec } from './format.js';
 import type { ILoadedMesh } from './sources.js';
 import type { IPickHit } from './scene/viewer.js';
 
@@ -204,6 +204,7 @@ export function renderMeshes(base: ILoadedMesh | null, target: ILoadedMesh | nul
   };
   const rows: [string, (x: ILoadedMesh) => string][] = [
     ['File', (x) => x.name],
+    ['Loaded from', (x) => fmtSource(x.origin, location.host) ?? '—'],
     ['Format', (x) => x.mesh.metadata.format.toUpperCase()],
     ['Vertices', (x) => fmtInt(x.mesh.vertexCount)],
     ['Faces', (x) => fmtInt(x.mesh.faceCount)],

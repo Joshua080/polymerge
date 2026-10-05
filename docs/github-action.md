@@ -21,8 +21,8 @@ Added and deleted models get one panel (all green, or all red). Renames, mode-on
 re-exports with the same geometry, unreadable files, Git LFS pointers and models over the size
 limits are listed with a one-line reason instead of an image.
 
-> **Versions.** The examples use `Joshua080/polymerge@v1`. That tag does not exist yet: it will be
-> created with the first release. Until then, pin a commit:
+> **Versions.** The examples use `Joshua080/polymerge@v1`, a floating tag that always points at the
+> latest release. To freeze the action, pin a full commit instead:
 > `uses: Joshua080/polymerge@<full commit SHA>`. Pinning a SHA is also what GitHub recommends for
 > third-party actions in general.
 

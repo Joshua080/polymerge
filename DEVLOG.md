@@ -9,7 +9,14 @@ A living log of milestones, architectural decisions, what works, what is stubbed
 - **The Action worked on a real pull request.** A throwaway PR that lifted one vertex of `examples/plate/ours.stl` got the before/after comment about a minute after the render job started: image hosted on `polymerge-images`, summary "1 moved, 6 faces modified, Tier 1, largest move 0.5". The PR was closed unmerged.
 - **Version 0.2.0 everywhere** (both packages, the CLI's dependency on `polymerge-core`, the viewer workspace, the root and the lockfile). Session 8 added features, so a patch number would mislead. `0.1.1` was never published.
 - **Release trigger narrowed.** `release.yml` ran on any tag starting with `v`, so the floating `v1` tag that the Action's docs mention would have started a release run that fails its version check. It now runs only on full version tags (`v0.2.0`).
-- **`NPM_TOKEN` is set by the owner.** The release itself (`git tag v0.2.0 && git push origin v0.2.0`) is the owner's step, and nothing is tagged or published yet.
+- **Released.** `polymerge-core@0.2.0` and `@joshuahurley/polymerge@0.2.0` are on npm with provenance. The first Release run was cancelled after 15 minutes with GitHub's own message "The job was not acquired by Runner of type hosted even after multiple attempts" (no runner was ever assigned, so no code ran); a re-run published both. Checked from outside: a fresh `npm install @joshuahurley/polymerge` gives `--version` 0.2.0, and `diff`, `merge -o merged.glb` and `demo` work.
+- **The viewer is published on GitHub Pages**, with `.github/workflows/pages.yml`: a push to `main` that touches the viewer or core builds `apps/web` and deploys it to `https://joshua080.github.io/polymerge/`. The owner approved Pages, and (D50) models from any https site.
+  - **Needs once:** Settings → Pages → Source: *GitHub Actions*.
+  - The build uses relative paths (`base: './'`), so the same files work from a subpath. `scripts/e2e-pages.mjs` (in `npm run e2e`) proves it with no polymerge server: the built viewer served as plain files under `/polymerge/`, a bundled example, models fetched from a second origin that allows cross-origin reads (diff and merge review), and a third that doesn't.
+  - **Viewer changes for this:** the panel has a "Loaded from" row that names the host of a model opened from another site, and a failed cross-origin fetch now says why (wrong address, CORS, or http on an https page) instead of a bare "Failed to fetch".
+  - **Not built (step 3):** `polymerge share`, the link in the pull-request comment, and the self-contained HTML export. The links already work by hand: `?base=<url>&target=<url>`; see the README ("Open a diff by link").
+- **The Action's docs** now describe `@v1` as a floating tag at the latest release.
+- **Cleanup the session can't do.** This session's GitHub access can't create tags or delete branches, so the `v1` tag and the closed test PR's branch (`test-action-comment`) are the owner's clicks.
 
 **Decisions by the owner**
 
