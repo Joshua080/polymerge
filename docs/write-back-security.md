@@ -51,6 +51,7 @@ The goal is that the capability can be used only:
 |---|---|---|
 | `GET /` and the viewer's static files | Path arithmetic on the decoded URL path, with a prefix check. | Exact lookup in an allowlist built at startup (§4.9). `Host` checked. |
 | `GET /models/<side>/<name>` | The served models, from memory. No checks. | `Host` checked; model content types only; a random per-session path segment (§4.9). |
+| `GET /vendor/occt-import-js/<file>` | — | Added with STEP support: the user's installed OpenCascade reader, four fixed file names (§4.9). `Host` checked. |
 | `GET /api/review/session` | — | New, `review` only: what the session can save. Token, `Host`, fetch metadata. |
 | `POST /api/review/save` | — | New, `review` only: save and stage. Every check in §4. |
 | Any other request | 404 | 404 (after the `Host` check). |
@@ -255,10 +256,12 @@ The prefix check catches all of these today. But it is path arithmetic on attack
 
 **Models:**
 - They are served from memory by exact path.
-- Content types are limited to the four model types; anything else is `application/octet-stream`.
+- Content types are limited to the model types (STL, OBJ, glTF, GLB, STEP); anything else is `application/octet-stream`.
   - Before: a path ending in `.html` (`view a.html b.html`, or `--name x.html`) would have been served as `text/html` on the viewer's origin, i.e. script running on the origin that holds the token (A6).
   - All responses also send `X-Content-Type-Options: nosniff`.
 - **Model URLs carry a random per-session segment:** `/models/<random>/<side>/<name>`.
+
+**The STEP reader** (`/vendor/occt-import-js/`) is served only when `occt-import-js` is installed. It is a second allowlist of four fixed names: the loader script, its wasm, and the two licence texts. Each is mapped at startup to a file in the package's `dist/` directory, so no request path reaches the file system here either. The script runs on the viewer's origin, like the viewer's own scripts. It is the copy the user installed, or the one `$POLYMERGE_OCCT` names, which the user has to trust as much as polymerge itself.
   - Another account (A3) connecting to the port can no longer fetch the models without the URL. Before, the paths were predictable.
   - This is a small, honest improvement for shared machines, with the same `ps` caveat as the token (§4.3).
 

@@ -68,7 +68,7 @@ Usage:
   polymerge --version | --help
 
 STEP (.step, .stp) works with diff, view, info and git-diff, not with merge. It needs OpenCascade,
-an optional download: npm install -g occt-import-js (LGPL-2.1, about 8 MB).
+an optional download: npm install -g occt-import-js@0.0.23 (LGPL-2.1, about 8 MB).
 `;
 
 async function main(argv: string[]): Promise<number> {

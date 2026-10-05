@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { detectFormat, formatFromFileName } from 'polymerge-core';
 import { handleReviewApi, REVIEW_API_PREFIX } from '../review-api.js';
 import { hostAllowed, isLoopbackAddress, SECURITY_HEADERS, staticAllowlist, staticFile, urlHost } from '../serve-guard.js';
-import { findOcct, occtMissingMessage, stepNotMergeable } from '../step.js';
+import { findOcct, occtMissingMessage, stepNotMergeable, type OcctLocation } from '../step.js';
 import { ReviewWriteBack } from '../write-back.js';
 
 /** Content types of the MODELS served: model types only, never e.g. text/html (docs/write-back-security.md §4.9). */
@@ -123,7 +123,12 @@ export async function startViewServer(
   // STEP: view and diff only (D51), and only with the reader installed.
   const stepSide = models.findIndex((m) => isStep(m.bytes, decodeURIComponent(m.urlPath.split('/').pop() ?? '')));
   if (stepSide >= 0 && files.length === 3) throw stepNotMergeable(displayName(files[stepSide], o));
-  const occt = findOcct();
+  let occt: OcctLocation | null = null;
+  try {
+    occt = findOcct();
+  } catch (err) {
+    if (stepSide >= 0) throw err; // a broken $POLYMERGE_OCCT matters only when there is STEP to read
+  }
   if (stepSide >= 0 && !occt) throw new Error(occtMissingMessage(displayName(files[stepSide], o)));
   const vendor = new Map<string, { file: string; type: string }>();
   if (occt) {
