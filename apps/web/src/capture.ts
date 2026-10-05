@@ -25,7 +25,7 @@ import { DiffEngine } from './engine.js';
 import { publish, type ICaptureHookState, type IPolymergeHook } from './hook.js';
 import { alignPositions, boxOf, isIdentityMatrix } from './scene/layers.js';
 import { DEFAULT_VIEW, DiffViewer } from './scene/viewer.js';
-import { loadFromUrl, type ILoadedMesh } from './sources.js';
+import { loadFromUrl, pairLoads, type ILoadedMesh } from './sources.js';
 
 type Side = 'base' | 'target';
 
@@ -87,7 +87,9 @@ export class CaptureApp {
     publish({ state: 'loading', mode: 'capture' });
     try {
       if (!baseUrl && !targetUrl) throw new Error('capture mode needs ?base= and/or ?target=');
-      const [base, target] = await Promise.all([baseUrl ? loadFromUrl(baseUrl) : null, targetUrl ? loadFromUrl(targetUrl) : null]);
+      const [base, target] = await Promise.all(
+        pairLoads(baseUrl ? (o) => loadFromUrl(baseUrl, undefined, o) : null, targetUrl ? (o) => loadFromUrl(targetUrl, undefined, o) : null),
+      );
       if (base && target) await this.showDiff(base, target);
       else if (target) this.showOne('target', target.mesh, FaceStatus.Added, 'New file: not in the base');
       else if (base) this.showOne('base', base.mesh, FaceStatus.Removed, 'Deleted in this change');

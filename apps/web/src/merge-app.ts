@@ -27,6 +27,9 @@ import { publish, type IMergeHookState, type IPolymergeHook } from './hook.js';
 import { conflictGhosts, faceConflicts, mergeFaceKinds, sideToMerged, type MergeFaceKind } from './scene/merge-layers.js';
 import { DiffViewer, type IMergeLayerVisibility } from './scene/viewer.js';
 import { ACCEPTED_EXTENSIONS, SourceError, loadFromFile, loadFromUrl, type ILoadedMesh } from './sources.js';
+
+/** STEP is view / diff only (D51): the merge review does not offer it. */
+const MERGE_EXTENSIONS = ACCEPTED_EXTENSIONS.filter((e) => e !== '.step' && e !== '.stp');
 import type { IMergeView } from './worker/protocol.js';
 
 type MergeSide = 'base' | 'ours' | 'theirs';
@@ -154,7 +157,7 @@ export class MergeApp {
   private buildLayout(root: HTMLElement): void {
     const el = this.el;
     const drop = (side: MergeSide): HTMLElement => {
-      const input = h('input', { type: 'file', accept: ACCEPTED_EXTENSIONS.join(','), class: 'hidden-input', 'aria-label': SIDE_LABEL[side] });
+      const input = h('input', { type: 'file', accept: MERGE_EXTENSIONS.join(','), class: 'hidden-input', 'aria-label': SIDE_LABEL[side] });
       const file = h('span', { class: 'drop-file' }, 'Drop a model or click to browse');
       const rootEl = h('label', { class: 'drop', dataset: { side } }, input, h('span', { class: 'drop-title' }, SIDE_LABEL[side]), file);
       input.addEventListener('change', () => {
@@ -286,7 +289,7 @@ export class MergeApp {
     if (urls.every(Boolean)) {
       if (token) void this.openSaveSession(token);
       return this.loadTriple(
-        Object.fromEntries(SIDES.map((s, i) => [s, () => loadFromUrl(urls[i]!, params.get(`${s}Name`) ?? undefined)])) as Record<
+        Object.fromEntries(SIDES.map((s, i) => [s, () => loadFromUrl(urls[i]!, params.get(`${s}Name`) ?? undefined, { refuseStep: true })])) as Record<
           MergeSide,
           () => Promise<ILoadedMesh>
         >,
@@ -351,7 +354,7 @@ export class MergeApp {
     this.setUrl({ mode: 'merge' });
     const seq = ++this.seq;
     this.setLoading('Loading models…');
-    const settled = await Promise.allSettled(entries.map(([side, file]) => this.loadOne(side, () => loadFromFile(file))));
+    const settled = await Promise.allSettled(entries.map(([side, file]) => this.loadOne(side, () => loadFromFile(file, { refuseStep: true }))));
     if (seq !== this.seq) return;
     const failed = settled.find((r): r is PromiseRejectedResult => r.status === 'rejected');
     this.source = 'files';

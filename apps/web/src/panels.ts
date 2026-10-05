@@ -4,6 +4,7 @@ import {
   DIFF_COLORS,
   FaceStatus,
   VertexStatus,
+  stepInfo,
   type IDiffResult,
   type IMesh,
   type ITierAttempt,
@@ -214,6 +215,10 @@ export function renderMeshes(base: ILoadedMesh | null, target: ILoadedMesh | nul
     ['Size', (x) => size(x.mesh)],
     ['Bytes', (x) => (x.bytes > 0 ? fmtBytes(x.bytes) : '—')],
   ];
+  // STEP: how finely OpenCascade tessellated it (both versions should match).
+  if ([base, target].some((m) => m && stepInfo(m.mesh))) {
+    rows.splice(3, 0, ['Tessellation', (x) => (stepInfo(x.mesh) ? `${stepInfo(x.mesh)!.deflection} mm` : '—')]);
+  }
   const out: HTMLElement[] = [
     h(
       'table',

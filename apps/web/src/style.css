@@ -1111,3 +1111,42 @@ table.merge-applied td:first-child {
   font: 12px/1.45 var(--mono);
   white-space: pre-wrap;
 }
+
+/* Consent before downloading the optional STEP reader (step.ts). */
+.consent {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: rgba(0, 0, 0, 0.55);
+  z-index: 20;
+}
+
+.consent-box {
+  width: min(480px, 100%);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px 18px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
+}
+
+.consent-box h2 {
+  margin: 0 0 8px;
+  font-size: 16px;
+}
+
+.consent-box p {
+  margin: 0 0 10px;
+  line-height: 1.45;
+}
+
+.consent-box a {
+  color: var(--accent);
+}
+
+.consent-box button.primary {
+  border-color: var(--accent);
+  background: #1d3354;
+}

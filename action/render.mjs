@@ -24,6 +24,7 @@
  */
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
+import { createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { modelChanges, modelFormat, parseRawDiff, planWork } from './lib/changes.mjs';
@@ -82,6 +83,20 @@ function resolveLfs(repo, pointerBytes, pointer) {
   // git-lfs downloads the object with the checkout's credentials.
   const r = spawnSync('git', ['lfs', 'smudge'], { cwd: repo, input: pointerBytes, maxBuffer: 1024 * 1024 * 1024, timeout: 300_000 });
   return r.status === 0 && r.stdout && matchesPointer(r.stdout, pointer) ? r.stdout : null;
+}
+
+/** @type {Promise<import('polymerge-core').IStepImporter> | null} */
+let occt = null;
+
+/**
+ * OpenCascade for STEP files: occt-import-js (LGPL-2.1), installed with this action's own
+ * dependencies and started on the first STEP file. It runs only in this Node process: the images
+ * are rendered from the tessellated meshes, so the browser never downloads it.
+ */
+function stepImporter() {
+  /** @type {Promise<import('polymerge-core').IStepImporter>} */
+  const started = (occt ??= createRequire(path.join(actionRoot, 'package.json'))('occt-import-js')());
+  return started;
 }
 
 function message(err) {
@@ -206,7 +221,7 @@ async function main() {
     return;
   }
 
-  const { diffMeshes, loadMesh } = await import('polymerge-core');
+  const { diffMeshes, loadMesh, stepInfo, writeGlb } = await import('polymerge-core');
   const silent = { info() {}, warn() {} };
   const renderer = new Renderer();
   /** @type {{ image: string, path: string, tier: number | null, stats: unknown, capture: unknown }[]} */
@@ -228,6 +243,9 @@ async function main() {
         const sides = { before: c.before ? { blob: c.before, path: c.oldPath ?? c.path } : null, after: c.after ? { blob: c.after, path: c.path } : null };
         const both = !!(sides.before && sides.after);
         let stop = null;
+        // STEP: the after version is tessellated with the before version's tolerance, so that
+        // surfaces that did not change get the same triangles.
+        let stepDeflection;
         for (const [key, side] of Object.entries(sides)) {
           if (!side || stop) continue;
           const size = Number(git(repo, ['cat-file', '-s', side.blob]).trim());
@@ -251,12 +269,18 @@ async function main() {
           const format = modelFormat(side.path) ?? undefined;
           let mesh;
           try {
-            mesh = await quietly(() => loadMesh(bytes, { fileName: path.posix.basename(side.path), format }));
+            const step = format === 'step' ? { importer: await stepImporter(), deflection: stepDeflection } : undefined;
+            mesh = await quietly(() => loadMesh(bytes, { fileName: path.posix.basename(side.path), format, step }));
           } catch (err) {
             stop = { status: 'error', error: `${both ? `${key}: ` : ''}${message(err)}` };
             continue;
           }
-          Object.assign(side, { format, bytes, mesh });
+          if (format === 'step') {
+            stepDeflection ??= stepInfo(mesh)?.deflection;
+            // The page gets the tessellated mesh as GLB (exact: positions are float32 either way). A
+            // Buffer, like git's blobs: Playwright's route.fulfill does not take a bare Uint8Array.
+            Object.assign(side, { format: 'glb', bytes: Buffer.from(writeGlb(mesh)), mesh });
+          } else Object.assign(side, { format, bytes, mesh });
           entry.mesh[key] = { vertices: mesh.vertexCount, faces: mesh.faceCount };
           if (mesh.faceCount > limits.maxFaces) stop = { status: 'too-large', limit: { what: 'faces', value: mesh.faceCount, max: limits.maxFaces } };
         }

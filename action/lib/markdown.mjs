@@ -14,6 +14,8 @@
 export const MARKER = '<!-- polymerge:pr-diff -->';
 export const PROJECT_URL = 'https://github.com/Joshua080/polymerge';
 export const RUN_COMMAND = 'npx @joshuahurley/polymerge';
+/** STEP needs OpenCascade, an optional download (occt-import-js, LGPL-2.1): npx fetches it alongside. */
+export const RUN_COMMAND_STEP = 'npx -p @joshuahurley/polymerge -p occt-import-js@0.0.23 polymerge';
 
 /** GitHub rejects comments over 65,536 characters; stay well below. */
 export const MAX_BODY = 60_000;
@@ -198,7 +200,8 @@ function exploreBlock(result, files) {
     const before = shellQuote(`${result.base.slice(0, 12)}:${f.oldPath ?? f.path}`);
     const after = shellQuote(`${result.head.slice(0, 12)}:${f.path}`);
     if (!before || !after) continue;
-    groups.push([`git show ${before} > before.${ext}`, `git show ${after} > after.${ext}`, `${RUN_COMMAND} view before.${ext} after.${ext}`].join('\n'));
+    const run = ext === 'step' || ext === 'stp' ? RUN_COMMAND_STEP : RUN_COMMAND;
+    groups.push([`git show ${before} > before.${ext}`, `git show ${after} > after.${ext}`, `${run} view before.${ext} after.${ext}`].join('\n'));
   }
   if (groups.length === 0) return [];
   return [

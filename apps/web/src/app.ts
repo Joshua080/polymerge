@@ -6,6 +6,7 @@ import {
   describeVertexChange,
   getPosition,
   serializeDiff,
+  stepInfo,
   summarizeMesh,
   type IDiffOptions,
   type IDiffResult,
@@ -35,6 +36,8 @@ import {
   loadManifest,
   type ILoadedMesh,
   type IManifestInfo,
+  type Loader,
+  pairLoads,
 } from './sources.js';
 
 type Side = 'base' | 'target';
@@ -279,15 +282,15 @@ export class App {
     if (baseUrl && targetUrl) {
       return this.loadPair(
         {
-          base: () => loadFromUrl(baseUrl, params.get('baseName') ?? undefined),
-          target: () => loadFromUrl(targetUrl, params.get('targetName') ?? undefined),
+          base: (o) => loadFromUrl(baseUrl, params.get('baseName') ?? undefined, o),
+          target: (o) => loadFromUrl(targetUrl, params.get('targetName') ?? undefined, o),
         },
         'url',
       );
     }
     if (baseUrl || targetUrl) {
       const side: Side = baseUrl ? 'base' : 'target';
-      return this.loadSide(side, () => loadFromUrl((baseUrl ?? targetUrl)!, params.get(`${side}Name`) ?? undefined), 'url');
+      return this.loadSide(side, (o) => loadFromUrl((baseUrl ?? targetUrl)!, params.get(`${side}Name`) ?? undefined, o), 'url');
     }
   }
 
@@ -330,7 +333,7 @@ export class App {
     this.el.examples.value = c.id;
     this.setUrl({ case: c.id });
     await this.loadPair(
-      { base: () => loadFromUrl(fixtureUrl(info, c.base)), target: () => loadFromUrl(fixtureUrl(info, c.target)) },
+      { base: (o) => loadFromUrl(fixtureUrl(info, c.base), undefined, o), target: (o) => loadFromUrl(fixtureUrl(info, c.target), undefined, o) },
       `case:${c.id}`,
       seq,
     );
@@ -342,20 +345,28 @@ export class App {
     this.setUrl({});
     if (entries.length === 2) {
       const [[, b], [, t]] = entries;
-      await this.loadPair({ base: () => loadFromFile(b), target: () => loadFromFile(t) }, 'files');
+      await this.loadPair({ base: (o) => loadFromFile(b, o), target: (o) => loadFromFile(t, o) }, 'files');
     } else {
       const [side, file] = entries[0];
-      await this.loadSide(side, () => loadFromFile(file), 'files');
+      await this.loadSide(side, (o) => loadFromFile(file, o), 'files');
     }
   }
 
-  /** Load both sides, then diff. */
-  async loadPair(loaders: Record<Side, () => Promise<ILoadedMesh>>, source: string, seq = ++this.seq): Promise<void> {
+  /**
+   * Load both sides, then diff. They load in parallel, except that a STEP target waits for the
+   * base's tessellation tolerance and uses it too (otherwise unchanged surfaces would differ).
+   */
+  async loadPair(loaders: Record<Side, Loader>, source: string, seq = ++this.seq): Promise<void> {
     this.setLoading('Loading models…');
     this.markDrop('base', 'loading');
     this.markDrop('target', 'loading');
     const sides: Side[] = ['base', 'target'];
-    const settled = await Promise.allSettled(sides.map((side) => this.loadOne(side, loaders[side])));
+    const settled = await Promise.allSettled(
+      pairLoads(
+        (o) => this.loadOne('base', () => loaders.base(o)),
+        (o) => this.loadOne('target', () => loaders.target(o)),
+      ),
+    );
     if (seq !== this.seq) return;
     const errors: unknown[] = [];
     settled.forEach((r, i) => {
@@ -381,13 +392,15 @@ export class App {
   }
 
   /** Load one side; diff if the other side is present, else preview. */
-  private async loadSide(side: Side, loader: () => Promise<ILoadedMesh>, source: string): Promise<void> {
+  private async loadSide(side: Side, loader: Loader, source: string): Promise<void> {
     const seq = ++this.seq;
     this.setLoading(`Loading ${SIDE_LABEL[side].toLowerCase()}…`);
     this.markDrop(side, 'loading');
+    // A STEP model takes the tolerance of the other side if that one is loaded already.
+    const other = side === 'base' ? this.target : this.base;
     let loaded: ILoadedMesh;
     try {
-      loaded = await this.loadOne(side, loader);
+      loaded = await this.loadOne(side, () => loader({ stepDeflection: async () => (other ? stepInfo(other.mesh)?.deflection : undefined) }));
     } catch (err) {
       if (seq === this.seq) this.fail('Could not load model', err);
       return;

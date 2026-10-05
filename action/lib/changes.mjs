@@ -3,21 +3,22 @@
  * the head. Pure functions (no git, no fs), unit-tested in action/test/changes.test.ts.
  */
 
-export const MODEL_EXTENSIONS = ['stl', 'obj', 'gltf', 'glb'];
+export const MODEL_EXTENSIONS = ['stl', 'obj', 'gltf', 'glb', 'step', 'stp'];
 
 const SYMLINK = '120000';
 const GITLINK = '160000';
 const NONE = '000000';
 
 /**
- * The model format a path's extension names (case-insensitive), or null.
+ * The model format a path's extension names (case-insensitive), or null. `.stp` is STEP too.
  * @param {string | null | undefined} path
- * @returns {'stl' | 'obj' | 'gltf' | 'glb' | null}
+ * @returns {'stl' | 'obj' | 'gltf' | 'glb' | 'step' | null}
  */
 export function modelFormat(path) {
   const m = /\.([A-Za-z0-9]+)$/.exec(path ?? '');
   const ext = m ? m[1].toLowerCase() : '';
-  return MODEL_EXTENSIONS.includes(ext) ? /** @type {'stl' | 'obj' | 'gltf' | 'glb'} */ (ext) : null;
+  if (!MODEL_EXTENSIONS.includes(ext)) return null;
+  return ext === 'stp' ? 'step' : /** @type {'stl' | 'obj' | 'gltf' | 'glb' | 'step'} */ (ext);
 }
 
 /**
