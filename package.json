@@ -1,7 +1,7 @@
 {
   "name": "polymerge-monorepo",
   "private": true,
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "Structural diff and three-way merge for 3D models: STL, OBJ, glTF/GLB.",
   "license": "MIT",
   "type": "module",

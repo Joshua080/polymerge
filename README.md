@@ -384,7 +384,7 @@ CI runs `npm run verify` on every push. One of its checks, `scripts/e2e-pack.mjs
 Publishing is done by `.github/workflows/release.yml` when a version tag is pushed. It needs a repository secret `NPM_TOKEN` that can publish `@joshuahurley/polymerge` and `polymerge-core`.
 
 1. Bump the version in `packages/core/package.json` and `packages/cli/package.json`, and set the CLI's `polymerge-core` dependency to the same version.
-2. Commit, then `git tag v0.1.1 && git push origin v0.1.1`.
+2. Commit, then `git tag v0.2.0 && git push origin v0.2.0`.
 
 The workflow:
 1. runs the full `npm run verify`;

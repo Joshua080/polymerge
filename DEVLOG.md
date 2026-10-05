@@ -4,6 +4,24 @@ A living log of milestones, architectural decisions, what works, what is stubbed
 
 ---
 
+## Session 9 — 2026-10-05 — release prep for 0.2.0; decisions on sharing and STEP
+
+- **The Action worked on a real pull request.** A throwaway PR that lifted one vertex of `examples/plate/ours.stl` got the before/after comment about a minute after the render job started: image hosted on `polymerge-images`, summary "1 moved, 6 faces modified, Tier 1, largest move 0.5". The PR was closed unmerged.
+- **Version 0.2.0 everywhere** (both packages, the CLI's dependency on `polymerge-core`, the viewer workspace, the root and the lockfile). Session 8 added features, so a patch number would mislead. `0.1.1` was never published.
+- **Release trigger narrowed.** `release.yml` ran on any tag starting with `v`, so the floating `v1` tag that the Action's docs mention would have started a release run that fails its version check. It now runs only on full version tags (`v0.2.0`).
+- **`NPM_TOKEN` is set by the owner.** The release itself (`git tag v0.2.0 && git push origin v0.2.0`) is the owner's step, and nothing is tagged or published yet.
+
+**Decisions by the owner**
+
+| # | Decision | Why |
+|---|----------|-----|
+| D50 | Shareable links: the hosted viewer may load models from **any** https site, not only GitHub. | Sharing is useful beyond GitHub (S3, an intranet, a CDN). Loading is client-side and data-only; the viewer should show where each model came from. |
+| D51 | STEP: offer it as an **optional LGPL download** (the OpenCascade-based `occt-import-js`, ~8 MB wasm), loaded only when a STEP file is opened. | Keeps the default install small and MIT-only, and the LGPL module stays separate and replaceable. |
+
+Neither is built yet. The plans are in session 8 (share option A, then the HTML export; STEP view/diff first, with merge refusing STEP).
+
+---
+
 ## Session 8 — 2026-09-29 — PR comments, write-back, glTF output, appearance merge; share and STEP investigated
 
 Priorities set by the owner:
