@@ -86,6 +86,8 @@ export interface IPolymergeHook {
   diffWindow?: [number, number];
   /** The vertex currently shown in the inspector, if any. */
   selection?: ISelectionSnapshot;
+  /** How the models are shown: which axis is up, and the colour palette. */
+  view?: { up: 'y' | 'z'; palette: 'standard' | 'colorblind' };
 }
 
 declare global {
@@ -95,10 +97,16 @@ declare global {
 }
 
 let current: IPolymergeHook = { state: 'idle' };
+let viewProvider: (() => IPolymergeHook['view']) | null = null;
+
+/** Where `view` comes from (the open viewer); it is added to every snapshot. */
+export function setViewProvider(fn: () => IPolymergeHook['view']): void {
+  viewProvider = fn;
+}
 
 /** Replace the snapshot (fields not given are dropped) and mirror the state to <body>. */
 export function publish(next: IPolymergeHook): void {
-  current = JSON.parse(JSON.stringify(next)) as IPolymergeHook;
+  current = JSON.parse(JSON.stringify(viewProvider ? { ...next, view: viewProvider() } : next)) as IPolymergeHook;
   window.__POLYMERGE__ = current;
   document.body.dataset.state = current.state;
 }

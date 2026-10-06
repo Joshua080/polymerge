@@ -1,0 +1,61 @@
+name: Bug report
+description: Something polymerge does wrong, or a model it reads or compares wrongly.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. Two requests:
+        - Don't attach models you aren't allowed to share: issues are public. A small model that shows the same problem is best.
+        - Security problems go to a private report instead (see SECURITY.md).
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: dropdown
+    id: where
+    attributes:
+      label: Where?
+      multiple: true
+      options:
+        - Command line (diff, merge, info, init, …)
+        - Viewer, local (polymerge view / review / demo)
+        - Viewer, hosted (joshua080.github.io/polymerge)
+        - git drivers (git diff / git merge)
+        - Pull-request Action
+        - polymerge-core (as a library)
+    validations:
+      required: true
+  - type: textarea
+    id: command
+    attributes:
+      label: Command, link or workflow step
+      description: For example `polymerge diff old.stl new.stl`, the viewer's address, or the workflow's `uses:` step.
+      render: shell
+  - type: textarea
+    id: output
+    attributes:
+      label: Output
+      description: The report, the error, or the log. In the viewer, open "Engine log" at the bottom of the panel.
+      render: text
+  - type: textarea
+    id: files
+    attributes:
+      label: Model files
+      description: The formats involved (STL, OBJ, glTF, GLB, STEP). Attach the files or link to them, if you can share them.
+  - type: input
+    id: version
+    attributes:
+      label: polymerge version
+      description: The output of `polymerge --version`, or the Action's ref (for example v1).
+      placeholder: 0.2.0
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Operating system, Node.js and browser
+      placeholder: Windows 11, Node 22.11, Chrome 141

@@ -1,5 +1,5 @@
 # polymerge PR diff: comments on a pull request with a rendered before / after image and a
-# structural diff summary of every STL, OBJ, glTF and GLB file it changes. One comment per pull
+# structural diff summary of every STL, OBJ, glTF, GLB and STEP file it changes. One comment per pull
 # request, updated in place on every push. Setup, permissions and the fork-safe two-workflow
 # pattern: docs/github-action.md. Implementation: action/ (render.mjs, post.mjs).
 #
@@ -7,7 +7,7 @@
 # the build and Playwright's Chromium cached, and needs no published npm package. Every input
 # reaches the scripts through environment variables, never interpolated into shell code.
 name: polymerge 3D model diff
-description: Before / after renders and a structural diff of every STL, OBJ, glTF and GLB file a pull request changes, in one self-updating comment.
+description: Before / after renders and a structural diff of every STL, OBJ, glTF, GLB and STEP file a pull request changes, in one self-updating comment.
 author: Joshua Hurley
 branding:
   icon: box
@@ -36,6 +36,18 @@ inputs:
   max-file-size:
     description: Models larger than this many megabytes are listed, not rendered.
     default: '50'
+  up-axis:
+    description: >-
+      Which model axis points up in the images. auto (default): Z for STEP files (the CAD
+      convention), Y for the rest. z: Z for every model (CAD and 3D-printing STL exports are
+      usually Z up). y: Y for every model.
+    default: auto
+  palette:
+    description: >-
+      Colours of the images and the comment. standard (default): green added, red removed, yellow
+      moved. colorblind: blue added, orange removed, yellow moved, distinguishable with red-green
+      colour blindness.
+    default: standard
   image-branch:
     description: Branch of this repository the images are committed to (created if missing).
     default: polymerge-images
@@ -152,6 +164,8 @@ runs:
         POLYMERGE_MAX_FILES: ${{ inputs.max-files }}
         POLYMERGE_MAX_TRIANGLES: ${{ inputs.max-triangles }}
         POLYMERGE_MAX_FILE_MB: ${{ inputs.max-file-size }}
+        POLYMERGE_UP_AXIS: ${{ inputs.up-axis }}
+        POLYMERGE_PALETTE: ${{ inputs.palette }}
       run: node "$GITHUB_ACTION_PATH/action/render.mjs"
 
     - name: Upload the result

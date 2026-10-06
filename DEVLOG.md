@@ -4,6 +4,67 @@ A living log of milestones, architectural decisions, what works, what is stubbed
 
 ---
 
+## Session 11 — 2026-10-06 — front door, release automation, Z-up, colour-blind palette, `polymerge init`, community files
+
+The owner asked for six things from the "make it more useful" list. All are built.
+- **README front door.** A "try it in your browser, no install" line under the title links the hosted viewer and an example diff. An npm badge was added. New sections:
+  - the view menus;
+  - `polymerge init`;
+  - the new release flow;
+  - a Contributing section that links the community files.
+- **Z-up view.**
+  - **Viewer:** an **Up axis** menu in both viewers and `?up=z|y` in the address. A choice the user makes stays in the address, so a shared link opens the same way. STEP opens Z up; everything else defaults to Y as before.
+  - **CLI:** `--up` on `view`, `review` and `demo`.
+  - **Action:** an `up-axis` input. `auto` means Z for STEP. The capture page gets GLB, so `render.mjs` decides from the file's path.
+- **Colour-blind palette.**
+  - **Viewer:** a **Colours** menu, remembered per browser, and `?palette=colorblind`.
+  - **CLI:** `--palette`.
+  - **Action:** a `palette` input. The images and the comment's squares follow it (🟦 added, 🟧 removed); the comment's local command repeats `--up` / `--palette`.
+  - Switching repaints the model, markers, legends and tables in place, and the camera doesn't move.
+- **`polymerge init`.** Writes the `.gitattributes` lines and the drivers that `git-setup` prints, for this repository; `--global` writes them for every repository of the user (the global attributes file and `~/.gitconfig`).
+  - It is idempotent and keeps differing lines and settings.
+  - `--dry-run` writes nothing, and it warns when `polymerge` isn't on PATH.
+  - `git-setup` and `init` share one list.
+- **Release automation.**
+  - A **Prepare release** workflow runs `scripts/release.mjs prepare <version>` and opens the PR.
+  - `release.yml` now publishes when a merge to main brings an unreleased version. It verifies, publishes what npm lacks, tags, writes the GitHub Release from `CHANGELOG.md`, and moves `v1` forward. A version tag pushed by hand still works.
+  - `CHANGELOG.md` was added, reconstructed from the npm publish times and this log.
+- **Community files:**
+  - `CODE_OF_CONDUCT.md` (Contributor Covenant 2.1, fetched from its site);
+  - `CONTRIBUTING.md` and `SECURITY.md`;
+  - issue forms (bug and feature, plus links to the security policy and the hosted viewer);
+  - a pull request template.
+- **Not done (blocked here).** The repository's About box (description, website, topics). This sandbox's GitHub access refuses repository-settings writes (HTTP 403), so it is the owner's click.
+
+**Decisions**
+
+| # | Decision | Why |
+|---|----------|-----|
+| D59 | **The colour-blind palette is opt-in; the default colours are unchanged.**<br>The palette was chosen by search, not by eye: each meaning keeps its hue family (blue added/ours, orange removed/conflict, yellow moved/theirs). Under the Machado 2009 simulation, the worst pair for normal, protan and deutan vision is OKLab ΔE×100 22.4 for the diff and 19.6 for the merge (tritan: 17.7 and 13.9). Every colour is at least 3:1 against the viewer's background.<br>Yellow is deliberately lighter than the dataviz lightness band: faces are shaded by the lights, and a darker yellow reads as brown. | Green and red are what most diff tools use and what the README and GIFs show.<br>Measured on the standard palette: added↔removed is ΔE 7.4 under deutan vision (below the target of 8). The merge review's ours↔theirs (blue↔purple) is **0.9**, which is indistinguishable for deuteranopes. **Open question for the owner:** should the standard merge palette change too (for example theirs amber instead of purple)? |
+| D60 | **Up axis = a −90° turn about X of the viewer's content group, around the model's centre.** Everything entering or leaving the viewer in model space is converted: framing boxes and directions, picking, focus and conflict screen points. Z is the default for STEP only; the viewer does not guess from the shape. | Turning the content leaves the camera, the controls and the lights Y-up, so nothing else has to know. STL and OBJ have no up convention, and a guess from the shape would be wrong as often as right. One click (or `--up z`) is predictable. |
+| D61 | **`polymerge init` writes the portable `polymerge …` commands and never overwrites.** | An absolute path to an npx cache would break later. A user's own line or setting may be deliberate, so it is kept and reported. |
+| D62 | **A release is a merged version bump.** The release job checks npm, the tag and the GitHub Release, and does only what is missing. `v1` only moves forward, never to an older commit. A PR opened by the workflow doesn't trigger CI, so the release job runs the full `verify` itself before anything is published. | It turns the owner's four manual steps (bump, tag, release, move `v1`) into "run Prepare release, merge". It re-runs safely, and the tag the Action's users run can't go backwards. |
+| D63 | **The code of conduct's private reporting route is GitHub's private vulnerability reporting, not an email address.** | No personal address gets published without the owner's say-so. Private reporting must be switched on: Settings → Code security → Private vulnerability reporting. |
+
+**Checks**
+- The palette numbers come from the dataviz skill's validator plus an all-pairs search; the standard palette's red↔green and blue↔purple problems were found the same way.
+- `e2e-merge` now repeats the 3D-click test turned Z up in the colour-blind palette. The conflict sits elsewhere on screen and the click still selects it, which needs the model↔world conversions.
+- `e2e-step`: STEP opens Z up, switching to Y updates the address, and the Action renders STEP Z up in the colour-blind palette with matching squares in the comment.
+- `init`: unit tests run real git with HOME and the global config redirected (local, `--global`, `core.attributesFile`, kept lines, dry run, outside a repository). `e2e-git` runs `polymerge init` in a fresh repository with `polymerge` on PATH, then plain `git diff`.
+- **Release:**
+  - `scripts/test/release.test.ts` covers the version rules and the changelog cut;
+  - `prepare 0.3.0` was run in a throwaway worktree, and the lockfile diff is only the six version numbers. The first try showed that `apps/web`'s pinned `polymerge-core` dependency must be bumped too, or npm fetches the old version from the registry;
+  - the workflows pass actionlint (its wasm build, run from the scratch directory).
+
+**Owner steps** (repository settings this session can't change):
+1. The About box: description, website (the Pages URL) and topics.
+2. Settings → Actions → General → Workflow permissions → "Allow GitHub Actions to create and approve pull requests" (for Prepare release).
+3. Settings → Code security → Private vulnerability reporting → Enable (SECURITY.md and the code of conduct point to it).
+
+Next decision number: **D64**.
+
+---
+
 ## Session 10 — 2026-10-05 — STEP view and diff (level A)
 
 The owner asked for the STEP view/diff, which is level A of the session 8 plan, with D51: OpenCascade as an optional LGPL download, and merge refusing STEP.

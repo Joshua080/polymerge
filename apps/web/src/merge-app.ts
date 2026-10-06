@@ -1,6 +1,6 @@
 /**
  * Merge review (`?mode=merge`): load base / ours / theirs, run the three-way merge in the engine
- * worker and show the merged model coloured by who shaped each face (MERGE_COLORS). Conflict
+ * worker and show the merged model coloured by who shaped each face (the merge palette). Conflict
  * regions are orange until resolved. Click a region (or its card) to select it: its versions
  * appear as ghosts (ours blue, theirs purple, base grey), and Ours / Theirs / Base — buttons or
  * keys 1 / 2 / 3 — resolve it. The result downloads as STL / OBJ / GLB / glTF, and the equivalent CLI command
@@ -8,7 +8,6 @@
  * stage it ("Save to repository"; the server side and its checks: docs/write-back-security.md).
  */
 import {
-  MERGE_COLORS,
   MeshLoadError,
   WRITABLE_FORMATS,
   writeMesh,
@@ -23,8 +22,10 @@ import { findMergeDemo, MERGE_DEMOS } from './dev/merge-demos.js';
 import { h, nextFrame, setChildren, swatch } from './dom.js';
 import { DiffEngine } from './engine.js';
 import { fmtInt, fmtMs } from './format.js';
-import { publish, type IMergeHookState, type IPolymergeHook } from './hook.js';
+import { publish, setViewProvider, type IMergeHookState, type IPolymergeHook } from './hook.js';
 import { conflictGhosts, faceConflicts, mergeFaceKinds, sideToMerged, type MergeFaceKind } from './scene/merge-layers.js';
+import { viewControls } from './view-controls.js';
+import { applyPalette, MERGE_CSS, paletteName, parseUpAxis, rememberPalette, setUrlParam } from './view-options.js';
 import { DiffViewer, type IMergeLayerVisibility } from './scene/viewer.js';
 import { ACCEPTED_EXTENSIONS, SourceError, loadFromFile, loadFromUrl, type ILoadedMesh } from './sources.js';
 
@@ -36,7 +37,7 @@ type MergeSide = 'base' | 'ours' | 'theirs';
 const SIDES: MergeSide[] = ['base', 'ours', 'theirs'];
 const SIDE_LABEL: Record<MergeSide, string> = { base: 'Base (common ancestor)', ours: 'Ours', theirs: 'Theirs' };
 const RESOLUTIONS: MergeResolution[] = ['ours', 'theirs', 'base'];
-const RESOLUTION_COLOR: Record<MergeResolution, string> = { ours: MERGE_COLORS.ours, theirs: MERGE_COLORS.theirs, base: MERGE_COLORS.unchanged };
+const RESOLUTION_COLOR: Record<MergeResolution, string> = { ours: MERGE_CSS.ours, theirs: MERGE_CSS.theirs, base: MERGE_CSS.unchanged };
 
 /** What `polymerge review` says this session can save (GET /api/review/session). */
 interface IReviewSessionInfo {
@@ -86,11 +87,11 @@ function takeSessionToken(): string | null {
 const hex = (buf: ArrayBuffer): string => Array.from(new Uint8Array(buf), (b) => b.toString(16).padStart(2, '0')).join('');
 
 const LAYER_DEFS: { key: keyof IMergeLayerVisibility; label: string; color?: string; hint: string }[] = [
-  { key: 'previewOurs', label: 'Preview: ours', color: MERGE_COLORS.ours, hint: "The selected conflict region as ours has it" },
-  { key: 'previewTheirs', label: 'Preview: theirs', color: MERGE_COLORS.theirs, hint: 'The selected conflict region as theirs has it' },
-  { key: 'previewBase', label: 'Preview: base', color: MERGE_COLORS.unchanged, hint: 'The selected conflict region as it was in the base' },
-  { key: 'unchanged', label: 'Show unchanged faces', color: MERGE_COLORS.unchanged, hint: 'Faces neither side changed' },
-  { key: 'baseGhost', label: 'Base ghost', color: MERGE_COLORS.unchanged, hint: 'The whole base model, translucent' },
+  { key: 'previewOurs', label: 'Preview: ours', color: MERGE_CSS.ours, hint: "The selected conflict region as ours has it" },
+  { key: 'previewTheirs', label: 'Preview: theirs', color: MERGE_CSS.theirs, hint: 'The selected conflict region as theirs has it' },
+  { key: 'previewBase', label: 'Preview: base', color: MERGE_CSS.unchanged, hint: 'The selected conflict region as it was in the base' },
+  { key: 'unchanged', label: 'Show unchanged faces', color: MERGE_CSS.unchanged, hint: 'Faces neither side changed' },
+  { key: 'baseGhost', label: 'Base ghost', color: MERGE_CSS.unchanged, hint: 'The whole base model, translucent' },
   { key: 'wireframe', label: 'Wireframe overlay', hint: 'Triangle edges' },
 ];
 
@@ -138,6 +139,25 @@ export class MergeApp {
     viewport: h('div', { class: 'viewport' }),
   };
 
+  /** The up axis came from the URL or the user (STEP is not merged, so the default is always Y). */
+  private upExplicit = false;
+  private readonly viewOpts = viewControls({
+    onUp: (up) => {
+      this.upExplicit = true;
+      this.viewer.setUpAxis(up);
+      setUrlParam('up', up);
+      this.publishState(this.view ? 'ready' : 'idle');
+    },
+    onPalette: (name) => {
+      applyPalette(name);
+      rememberPalette(name);
+      setUrlParam('palette', null); // the choice is remembered in this browser instead
+      // Redraw the merged model and the selected conflict's previews; the camera stays.
+      if (this.view) void this.show(this.view, false);
+      else this.publishState('idle');
+    },
+  });
+
   constructor(root: HTMLElement) {
     this.buildLayout(root);
     this.viewer = new DiffViewer(this.el.viewport);
@@ -147,6 +167,7 @@ export class MergeApp {
     };
     this.renderLayers();
     this.renderAll();
+    setViewProvider(() => ({ up: this.viewer.upAxis, palette: paletteName() }));
     this.publishState('idle');
   }
 
@@ -198,11 +219,11 @@ export class MergeApp {
       'div',
       { class: 'hud-legend' },
       ([
-        [MERGE_COLORS.unchanged, 'Unchanged'],
-        [MERGE_COLORS.ours, 'From ours'],
-        [MERGE_COLORS.theirs, 'From theirs'],
-        [MERGE_COLORS.both, 'Same on both'],
-        [MERGE_COLORS.conflict, 'Conflict'],
+        [MERGE_CSS.unchanged, 'Unchanged'],
+        [MERGE_CSS.ours, 'From ours'],
+        [MERGE_CSS.theirs, 'From theirs'],
+        [MERGE_CSS.both, 'Same on both'],
+        [MERGE_CSS.conflict, 'Conflict'],
       ] as const).map(([c, l]) => h('span', null, swatch(c), l)),
     );
 
@@ -223,6 +244,7 @@ export class MergeApp {
         h('div', { class: 'drops drops-3' }, SIDES.map(drop)),
         h('div', { class: 'row' }, el.examples),
         el.exampleInfo,
+        this.viewOpts.root,
         h('div', { class: 'row buttons' }, el.rerun, el.reset),
       ),
       h('section', { class: 'sec' }, h('h2', null, 'Merge'), el.summary),
@@ -281,6 +303,12 @@ export class MergeApp {
   // -------------------------------------------------------------------------
 
   async start(params: URLSearchParams): Promise<void> {
+    const up = parseUpAxis(params.get('up'));
+    if (up) {
+      this.upExplicit = true;
+      this.viewer.setUpAxis(up);
+      this.viewOpts.showUp(up);
+    }
     const demo = params.get('demo');
     const token = takeSessionToken();
     this.repoPath = params.get('path');
@@ -557,9 +585,9 @@ export class MergeApp {
         h(
           'tbody',
           null,
-          row(MERGE_COLORS.ours, 'Ours', changes(s.movedFromOurs, s.deletedFromOurs, s.facesAddedFromOurs, s.partMotionsFromOurs)),
-          row(MERGE_COLORS.theirs, 'Theirs', changes(s.movedFromTheirs, s.deletedFromTheirs, s.facesAddedFromTheirs, s.partMotionsFromTheirs)),
-          row(MERGE_COLORS.both, 'Same on both', changes(s.movedConvergent, s.deletedConvergent, s.facesAddedConvergent, 0)),
+          row(MERGE_CSS.ours, 'Ours', changes(s.movedFromOurs, s.deletedFromOurs, s.facesAddedFromOurs, s.partMotionsFromOurs)),
+          row(MERGE_CSS.theirs, 'Theirs', changes(s.movedFromTheirs, s.deletedFromTheirs, s.facesAddedFromTheirs, s.partMotionsFromTheirs)),
+          row(MERGE_CSS.both, 'Same on both', changes(s.movedConvergent, s.deletedConvergent, s.facesAddedConvergent, 0)),
         ),
       ),
       h(
@@ -794,7 +822,7 @@ export class MergeApp {
           'label',
           { class: 'layer', title: def.hint },
           input,
-          def.key === 'wireframe' ? h('span', { class: 'swatch wire' }) : swatch(def.color ?? MERGE_COLORS.unchanged),
+          def.key === 'wireframe' ? h('span', { class: 'swatch wire' }) : swatch(def.color ?? MERGE_CSS.unchanged),
           h('span', { class: 'layer-label' }, def.label),
         );
       }),
@@ -943,7 +971,8 @@ export class MergeApp {
   private screenPoint(id: number): [number, number] | null {
     const v = this.view!;
     const m = v.merged;
-    const eye = this.viewer.camera.position;
+    const [ex, ey, ez] = this.viewer.eyeInModel();
+    const eye = new THREE.Vector3(ex, ey, ez);
     let best: Vec3 | null = null;
     let bestD = Infinity;
     const c = new THREE.Vector3();
@@ -967,7 +996,9 @@ export class MergeApp {
 
   private setUrl(params: Record<string, string>): void {
     const url = new URL(window.location.href);
-    url.search = new URLSearchParams(params).toString();
+    const search = new URLSearchParams(params);
+    if (this.upExplicit) search.set('up', this.viewer.upAxis);
+    url.search = search.toString();
     if (url.href !== window.location.href) history.replaceState(null, '', url);
   }
 }

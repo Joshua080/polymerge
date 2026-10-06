@@ -1,48 +1,102 @@
-# Publishes the npm packages — `polymerge-core` (the engine) and `@joshuahurley/polymerge` (the
-# CLI, which installs the `polymerge` command and bundles the browser viewer) — when a version
-# tag is pushed:
+# Releases polymerge when main carries a version that is not released yet:
 #
-#   git tag v0.2.0 && git push origin v0.2.0
+#   1. "Prepare release" (.github/workflows/prepare-release.yml, Actions tab → Run workflow, or
+#      `node scripts/release.mjs prepare 0.3.0` by hand) opens a pull request that bumps every
+#      package.json and dates the CHANGELOG notes.
+#   2. Merging it lands here: the full `npm run verify` gate runs first, and only then
+#        - `polymerge-core` and `@joshuahurley/polymerge` are published to npm, with provenance;
+#        - the merge is tagged v<version> and a GitHub Release is written from CHANGELOG.md;
+#        - the floating tag `v1` (what `uses: Joshua080/polymerge@v1` runs) moves to it.
 #
-# Needs the repository secret NPM_TOKEN (an npm automation / granular access token that can
-# publish both packages). The full `npm run verify` gate runs first; nothing is published unless
-# it passes. Packages are published with npm provenance (linked to this workflow run).
+# Every step skips what already exists, so a run that failed halfway can simply be re-run
+# (Actions → the run → Re-run jobs). Pushing a version tag by hand (git tag v0.3.0) still works.
+#
+# Needs the repository secret NPM_TOKEN (an npm token that can publish both packages).
 name: Release
 
 on:
   push:
-    # Full version tags only: a floating major tag such as `v1` (for the pull-request action) must not start a release.
+    branches: [main]
+    # Only a change of version can start a release; other pushes to main do not run this.
+    paths: [packages/core/package.json, packages/cli/package.json]
+    # Full version tags only: the floating `v1` tag must never start a release.
     tags: ['v[0-9]+.[0-9]+.[0-9]+']
+  workflow_dispatch:
 
 permissions:
   contents: read
-  id-token: write # npm provenance
 
 concurrency:
   group: release
   cancel-in-progress: false
 
+env:
+  # The floating tag the Action's docs use. It moves forward to every release, never back.
+  ACTION_TAG: v1
+
 jobs:
-  publish:
+  # Cheap: reads versions and asks npm and GitHub what exists. No install, no build.
+  plan:
+    if: github.repository == 'Joshua080/polymerge'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.plan.outputs.version }}
+      needed: ${{ steps.plan.outputs.needed }}
     steps:
       - uses: actions/checkout@v5
 
       - uses: actions/setup-node@v5
         with:
           node-version: 22
+
+      - name: What is released already?
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=$(node scripts/release.mjs version)
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if [ "$GITHUB_REF_TYPE" = "tag" ] && [ "${GITHUB_REF_NAME#v}" != "$version" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match the package version $version"
+            exit 1
+          fi
+          missing=""
+          # npm prints the version when it exists; a missing one exits non-zero or prints nothing.
+          for pkg in polymerge-core @joshuahurley/polymerge; do
+            [ "$(npm view "$pkg@$version" version 2>/dev/null || true)" = "$version" ] || missing="$missing $pkg@$version"
+          done
+          git ls-remote --exit-code --tags origin "refs/tags/v$version" >/dev/null || missing="$missing tag v$version"
+          gh release view "v$version" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || missing="$missing release v$version"
+          if [ -n "$missing" ]; then
+            echo "needed=true" >> "$GITHUB_OUTPUT"
+            echo "### Releasing $version" >> "$GITHUB_STEP_SUMMARY"
+            echo "Missing:$missing" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "needed=false" >> "$GITHUB_OUTPUT"
+            echo "### $version is already released: nothing to do" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+  release:
+    needs: plan
+    if: needs.plan.outputs.needed == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write # the tag, the GitHub Release and moving v1
+      id-token: write # npm provenance
+    env:
+      VERSION: ${{ needs.plan.outputs.version }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0 # tags, to move v1 only forward
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
           cache: npm
           registry-url: https://registry.npmjs.org
-
-      - name: Check the tag matches the package versions
-        run: |
-          tag="${GITHUB_REF_NAME#v}"
-          core=$(node -p "require('./packages/core/package.json').version")
-          cli=$(node -p "require('./packages/cli/package.json').version")
-          dep=$(node -p "require('./packages/cli/package.json').dependencies['polymerge-core']")
-          echo "tag $tag, polymerge-core $core, @joshuahurley/polymerge $cli (depends on core $dep)"
-          [ "$tag" = "$core" ] && [ "$tag" = "$cli" ] && [ "$tag" = "$dep" ] || { echo "::error::tag and package versions differ"; exit 1; }
 
       - name: Install dependencies
         run: npm ci
@@ -54,21 +108,46 @@ jobs:
         run: npm run verify
 
       # Core first: the CLI depends on the exact core version. A package whose exact version is
-      # already on npm is skipped, so a release that failed halfway can be re-run with the same tag.
-      # The check compares the version npm prints: depending on the npm version, a missing version
-      # either exits non-zero or prints nothing, and neither may count as "published". If the
-      # lookup itself fails, the publish is attempted and npm refuses a duplicate version.
-      - name: Publish
+      # already on npm is skipped. The check compares the version npm prints: depending on the
+      # npm version, a missing version either exits non-zero or prints nothing, and neither may
+      # count as "published". If the lookup itself fails, npm refuses a duplicate anyway.
+      - name: Publish to npm
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           for ws in polymerge-core @joshuahurley/polymerge; do
-            v=$(npm pkg get version -w "$ws" | node -e "process.stdout.write(Object.values(JSON.parse(require('fs').readFileSync(0,'utf8')))[0])")
-            published=$(npm view "$ws@$v" version 2>/dev/null || true)
-            if [ "$published" = "$v" ]; then
-              echo "$ws@$v is already on npm — skipping"
+            published=$(npm view "$ws@$VERSION" version 2>/dev/null || true)
+            if [ "$published" = "$VERSION" ]; then
+              echo "$ws@$VERSION is already on npm — skipping"
             else
-              echo "publishing $ws@$v"
+              echo "publishing $ws@$VERSION"
               npm publish -w "$ws" --provenance --access public
             fi
           done
+
+      - name: Tag and write the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          node scripts/release.mjs notes "$VERSION" > "$RUNNER_TEMP/notes.md"
+          if gh release view "v$VERSION" >/dev/null 2>&1; then
+            echo "release v$VERSION exists — skipping"
+          else
+            # Creates the tag at this commit unless it exists (a hand-pushed tag keeps its commit).
+            gh release create "v$VERSION" --target "$GITHUB_SHA" --title "v$VERSION" --notes-file "$RUNNER_TEMP/notes.md"
+          fi
+
+      - name: Move the floating action tag
+        run: |
+          git fetch --force --tags origin
+          release=$(git rev-parse "v$VERSION^{commit}")
+          if current=$(git rev-parse -q --verify "refs/tags/$ACTION_TAG^{commit}"); then
+            if [ "$current" = "$release" ]; then echo "$ACTION_TAG is already at v$VERSION"; exit 0; fi
+            if ! git merge-base --is-ancestor "$current" "$release"; then
+              echo "::warning::$ACTION_TAG points at a later commit than v$VERSION; left where it is"
+              exit 0
+            fi
+          fi
+          git tag -f "$ACTION_TAG" "$release"
+          git push --force origin "refs/tags/$ACTION_TAG"
+          echo "$ACTION_TAG → v$VERSION (${release:0:7})" >> "$GITHUB_STEP_SUMMARY"

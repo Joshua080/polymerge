@@ -1,22 +1,27 @@
 /**
  * Geometry builders for merge review: the merged mesh coloured by who shaped each face
- * (MERGE_COLORS), and "ghost" previews of one conflict region as base / ours / theirs have it.
+ * (the merge palette, view-options.ts), and "ghost" previews of one conflict region as base / ours / theirs have it.
  * Positions are merged-frame world coordinates minus `origin` (see layers.ts).
  */
 import * as THREE from 'three';
-import { MERGE_COLORS, type IMergeConflict, type IMesh, type Mat4 } from 'polymerge-core';
+import type { IMergeConflict, IMesh, Mat4 } from 'polymerge-core';
+import { mergeColors } from '../view-options.js';
 import type { IMergeView } from '../worker/protocol.js';
 import { linearColor, type RGB } from './layers.js';
 
 export type MergeFaceKind = 'unchanged' | 'ours' | 'theirs' | 'both' | 'conflict';
 
-export const MERGE_LINEAR: Record<MergeFaceKind, RGB> = {
-  unchanged: linearColor(MERGE_COLORS.unchanged),
-  ours: linearColor(MERGE_COLORS.ours),
-  theirs: linearColor(MERGE_COLORS.theirs),
-  both: linearColor(MERGE_COLORS.both),
-  conflict: linearColor(MERGE_COLORS.conflict),
-};
+/** The current palette's merge colours, linear (view-options.ts). Read when a layer is built. */
+export function mergeLinear(): Record<MergeFaceKind, RGB> {
+  const c = mergeColors();
+  return {
+    unchanged: linearColor(c.unchanged),
+    ours: linearColor(c.ours),
+    theirs: linearColor(c.theirs),
+    both: linearColor(c.both),
+    conflict: linearColor(c.conflict),
+  };
+}
 
 /** Conflict region of each merged face (-1 = none): the first corner inside a region. */
 export function faceConflicts(view: IMergeView): Int32Array {
@@ -78,9 +83,10 @@ export function buildMergeLayer(mesh: IMesh, kinds: MergeFaceKind[], origin: THR
   const pos = new Float32Array(n * 9);
   const col = new Float32Array(n * 9);
   const P = mesh.positions;
+  const colors = mergeLinear();
   for (let k = 0; k < n; k++) {
     const f = faceMap[k];
-    const c = MERGE_LINEAR[kinds[f]];
+    const c = colors[kinds[f]];
     for (let j = 0; j < 3; j++) {
       const v = mesh.faces[f * 3 + j] * 3;
       const o = k * 9 + j * 3;
@@ -156,16 +162,17 @@ export function conflictGhosts(
   origin: THREE.Vector3,
 ): IGhostSpec[] {
   const T = view.frame.transform.matrix;
+  const colors = mergeColors();
   return [
-    { label: 'base', color: MERGE_COLORS.unchanged, geometry: buildFaceSubset(meshes.base, conflict.baseFaces, sideToMerged(T, null), origin) },
+    { label: 'base', color: colors.unchanged, geometry: buildFaceSubset(meshes.base, conflict.baseFaces, sideToMerged(T, null), origin) },
     {
       label: 'ours',
-      color: MERGE_COLORS.ours,
+      color: colors.ours,
       geometry: buildFaceSubset(meshes.ours, facesTouching(meshes.ours, conflict.oursVertices), sideToMerged(T, view.ours.alignment.matrix), origin),
     },
     {
       label: 'theirs',
-      color: MERGE_COLORS.theirs,
+      color: colors.theirs,
       geometry: buildFaceSubset(
         meshes.theirs,
         facesTouching(meshes.theirs, conflict.theirsVertices),

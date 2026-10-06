@@ -21,6 +21,7 @@
  *   GITHUB_WORKSPACE + POLYMERGE_PATH the checkout to diff
  *   POLYMERGE_OUT                     output directory
  *   POLYMERGE_MAX_FILES (10) · POLYMERGE_MAX_TRIANGLES (200000) · POLYMERGE_MAX_FILE_MB (50)
+ *   POLYMERGE_UP_AXIS (auto | y | z) · POLYMERGE_PALETTE (standard | colorblind)
  */
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -32,7 +33,7 @@ import { appendSummary, errorAnnotation, git, gitTry, intInput, log, quietly, re
 import { matchesPointer, parseLfsPointer, readLocalLfsObject } from './lib/lfs.mjs';
 import { buildComment } from './lib/markdown.mjs';
 import { hasLocalChanges, summarizeDiff } from './lib/summary.mjs';
-import { validateResult } from './lib/validate.mjs';
+import { PALETTES, UP_AXES, validateResult } from './lib/validate.mjs';
 
 const actionRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const SHA = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
@@ -99,6 +100,14 @@ function stepImporter() {
   return started;
 }
 
+/** An input that must be one of `choices` (empty = the default); anything else stops the run. */
+function choiceInput(name, choices, fallback) {
+  const raw = (process.env[name] ?? '').trim().toLowerCase();
+  if (raw === '') return fallback;
+  if (!choices.includes(raw)) throw new Error(`${name.replace('POLYMERGE_', '').toLowerCase().replace(/_/g, '-')} must be one of ${choices.join(', ')} (got "${raw}")`);
+  return raw;
+}
+
 function message(err) {
   const text = err instanceof Error ? (err.name && !['Error', 'MeshLoadError'].includes(err.name) ? `${err.name}: ${err.message}` : err.message) : String(err);
   return text.slice(0, 900);
@@ -128,9 +137,9 @@ class Renderer {
 
   /**
    * Render one card to `file`; resolves the viewer's hook (with its capture state).
-   * @param {{ before: Side | null, after: Side | null, labels: { before: string, after: string }, file: string }} job
+   * @param {{ before: Side | null, after: Side | null, labels: { before: string, after: string }, file: string, up: 'y' | 'z', palette: string }} job
    */
-  async card({ before, after, labels, file }) {
+  async card({ before, after, labels, file, up, palette }) {
     const { bounded, readHook, waitReady } = await import('../scripts/viewer-capture.mjs');
     const { viewer, browser } = await this.ready();
     const context = await bounded(browser.newContext({ viewport: { width: CARD.width, height: CARD.height }, deviceScaleFactor: CARD.scale }), 30_000, 'open a browser context');
@@ -141,7 +150,7 @@ class Renderer {
       // nothing from the pull request (not even a file name) goes into a URL.
       /** @type {Map<string, Buffer>} */
       const served = new Map();
-      const query = new URLSearchParams({ capture: '1', before: labels.before, after: labels.after });
+      const query = new URLSearchParams({ capture: '1', before: labels.before, after: labels.after, up, palette });
       for (const [key, side] of /** @type {const} */ ([['base', before], ['target', after]])) {
         if (!side?.bytes) continue;
         const urlPath = `/__polymerge/${key}.${side.format}`;
@@ -193,6 +202,7 @@ async function main() {
 
   const repo = path.resolve(process.env.GITHUB_WORKSPACE ?? process.cwd(), process.env.POLYMERGE_PATH || '.');
   const out = path.resolve(process.env.POLYMERGE_OUT || 'polymerge-pr-diff');
+  const view = { upAxis: choiceInput('POLYMERGE_UP_AXIS', UP_AXES, 'auto'), palette: choiceInput('POLYMERGE_PALETTE', PALETTES, 'standard') };
   const limits = {
     maxFiles: intInput('POLYMERGE_MAX_FILES', 10),
     maxFaces: intInput('POLYMERGE_MAX_TRIANGLES', 200_000),
@@ -208,7 +218,7 @@ async function main() {
 
   const version = readJson(path.join(actionRoot, 'packages/cli/package.json')).version;
   /** @type {import('./lib/validate.mjs').RenderResult} */
-  const result = { schema: 1, tool: `polymerge ${version}`, pr: number, base, head: headSha, limits, files: [] };
+  const result = { schema: 1, tool: `polymerge ${version}`, pr: number, base, head: headSha, limits, files: [], ...view };
   const write = (captures = []) => {
     validateResult(result); // the post step will insist on it; fail here first, with our own bug
     fs.writeFileSync(path.join(out, 'result.json'), `${JSON.stringify(result, null, 2)}\n`);
@@ -224,7 +234,7 @@ async function main() {
   const { diffMeshes, loadMesh, stepInfo, writeGlb } = await import('polymerge-core');
   const silent = { info() {}, warn() {} };
   const renderer = new Renderer();
-  /** @type {{ image: string, path: string, tier: number | null, stats: unknown, capture: unknown }[]} */
+  /** @type {{ image: string, path: string, tier: number | null, stats: unknown, view: unknown, capture: unknown }[]} */
   const captures = [];
   const labels = { before: base.slice(0, 7), after: headSha.slice(0, 7) };
   try {
@@ -303,10 +313,12 @@ async function main() {
         // 3. Render.
         const image = `${captures.length}.png`;
         try {
-          const hook = await renderer.card({ before: sides.before, after: sides.after, labels, file: path.join(out, image) });
+          // auto: Z up for STEP (the CAD convention; the page gets GLB, so it cannot tell), Y otherwise.
+          const up = view.upAxis === 'auto' ? (modelFormat(c.path) === 'step' || modelFormat(c.oldPath) === 'step' ? 'z' : 'y') : view.upAxis;
+          const hook = await renderer.card({ before: sides.before, after: sides.after, labels, file: path.join(out, image), up, palette: view.palette });
           entry.status = 'rendered';
           entry.image = image;
-          captures.push({ image, path: c.path, tier: hook.tier ?? null, stats: hook.stats ?? null, capture: hook.capture });
+          captures.push({ image, path: c.path, tier: hook.tier ?? null, stats: hook.stats ?? null, view: hook.view ?? null, capture: hook.capture });
           if (entry.diff && hook.tier !== entry.diff.tier) log(`${c.path}: note: the viewer matched with Tier ${hook.tier}, the summary with Tier ${entry.diff.tier}`);
         } catch (err) {
           entry.status = 'render-failed';

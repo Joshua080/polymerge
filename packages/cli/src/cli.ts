@@ -12,11 +12,13 @@
  *   polymerge git-diff <git external-diff args...>
  *   polymerge git-merge %O %A %B %P
  *   polymerge git-setup
+ *   polymerge init [--global] [--dry-run]
  */
 import { parseArgs } from 'node:util';
 import { runDiff } from './commands/diff.js';
 import { gitSetupText, runGitDiff } from './commands/git.js';
 import { runInfo } from './commands/info.js';
+import { runInit } from './commands/init.js';
 import { runGitMerge, runGitResolve, runMerge } from './commands/merge.js';
 import { createRequire } from 'node:module';
 import { MERGE_DEMOS, runDemo, runReview, runView } from './commands/view.js';
@@ -42,6 +44,9 @@ Usage:
       --host <addr>          Bind address (default 127.0.0.1)
       --name <file>          Display name for every side (git difftool passes $MERGED)
       --no-open              Do not launch a browser, just print the URL
+      --up <y|z>             Which axis of the model points up (default: Z for STEP, else Y;
+                             CAD and 3D-printing STL files are usually Z up)
+      --palette <name>       standard, or colorblind (blue / orange / yellow); also a menu in the viewer
       --web-dist <dir>       Path to a built viewer (default: the one bundled with polymerge)
   polymerge merge <base> <ours> <theirs> [options]   Three-way merge (exit 1 = unresolved conflicts)
       -o, --output <file>    Write the merged model: .stl, .obj, .glb or .gltf (glTF keeps the nodes)
@@ -62,6 +67,8 @@ Usage:
                                              Merge review: ${MERGE_DEMOS.join(', ')} (default ${MERGE_DEMOS[0]})
                                              Diff: e.g. moved-part, grid-bump, units-inch-to-mm, mixed-topology-edit
   polymerge info <file>                      Print the normalised mesh summary
+  polymerge init [--global] [--dry-run]      Set git up for polymerge: .gitattributes and the drivers
+                                             (this repository; --global: all your repositories)
   polymerge git-diff <7 git args>            git external diff driver (diff.<name>.command)
   polymerge git-merge %O %A %B %P            git merge driver (merge.<name>.driver)
   polymerge git-setup                        Print the git configuration snippet
@@ -121,6 +128,8 @@ async function main(argv: string[]): Promise<number> {
           name: { type: 'string' },
           'no-open': { type: 'boolean' },
           'web-dist': { type: 'string' },
+          up: { type: 'string' },
+          palette: { type: 'string' },
         },
       });
       if (positionals.length !== 2 && positionals.length !== 3) {
@@ -132,6 +141,8 @@ async function main(argv: string[]): Promise<number> {
         open: !values['no-open'],
         webDist: values['web-dist'],
         name: values.name,
+        up: values.up,
+        palette: values.palette,
       });
     }
     case 'demo': {
@@ -143,10 +154,12 @@ async function main(argv: string[]): Promise<number> {
           host: { type: 'string' },
           'no-open': { type: 'boolean' },
           'web-dist': { type: 'string' },
+          up: { type: 'string' },
+          palette: { type: 'string' },
         },
       });
       if (positionals.length > 1) throw new UsageError(`polymerge demo: expected at most 1 example name, got ${positionals.length}`);
-      return runDemo(positionals[0], { port: values.port, host: values.host, open: !values['no-open'], webDist: values['web-dist'] });
+      return runDemo(positionals[0], { port: values.port, host: values.host, open: !values['no-open'], webDist: values['web-dist'], up: values.up, palette: values.palette });
     }
     case 'info': {
       const { positionals } = parseArgs({ args: rest, allowPositionals: true, options: {} });
@@ -187,10 +200,12 @@ async function main(argv: string[]): Promise<number> {
           host: { type: 'string' },
           'no-open': { type: 'boolean' },
           'web-dist': { type: 'string' },
+          up: { type: 'string' },
+          palette: { type: 'string' },
         },
       });
       requirePositionals('review', positionals, 1);
-      return runReview(positionals[0], { port: values.port, host: values.host, open: !values['no-open'], webDist: values['web-dist'] });
+      return runReview(positionals[0], { port: values.port, host: values.host, open: !values['no-open'], webDist: values['web-dist'], up: values.up, palette: values.palette });
     }
     case 'resolve': {
       const { values, positionals } = parseArgs({
@@ -226,6 +241,15 @@ async function main(argv: string[]): Promise<number> {
     case 'git-setup':
       process.stdout.write(gitSetupText() + '\n');
       return 0;
+    case 'init': {
+      const { values, positionals } = parseArgs({
+        args: rest,
+        allowPositionals: true,
+        options: { global: { type: 'boolean' }, 'dry-run': { type: 'boolean' } },
+      });
+      if (positionals.length > 0) throw new UsageError(`polymerge init: takes no file arguments (got ${positionals.join(' ')})`);
+      return runInit({ global: values.global, dryRun: values['dry-run'] });
+    }
     default:
       process.stderr.write(`polymerge: unknown command "${command}"\n\n${HELP}`);
       return 2;

@@ -13,19 +13,20 @@
  * is the viewer's default 3/4 view, mirrored towards the side of the model where the changes are.
  */
 import {
-  DIFF_COLORS,
   FaceStatus,
   summarizeMesh,
   type IDiffResult,
   type IMesh,
+  type SourceFormat,
   type Vec3,
 } from 'polymerge-core';
 import { h, swatch } from './dom.js';
 import { DiffEngine } from './engine.js';
-import { publish, type ICaptureHookState, type IPolymergeHook } from './hook.js';
+import { publish, setViewProvider, type ICaptureHookState, type IPolymergeHook } from './hook.js';
 import { alignPositions, boxOf, isIdentityMatrix } from './scene/layers.js';
-import { DEFAULT_VIEW, DiffViewer } from './scene/viewer.js';
+import { DEFAULT_VIEW, defaultView, DiffViewer } from './scene/viewer.js';
 import { loadFromUrl, pairLoads, type ILoadedMesh } from './sources.js';
+import { defaultUpAxis, DIFF_CSS, paletteName, parseUpAxis, type UpAxis } from './view-options.js';
 
 type Side = 'base' | 'target';
 
@@ -47,6 +48,8 @@ export class CaptureApp {
   private readonly error = h('div', { class: 'cap-error hidden', role: 'alert' });
   private result: IDiffResult | null = null;
   private meshes: Partial<Record<Side, IMesh>> = {};
+  /** ?up= (null: by format). */
+  private upParam: UpAxis | null = null;
 
   constructor(root: HTMLElement) {
     const shell = (side: Side, title: string) => {
@@ -62,10 +65,10 @@ export class CaptureApp {
       'footer',
       { class: 'cap-legend' },
       ([
-        [DIFF_COLORS.modified, 'Moved'],
-        [DIFF_COLORS.added, 'Added'],
-        [DIFF_COLORS.removed, 'Removed'],
-        [DIFF_COLORS.unchanged, 'Unchanged'],
+        [DIFF_CSS.modified, 'Moved'],
+        [DIFF_CSS.added, 'Added'],
+        [DIFF_CSS.removed, 'Removed'],
+        [DIFF_CSS.unchanged, 'Unchanged'],
       ] as const).map(([c, l]) => h('span', { class: 'cap-key' }, swatch(c), l)),
       this.note,
       h('span', { class: 'cap-brand' }, 'polymerge'),
@@ -75,7 +78,15 @@ export class CaptureApp {
     // The viewers measure their containers, so they are created once the card is in the page.
     const panel = (p: typeof before): IPanel => ({ root: p.el, viewer: new DiffViewer(p.viewport), label: p.label, empty: p.empty });
     this.panels = { base: panel(before), target: panel(after) };
+    setViewProvider(() => ({ up: this.panels.target.viewer.upAxis, palette: paletteName() }));
     publish({ state: 'idle', mode: 'capture' });
+  }
+
+  /** Both panels: the URL's up axis, else Z for STEP and Y otherwise. */
+  private setUp(formats: (SourceFormat | undefined)[]): UpAxis {
+    const up = this.upParam ?? defaultUpAxis(formats);
+    for (const p of Object.values(this.panels)) p.viewer.setUpAxis(up);
+    return up;
   }
 
   async start(params: URLSearchParams): Promise<void> {
@@ -84,6 +95,7 @@ export class CaptureApp {
     this.panels.target.label.textContent = label('after');
     const baseUrl = params.get('base');
     const targetUrl = params.get('target');
+    this.upParam = parseUpAxis(params.get('up'));
     publish({ state: 'loading', mode: 'capture' });
     try {
       if (!baseUrl && !targetUrl) throw new Error('capture mode needs ?base= and/or ?target=');
@@ -112,7 +124,8 @@ export class CaptureApp {
     const matrix = isIdentityMatrix(result.alignment.matrix) ? null : result.alignment.matrix;
     const alignedBase = alignPositions(base.mesh.positions, matrix);
     const box = boxOf(target.mesh.positions).union(boxOf(alignedBase));
-    const direction = facingChanges(result, base.mesh, alignedBase, target.mesh, box);
+    const up = this.setUp([base.mesh.metadata.format, target.mesh.metadata.format]);
+    const direction = facingChanges(result, base.mesh, alignedBase, target.mesh, box, defaultView(up));
     for (const side of ['base', 'target'] as const) {
       const { viewer } = this.panels[side];
       viewer.showSide(base.mesh, target.mesh, result, side);
@@ -128,11 +141,12 @@ export class CaptureApp {
 
   private showOne(side: Side, mesh: IMesh, status: typeof FaceStatus.Added | typeof FaceStatus.Removed, emptyText: string): void {
     this.meshes = { [side]: mesh };
+    const up = this.setUp([mesh.metadata.format]);
     this.panels[side].viewer.showSingle(mesh, side, status);
     const other = this.panels[side === 'base' ? 'target' : 'base'];
     other.empty.textContent = emptyText;
     other.empty.classList.remove('hidden');
-    this.publishReady(side === 'target' ? 'added' : 'deleted', DEFAULT_VIEW);
+    this.publishReady(side === 'target' ? 'added' : 'deleted', defaultView(up));
   }
 
   private publishReady(kind: ICaptureHookState['kind'], direction: Vec3): void {
@@ -164,11 +178,19 @@ export class CaptureApp {
 }
 
 /**
- * View direction for a diff: the default 3/4 view, mirrored on every axis where the changed faces
- * (both versions of them) clearly sit on the negative side of the model, so the changes face the
- * camera instead of hiding behind the model. Changes all round the model keep the default.
+ * View direction for a diff: the default 3/4 view (`view`, model space), turned on every axis
+ * where the changed faces (both versions of them) clearly sit on the other side of the model, so
+ * the changes face the camera instead of hiding behind the model. Changes all round the model
+ * keep the default.
  */
-export function facingChanges(result: IDiffResult, base: IMesh, alignedBase: Float64Array, target: IMesh, box: { min: { x: number; y: number; z: number }; max: { x: number; y: number; z: number } }): Vec3 {
+export function facingChanges(
+  result: IDiffResult,
+  base: IMesh,
+  alignedBase: Float64Array,
+  target: IMesh,
+  box: { min: { x: number; y: number; z: number }; max: { x: number; y: number; z: number } },
+  view: Vec3 = DEFAULT_VIEW,
+): Vec3 {
   const sum = [0, 0, 0];
   let n = 0;
   const add = (positions: Float64Array, faces: Uint32Array, status: Uint8Array) => {
@@ -185,7 +207,7 @@ export function facingChanges(result: IDiffResult, base: IMesh, alignedBase: Flo
   };
   add(target.positions, target.faces, result.targetFaceStatus);
   add(alignedBase, base.faces, result.baseFaceStatus);
-  const dir: Vec3 = [...DEFAULT_VIEW];
+  const dir: Vec3 = [...view];
   const min = [box.min.x, box.min.y, box.min.z];
   const max = [box.max.x, box.max.y, box.max.z];
   // Offsets are measured against the whole model's size, so a thin axis (a plate's thickness)
@@ -194,7 +216,8 @@ export function facingChanges(result: IDiffResult, base: IMesh, alignedBase: Flo
   if (n === 0 || !(radius > 0)) return dir;
   for (let k = 0; k < 3; k++) {
     const offset = (sum[k] / n - (min[k] + max[k]) / 2) / radius;
-    if (offset < -FACING_THRESHOLD) dir[k] = -dir[k];
+    if (offset < -FACING_THRESHOLD) dir[k] = -Math.abs(dir[k]);
+    else if (offset > FACING_THRESHOLD) dir[k] = Math.abs(dir[k]);
   }
   return dir;
 }

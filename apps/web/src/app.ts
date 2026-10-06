@@ -1,6 +1,5 @@
 /** Application controller: wires inputs, loading, diffing, the viewer and the panel together. */
 import {
-  DIFF_COLORS,
   MeshLoadError,
   TIER_NAMES,
   describeVertexChange,
@@ -16,7 +15,7 @@ import {
 } from 'polymerge-core';
 import { h, nextFrame, setChildren, swatch } from './dom.js';
 import { DiffEngine } from './engine.js';
-import { patch, publish, snapshot, type IPolymergeHook } from './hook.js';
+import { patch, publish, setViewProvider, snapshot, type IPolymergeHook } from './hook.js';
 import {
   renderAttempts,
   renderInspector,
@@ -39,6 +38,8 @@ import {
   type Loader,
   pairLoads,
 } from './sources.js';
+import { viewControls } from './view-controls.js';
+import { applyPalette, defaultUpAxis, DIFF_CSS, paletteName, parseUpAxis, rememberPalette, setUrlParam, type UpAxis } from './view-options.js';
 
 type Side = 'base' | 'target';
 const SIDE_LABEL: Record<Side, string> = { base: 'Base (old)', target: 'Target (new)' };
@@ -50,12 +51,12 @@ const AUTO_LIMITS: Partial<Record<keyof ILayerVisibility, (c: ILayerCounts) => b
 };
 
 const LAYER_DEFS: { key: keyof ILayerVisibility; label: string; color?: string; hint: string }[] = [
-  { key: 'target', label: 'Target (diff-coloured)', color: DIFF_COLORS.modified, hint: 'New mesh, faces coloured by status' },
-  { key: 'removed', label: 'Removed geometry', color: DIFF_COLORS.removed, hint: 'Base faces that no longer exist' },
+  { key: 'target', label: 'Target (diff-coloured)', color: DIFF_CSS.modified, hint: 'New mesh, faces coloured by status' },
+  { key: 'removed', label: 'Removed geometry', color: DIFF_CSS.removed, hint: 'Base faces that no longer exist' },
   { key: 'ghost', label: 'Base ghost', color: BASE_ACCENT, hint: 'Whole old mesh, translucent, in target space' },
-  { key: 'unchanged', label: 'Show unchanged faces', color: DIFF_COLORS.unchanged, hint: 'Grey faces of the target' },
-  { key: 'markers', label: 'Vertex markers', hint: 'Dots: moved (yellow), added (green), removed (red)' },
-  { key: 'vectors', label: 'Displacement vectors', hint: 'Old (blue) → new (yellow) position of moved vertices' },
+  { key: 'unchanged', label: 'Show unchanged faces', color: DIFF_CSS.unchanged, hint: 'Grey faces of the target' },
+  { key: 'markers', label: 'Vertex markers', hint: 'Dots on moved, added and removed vertices, in their status colours' },
+  { key: 'vectors', label: 'Displacement vectors', hint: 'Old (light blue) → new (moved colour) position of moved vertices' },
   { key: 'wireframe', label: 'Wireframe overlay', hint: 'Triangle edges' },
 ];
 
@@ -75,6 +76,23 @@ export class App {
   private touchedLayers = new Set<keyof ILayerVisibility>();
   private layers: ILayerVisibility = { ...DEFAULT_LAYERS };
   private selection: { side: Side; index: number; hit: IPickHit | null } | null = null;
+  /** The up axis came from the URL or the user, not from the models' formats. */
+  private upExplicit = false;
+  private readonly view = viewControls({
+    onUp: (up) => {
+      this.upExplicit = true;
+      this.viewer.setUpAxis(up);
+      setUrlParam('up', up);
+      patch({});
+    },
+    onPalette: (name) => {
+      applyPalette(name);
+      rememberPalette(name);
+      setUrlParam('palette', null); // the choice is remembered in this browser instead
+      this.viewer.refreshColors();
+      patch({});
+    },
+  });
 
   // DOM refs
   private readonly el = {
@@ -112,7 +130,22 @@ export class App {
     this.renderEmpty();
     this.manifest = loadManifest();
     void this.populateExamples();
+    setViewProvider(() => ({ up: this.viewer.upAxis, palette: paletteName() }));
     publish({ state: 'idle' });
+  }
+
+  /** Up axis for the loaded models, unless the URL or the user chose one: Z for STEP, else Y. */
+  private autoUp(): void {
+    if (this.upExplicit) return;
+    const up = defaultUpAxis([this.base?.mesh.metadata.format, this.target?.mesh.metadata.format]);
+    this.viewer.setUpAxis(up);
+    this.view.showUp(up);
+  }
+
+  private setUp(up: UpAxis): void {
+    this.upExplicit = true;
+    this.viewer.setUpAxis(up);
+    this.view.showUp(up);
   }
 
   // -------------------------------------------------------------------------
@@ -185,10 +218,10 @@ export class App {
       'div',
       { class: 'hud-legend' },
       ([
-        [DIFF_COLORS.unchanged, 'Unchanged'],
-        [DIFF_COLORS.modified, 'Moved / Modified'],
-        [DIFF_COLORS.added, 'Added'],
-        [DIFF_COLORS.removed, 'Removed'],
+        [DIFF_CSS.unchanged, 'Unchanged'],
+        [DIFF_CSS.modified, 'Moved / Modified'],
+        [DIFF_CSS.added, 'Added'],
+        [DIFF_CSS.removed, 'Removed'],
       ] as const).map(([c, l]) => h('span', null, swatch(c), l)),
     );
 
@@ -210,6 +243,7 @@ export class App {
         h('div', { class: 'row' }, el.examples),
         el.exampleInfo,
         h('div', { class: 'row' }, el.tierSelect),
+        this.view.root,
         h('div', { class: 'row buttons' }, el.rerun, el.reset),
       ),
       h('section', { class: 'sec' }, h('h2', null, 'Result'), el.summary, h('div', { class: 'row' }, el.download)),
@@ -277,6 +311,8 @@ export class App {
     const targetUrl = params.get('target');
     const tier = params.get('tier');
     if (tier && ['1', '2', '3'].includes(tier)) this.el.tierSelect.value = tier;
+    const up = parseUpAxis(params.get('up'));
+    if (up) this.setUp(up);
     if (mock !== null && mock !== '0' && mock !== 'false') return this.loadMock(mock === '3' || mock === 'tier3' ? 'tier3' : 'tier2');
     if (caseId) return this.loadCase(caseId);
     if (baseUrl && targetUrl) {
@@ -426,6 +462,7 @@ export class App {
     this.layerCounts = null;
     this.clearSelection();
     const only = this.base ? { side: 'base' as const, m: this.base } : this.target ? { side: 'target' as const, m: this.target } : null;
+    this.autoUp();
     if (only) this.viewer.showPreview(only.m.mesh, only.side);
     else this.viewer.clear();
     this.el.hudTier.classList.add('hidden');
@@ -512,6 +549,7 @@ export class App {
     const target = this.target!;
     this.result = result;
     this.clearSelection();
+    this.autoUp();
     this.layerCounts = this.viewer.showDiff(base.mesh, target.mesh, result);
     // Adaptive defaults for dense layers, unless the user chose explicitly.
     for (const [key, ok] of Object.entries(AUTO_LIMITS) as [keyof ILayerVisibility, (c: ILayerCounts) => boolean][]) {
@@ -693,12 +731,12 @@ export class App {
         });
         const icon =
           def.key === 'markers'
-            ? h('span', { class: 'swatch-group' }, swatch(DIFF_COLORS.modified), swatch(DIFF_COLORS.added), swatch(DIFF_COLORS.removed))
+            ? h('span', { class: 'swatch-group' }, swatch(DIFF_CSS.modified), swatch(DIFF_CSS.added), swatch(DIFF_CSS.removed))
             : def.key === 'vectors'
-              ? h('span', { class: 'swatch vector', style: { background: `linear-gradient(90deg, ${BASE_ACCENT}, ${DIFF_COLORS.modified})` } })
+              ? h('span', { class: 'swatch vector', style: { background: `linear-gradient(90deg, ${BASE_ACCENT}, ${DIFF_CSS.modified})` } })
               : def.key === 'wireframe'
                 ? h('span', { class: 'swatch wire' })
-                : swatch(def.color ?? DIFF_COLORS.unchanged);
+                : swatch(def.color ?? DIFF_CSS.unchanged);
         return h(
           'label',
           { class: 'layer', title: def.hint },
@@ -797,7 +835,10 @@ export class App {
 
   private setUrl(params: Record<string, string>): void {
     const url = new URL(window.location.href);
-    url.search = new URLSearchParams(params).toString();
+    const search = new URLSearchParams(params);
+    // An up axis the user chose stays in the address, so a shared link opens the same way.
+    if (this.upExplicit) search.set('up', this.viewer.upAxis);
+    url.search = search.toString();
     if (url.href !== window.location.href) history.replaceState(null, '', url);
   }
 }

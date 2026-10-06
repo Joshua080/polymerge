@@ -1,8 +1,11 @@
 # polymerge
 
 [![CI](https://github.com/Joshua080/polymerge/actions/workflows/ci.yml/badge.svg)](https://github.com/Joshua080/polymerge/actions/workflows/ci.yml)
+[![npm](https://img.shields.io/npm/v/@joshuahurley/polymerge)](https://www.npmjs.com/package/@joshuahurley/polymerge)
 
 **Diff and three-way merge for 3D models (STL, OBJ, glTF/GLB), with a visual review in the browser and drivers for git. CAD files in STEP can be diffed and viewed too.**
+
+> **Try it in your browser, no install:** open the [polymerge viewer](https://joshua080.github.io/polymerge/) and drop two versions of a model on it, or [open an example diff](https://joshua080.github.io/polymerge/?base=https://raw.githubusercontent.com/Joshua080/polymerge/v0.2.0/examples/plate/base.stl&target=https://raw.githubusercontent.com/Joshua080/polymerge/v0.2.0/examples/plate/ours.stl). It runs in your browser; your files are not uploaded.
 
 Most 3D "diff" tools paint a heatmap of how far two surfaces are apart. polymerge works out which vertex in the old model *became* which vertex in the new one, even when the file was re-exported, re-ordered, converted from inches to millimetres, or had a part moved. On top of that correspondence it can:
 - tell you exactly what changed;
@@ -102,6 +105,10 @@ Colours:
 
 Click any vertex to read its correspondence, e.g. *base #29 → target #77, Δ (0, 0, 0.25)*. The two files can be different formats.
 
+Two menus under the models change how they are shown:
+- **Colours → Colour-blind safe** swaps red and green, which red-green colour blindness can't tell apart, for orange and blue: blue added, orange removed, yellow moved. Your browser remembers the choice. On the command line: `--palette colorblind`.
+- **Up axis → Z up** is for CAD and 3D-printing files, which are usually Z up and otherwise open lying on their side. STEP files open Z up on their own. On the command line: `--up z`.
+
 ### Three-way merge
 
 Give it the common ancestor (base) and the two edited versions (ours, theirs):
@@ -186,8 +193,13 @@ Saving is locked down (details in [docs/write-back-security.md](docs/write-back-
 ### Use it with git
 
 ```bash
-polymerge git-setup      # prints the lines below
+polymerge init            # this repository: writes .gitattributes and registers the git drivers
+polymerge init --global   # or: every repository on this computer
 ```
+
+`init` adds only what is missing, and keeps any line or setting you already have (it tells you which). Commit `.gitattributes`, so everyone who clones the repository gets it. Each person runs `polymerge init` once for the drivers. `--dry-run` shows what it would change. git runs `polymerge` by name, so install it globally (`npm install -g @joshuahurley/polymerge`).
+
+What it writes (`polymerge git-setup` prints the same, to copy by hand):
 
 ```bash
 # .gitattributes
@@ -198,9 +210,10 @@ polymerge git-setup      # prints the lines below
 *.step diff=polymerge merge=binary      # STEP: diff only (see "STEP files" below)
 *.stp  diff=polymerge merge=binary
 
-git config --global diff.polymerge.command "polymerge git-diff"
-git config --global difftool.polymerge.cmd 'polymerge view "$LOCAL" "$REMOTE" --name "$MERGED"'
-git config --global merge.polymerge.driver "polymerge git-merge %O %A %B %P"
+git config diff.polymerge.command "polymerge git-diff"
+git config difftool.polymerge.cmd 'polymerge view "$LOCAL" "$REMOTE" --name "$MERGED"'
+git config merge.polymerge.name "polymerge three-way 3D merge"
+git config merge.polymerge.driver "polymerge git-merge %O %A %B %P"
 ```
 
 Then:
@@ -237,7 +250,7 @@ jobs:
       - uses: Joshua080/polymerge@v1
 ```
 
-For pull requests from forks, use the two-workflow setup in [docs/github-action.md](docs/github-action.md), which also covers image hosting, Git LFS and security. `@v1` is a floating tag that always points at the latest release; pin a full commit SHA instead if you want it frozen.
+For pull requests from forks, use the two-workflow setup in [docs/github-action.md](docs/github-action.md), which also covers image hosting, Git LFS, security, and inputs such as `up-axis: z` (CAD and 3D-printing models) and `palette: colorblind`. `@v1` is a floating tag that always points at the latest release; pin a full commit SHA instead if you want it frozen.
 
 ### Open a diff by link
 
@@ -327,7 +340,7 @@ The engine logs every decision to the console (`[polymerge] …`). Pass `logger:
 
 ```
 polymerge diff <base> <target> [--json out.json|-] [--force-tier 1|2|3] [--exit-code] [--top N] [-q]
-polymerge view <base> <target> [--port N] [--no-open]
+polymerge view <base> <target> [--up y|z] [--palette standard|colorblind] [--port N] [--no-open]
 polymerge view <base> <ours> <theirs>            merge review: see conflicts, resolve by clicking
 polymerge merge <base> <ours> <theirs> [-o out.stl|obj|glb|gltf] [--resolve ours|theirs|base] [--pick id=side]
                 [--report x.json] [--no-collision-check]
@@ -335,6 +348,7 @@ polymerge review <path>                          merge review of a conflicted gi
 polymerge resolve <path> --pick <id>=<side>      finish a conflicted git merge of a model
 polymerge demo [example]                         the viewer on a built-in example
 polymerge info <file>                            the normalised mesh summary
+polymerge init [--global] [--dry-run]            set git up: .gitattributes and the drivers
 polymerge git-diff | git-merge | git-setup       git drivers, and the config to use them
 ```
 
@@ -414,7 +428,7 @@ STEP files work with `diff`, `view`, `info` and `git-diff`, given the optional r
   - A regular lattice shifted by exactly one period can be mis-matched.
   - A region dragged far from its connected neighbours is followed only within about 3 edge lengths.
 - **Viewer:**
-  - The camera assumes Y-up, so Z-up CAD/print models open side-on; orbit to fix it.
+  - Y is up unless the model is STEP; a Z-up STL or OBJ (most CAD and 3D-printing exports) needs **Up axis → Z up**, or `--up z`. The viewer doesn't guess it from the shape.
   - Saving into the repository works only from `polymerge review` (a conflicted `git merge`), for that one file, and only while the server listens on 127.0.0.1. `view` with three files and `demo` stay read-only: download the result or use `polymerge merge -o`.
   - The viewer's server answers only requests addressed to `localhost` or an IP address. Reaching it through another host name (a reverse proxy, `myhost.local`) is refused.
 
@@ -448,18 +462,25 @@ CI runs `npm run verify` on every push. One of its checks, `scripts/e2e-pack.mjs
 
 ### Releasing
 
-Publishing is done by `.github/workflows/release.yml` when a version tag is pushed. It needs a repository secret `NPM_TOKEN` that can publish `@joshuahurley/polymerge` and `polymerge-core`.
+Two steps, both on GitHub:
+1. **Actions → Prepare release → Run workflow**, with the new version (for example `0.3.0`). It opens a pull request that sets every package to that version and moves [CHANGELOG.md](CHANGELOG.md)'s "Unreleased" notes under it.
+2. **Merge that pull request.** `.github/workflows/release.yml` then:
+   - runs the full `npm run verify`, and stops there if anything fails;
+   - publishes `polymerge-core`, then `@joshuahurley/polymerge`, with npm provenance;
+   - tags the merge `v0.3.0` and writes its GitHub Release from the changelog;
+   - moves the Action's `v1` tag to it.
 
-1. Bump the version in `packages/core/package.json` and `packages/cli/package.json`, and set the CLI's `polymerge-core` dependency to the same version.
-2. Commit, then `git tag v0.2.0 && git push origin v0.2.0`.
-
-The workflow:
-1. runs the full `npm run verify`;
-2. publishes `polymerge-core`, then `@joshuahurley/polymerge`, with npm provenance.
-
-A package whose exact version is already on npm is skipped, so a release that failed halfway can be re-run with the same tag.
+It needs the repository secret `NPM_TOKEN`, and (for step 1) **Settings → Actions → General → Allow GitHub Actions to create and approve pull requests**. Every step skips what already exists, so a run that failed halfway can be re-run as is. `node scripts/release.mjs prepare 0.3.0` does step 1 locally, and pushing a version tag by hand still works.
 
 The README images are regenerated with `node scripts/readme-images.mjs`.
+
+## Contributing
+
+Bug reports (especially models polymerge gets wrong), ideas and pull requests are welcome:
+- [CONTRIBUTING.md](CONTRIBUTING.md): setting up, testing and making a change.
+- [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
+- [SECURITY.md](SECURITY.md): report security problems privately.
+- [CHANGELOG.md](CHANGELOG.md): what changed in each release.
 
 ## License
 

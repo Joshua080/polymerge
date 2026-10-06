@@ -148,6 +148,8 @@ reported as a parse error.
 | `max-files` | `10` | At most this many changed models are diffed and rendered; the rest are listed. |
 | `max-triangles` | `200000` | Models with more triangles (either version) are listed, not rendered. |
 | `max-file-size` | `50` | Models larger than this many MB are listed, not rendered. |
+| `up-axis` | `auto` | Which model axis points up in the images. `auto`: Z for STEP files, Y for the rest. `z`: Z for every model (most CAD and 3D-printing STL exports are Z up). `y`: Y for every model. |
+| `palette` | `standard` | `colorblind`: blue added, orange removed, yellow moved, in the images and the comment's status squares (🟦 🟧 🟨), for readers with red-green colour blindness. |
 | `image-branch` | `polymerge-images` | Branch of your repository the images are committed to (created on first use). |
 | `artifact-name` | `polymerge-pr-diff` | Name of the artifact that carries the result from `render` to `post`. |
 | `comment-author` | `github-actions[bot]` | Login the comment is posted as, used to find it again. Change it only when `github-token` is not `GITHUB_TOKEN`. |

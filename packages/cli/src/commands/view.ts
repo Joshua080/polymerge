@@ -57,6 +57,26 @@ export interface ViewOptions {
    * merge review it is also the path `polymerge resolve` is suggested for.
    */
   name?: string;
+  /** Which model axis points up: y or z (default: the viewer decides, Z for STEP). */
+  up?: string;
+  /** standard or colorblind (default: the viewer's last choice in this browser). */
+  palette?: string;
+}
+
+/** Check --up / --palette; returns the viewer's query parameters for them. */
+export function viewParams(o: Pick<ViewOptions, 'up' | 'palette'>): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (o.up !== undefined) {
+    const up = o.up.toLowerCase();
+    if (up !== 'y' && up !== 'z') throw new Error(`--up must be y or z (got "${o.up}")`);
+    out.up = up;
+  }
+  if (o.palette !== undefined) {
+    const p = o.palette.toLowerCase();
+    if (p !== 'standard' && p !== 'colorblind') throw new Error(`--palette must be standard or colorblind (got "${o.palette}")`);
+    out.palette = p;
+  }
+  return out;
 }
 
 /**
@@ -107,6 +127,7 @@ export async function startViewServer(
   if (files.length !== 0 && files.length !== 2 && files.length !== 3) {
     throw new Error(`view needs 2 files (diff) or 3 (merge), got ${files.length}`);
   }
+  viewParams(o); // a bad --up / --palette fails before anything starts
   const webDist = resolveWebDist(o.webDist);
   const staticFiles = staticAllowlist(webDist);
   const sides = files.length === 3 ? ['base', 'ours', 'theirs'] : ['base', 'target'];
@@ -210,6 +231,7 @@ export async function startViewServer(
   const query = new URLSearchParams(files.length === 0 ? landing : files.length === 3 ? { mode: 'merge' } : {});
   models.forEach((m, i) => query.set(sides[i], m.urlPath));
   if (files.length === 3 && o.name) query.set('path', o.name);
+  for (const [k, v] of Object.entries(viewParams(o))) query.set(k, v);
   // The token travels in the fragment: never sent to a server, logged or put in a Referer (§4.3).
   const fragment = api ? `#token=${api.token}` : '';
   return { server, url: `http://${urlHost(host)}:${port}/?${query.toString()}${fragment}`, writeRoutes: api !== null };

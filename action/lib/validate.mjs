@@ -9,6 +9,7 @@
  * result.json, schema 1:
  *   { schema: 1, tool, pr, base (merge-base commit), head (head commit),
  *     limits: { maxFiles, maxFaces, maxBytes },
+ *     palette: 'standard' | 'colorblind' (absent = standard), upAxis: 'auto' | 'y' | 'z' (absent = auto),
  *     files: [{ path, oldPath, change, status, image, error, modeChanged,
  *               mesh: { before: { vertices, faces } | null, after: … | null },
  *               limit: { what: 'faces' | 'bytes', value, max } | null,
@@ -34,11 +35,14 @@ import path from 'node:path';
  * }} FileResult
  * @typedef {{
  *   schema: 1, tool: string | null, pr: number, base: string, head: string,
- *   limits: { maxFiles: number, maxFaces: number, maxBytes: number }, files: FileResult[]
+ *   limits: { maxFiles: number, maxFaces: number, maxBytes: number }, files: FileResult[],
+ *   palette: 'standard' | 'colorblind', upAxis: 'auto' | 'y' | 'z'
  * }} RenderResult
  */
 
 export const CHANGES = ['added', 'deleted', 'modified', 'renamed'];
+export const PALETTES = ['standard', 'colorblind'];
+export const UP_AXES = ['auto', 'y', 'z'];
 export const STATUSES = ['rendered', 'same-content', 'same-geometry', 'error', 'lfs', 'too-large', 'not-rendered', 'skipped', 'render-failed'];
 
 export const LIMITS = {
@@ -191,6 +195,8 @@ export function validateResult(raw) {
       maxBytes: count(raw.limits.maxBytes, 'limits.maxBytes'),
     },
     files,
+    palette: /** @type {'standard' | 'colorblind'} */ (raw.palette === undefined ? 'standard' : oneOf(raw.palette, PALETTES, 'palette')),
+    upAxis: /** @type {'auto' | 'y' | 'z'} */ (raw.upAxis === undefined ? 'auto' : oneOf(raw.upAxis, UP_AXES, 'upAxis')),
   };
 }
 
