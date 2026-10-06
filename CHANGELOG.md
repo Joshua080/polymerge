@@ -8,6 +8,8 @@ How to add an entry and how releases are made: [CONTRIBUTING.md](CONTRIBUTING.md
 
 ## Unreleased
 
+## 0.3.0 - 2026-10-06
+
 ### Added
 - **STEP files** (`.step`, `.stp`) in `diff`, `info`, `view`, `git-diff`, the pull-request Action and the hosted viewer. They are read with OpenCascade (`occt-import-js`, LGPL-2.1), an optional download that polymerge never installs by itself. Merging STEP is refused.
 - **Z-up view** for CAD and 3D-printing models:
