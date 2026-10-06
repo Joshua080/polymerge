@@ -169,3 +169,33 @@ describe('buildComment', () => {
     for (const t of [1, 2, 3] as const) expect(TIER_NAMES[t]).toBe(`Tier ${t} · ${TIER_LABELS[t]}`);
   });
 });
+
+describe('geometry in the comment', () => {
+  const geometry = (extra: Record<string, unknown> = {}) => ({
+    unit: 'mm',
+    size: { before: [100, 60, 10], after: [100, 60, 12] },
+    area: { before: 18_920, after: 19_500 },
+    volume: { before: 52_345.6, after: 55_100 },
+    closed: { before: true, after: true },
+    ...extra,
+  });
+
+  it('a line per model with volume, size and surface, and the volume change in the table', () => {
+    const body = buildComment(result([file('a.3mf', { image: '0.png', diff: { ...diff, geometry: geometry() } }), file('b.stl', { image: '1.png' })]));
+    expect(body).toContain('- **Geometry** volume 52.35 cm³ → 55.1 cm³ (+5.3%) · size 100 × 60 × 10 mm → 100 × 60 × 12 mm · surface +5.8 cm² (+3.1%)');
+    expect(body).toMatch(/\| `a\.3mf` \| .* · volume \+2\.754 cm³ \(\+5\.3%\) \|/);
+  });
+
+  it('says which version is not closed, and when the unit is unknown', () => {
+    const open = geometry({ unit: null, volume: null, closed: { before: true, after: false } });
+    const body = buildComment(result([file('a.stl', { image: '0.png', diff: { ...diff, geometry: open } })]));
+    expect(body).toContain('no volume (the after version is not a closed surface)');
+    expect(body).toContain('(in the file’s own units)');
+  });
+
+  it('rejects malformed geometry', () => {
+    expect(() => result([file('a.stl', { image: '0.png', diff: { ...diff, geometry: geometry({ unit: 'furlong' }) } })])).toThrow(/geometry\.unit/);
+    expect(() => result([file('a.stl', { image: '0.png', diff: { ...diff, geometry: geometry({ size: { before: [1, 2], after: [1, 2, 3] } }) } })])).toThrow(/size\.before/);
+    expect(() => result([file('a.stl', { image: '0.png', diff: { ...diff, geometry: geometry({ area: { before: -1, after: 2 } }) } })])).toThrow(/negative/);
+  });
+});

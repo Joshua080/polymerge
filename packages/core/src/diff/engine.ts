@@ -20,6 +20,7 @@
  *  3. Tiers 1/2: matched-part analysis — parts already matched that moved rigidly are reported.
  */
 import { computeBounds, summarizeMesh } from '../mesh.js';
+import { compareMetrics, computeMetrics } from '../metrics.js';
 import {
   TIER_NAMES,
   type DiffMeshesFn,
@@ -223,6 +224,7 @@ export const diffMeshes: DiffMeshesFn = (base: IMesh, target: IMesh, options: ID
     targetFaceStatus: cls.targetFaceStatus,
     stats: cls.stats,
     parts,
+    ...(options.metrics === false ? {} : { metrics: compareMetrics(computeMetrics(base), computeMetrics(target)) }),
     durationMs: now() - t0,
   };
 };

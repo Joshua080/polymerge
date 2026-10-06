@@ -2,6 +2,7 @@
 import {
   MeshLoadError,
   TIER_NAMES,
+  computeMetrics,
   describeVertexChange,
   getPosition,
   serializeDiff,
@@ -20,6 +21,7 @@ import {
   renderAttempts,
   renderInspector,
   renderMeshes,
+  renderSingleGeometry,
   renderSummary,
   stripTierPrefix,
   type IInspectorModel,
@@ -665,11 +667,14 @@ export class App {
   private renderSummary(): void {
     this.el.download.disabled = !this.result;
     if (this.result) setChildren(this.el.summary, renderSummary(this.result));
-    else
+    else {
+      const only = this.base ? { label: 'Base', m: this.base } : this.target ? { label: 'Target', m: this.target } : null;
       setChildren(
         this.el.summary,
-        h('p', { class: 'muted' }, this.base || this.target ? 'Waiting for the second model…' : 'Load a Base and a Target model to compute a diff.'),
+        h('p', { class: 'muted' }, only ? 'Waiting for the second model…' : 'Load a Base and a Target model to compute a diff.'),
+        only ? renderSingleGeometry(computeMetrics(only.m.mesh), only.label) : null,
       );
+    }
   }
 
   private renderMeshes(): void {
@@ -824,6 +829,7 @@ export class App {
       hook.engine = this.engine.mode;
       if (this.engine.lastWindow) hook.diffWindow = this.engine.lastWindow;
       hook.parts = r.parts?.length ?? 0;
+      if (r.metrics) hook.metrics = r.metrics;
     } else {
       if (this.base) hook.base = summarizeMesh(this.base.mesh);
       if (this.target) hook.target = summarizeMesh(this.target.mesh);

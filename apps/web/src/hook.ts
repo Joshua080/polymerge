@@ -3,7 +3,7 @@
  * snapshot of the viewer state, and `document.body.dataset.state` mirrors `state`
  * so tests can simply wait for `body[data-state="ready"]`.
  */
-import type { IDiffStats, IMergeStats, IMeshSummary, ITierAttempt, IVertexChange, MatchTier, MergeResolution, Vec3 } from 'polymerge-core';
+import type { IDiffStats, IMergeStats, IMeshSummary, IMetricsComparison, ITierAttempt, IVertexChange, MatchTier, MergeResolution, Vec3 } from 'polymerge-core';
 
 export type ViewerState = 'idle' | 'loading' | 'ready' | 'error';
 
@@ -82,6 +82,8 @@ export interface IPolymergeHook {
   engine?: 'worker' | 'main';
   /** Number of reported part motions in the result. */
   parts?: number;
+  /** Geometry metrics of both versions (size, area, volume) and their change. */
+  metrics?: IMetricsComparison;
   /** When the last diff computed, epoch ms [start, end] (for responsiveness checks). */
   diffWindow?: [number, number];
   /** The vertex currently shown in the inspector, if any. */

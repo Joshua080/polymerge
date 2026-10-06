@@ -10,6 +10,8 @@
  * result.
  */
 
+import { formatChange, formatMeasure, formatSize } from './measure.mjs';
+
 /** The hidden first line that identifies polymerge's comment on a pull request. */
 export const MARKER = '<!-- polymerge:pr-diff -->';
 export const PROJECT_URL = 'https://github.com/Joshua080/polymerge';
@@ -110,7 +112,31 @@ function changeFacts(d) {
   if (d.faces.added > 0) facts.push(`${plural(d.faces.added, 'face')} added`);
   if (d.faces.removed > 0) facts.push(`${plural(d.faces.removed, 'face')} removed`);
   if (d.transform) facts.push(`whole model ${transformText(d.transform)}`);
-  return facts.slice(0, 3).join(' · ') || 'no local change';
+  const shown = facts.slice(0, 3);
+  // The volume change sums the edit up in one number, when both versions have a volume.
+  const g = d.geometry;
+  if (g?.volume && g.volume.before !== g.volume.after) shown.push(`volume ${formatChange(g.volume, 3, g.unit)}`);
+  return shown.join(' · ') || 'no local change';
+}
+
+/** "volume 52.35 cm³ → 55.1 cm³ (+5.3%) · size 100 × 60 × 10 → 100 × 60 × 12 mm" (fixed wording, numbers only). */
+function geometryLine(g) {
+  const parts = [];
+  if (g.volume) {
+    // "+2.754 cm³ (+5.3%)" → "+5.3%": the two values are right there.
+    const change = formatChange(g.volume, 3, g.unit);
+    const percent = /\(([^()]+)\)$/.exec(change)?.[1] ?? change;
+    parts.push(`volume ${formatMeasure(g.volume.before, 3, g.unit)} → ${formatMeasure(g.volume.after, 3, g.unit)} (${percent})`);
+  } else {
+    const open = [!g.closed.before && 'before', !g.closed.after && 'after'].filter(Boolean).join(' and ');
+    parts.push(`no volume (the ${open} version${open.includes(' and ') ? 's are' : ' is'} not a closed surface)`);
+  }
+  const sizeBefore = formatSize(g.size.before, g.unit);
+  const sizeAfter = formatSize(g.size.after, g.unit);
+  parts.push(sizeBefore === sizeAfter ? `size ${sizeAfter}` : `size ${sizeBefore} → ${sizeAfter}`);
+  const area = formatChange(g.area, 2, g.unit);
+  if (area !== 'no change') parts.push(`surface ${area}`);
+  return `- **Geometry** ${parts.join(' · ')}${g.unit ? '' : ' <sub>(in the file’s own units)</sub>'}`;
 }
 
 function fileCell(f) {
@@ -191,6 +217,7 @@ function section(f, imageUrl) {
     lines.push(`- **Vertices** ${int(v.moved)} moved · ${int(v.added)} added · ${int(v.removed)} removed (${int(v.before)} → ${int(v.after)})`);
     lines.push(`- **Faces** ${int(fc.modified)} modified · ${int(fc.added)} added · ${int(fc.removed)} removed (${int(fc.before)} → ${int(fc.after)})`);
     if (d.transform) lines.push(`- **Whole model** ${transformText(d.transform)}; the before image is aligned to the after`);
+    if (d.geometry) lines.push(geometryLine(d.geometry));
     const largest = d.maxDisplacement > 0 ? ` Largest vertex move ${num(d.maxDisplacement)}.` : '';
     lines.push('', `<sub>Matched by Tier ${d.tier} · ${TIER_LABELS[d.tier]}.${largest}</sub>`);
   }

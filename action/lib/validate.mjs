@@ -22,11 +22,17 @@ import path from 'node:path';
  * @typedef {{ vertices: number, faces: number }} MeshCounts
  * @typedef {{ name: string | null, rotationDeg: number, distance: number }} PartSummary
  * @typedef {{ units: { from: string, to: string, factor: number } | null, scale: number, rotationDeg: number, distance: number }} TransformSummary
+ * @typedef {{ before: number, after: number }} BeforeAfter
+ * @typedef {{
+ *   unit: 'mm' | 'm' | null, size: { before: number[], after: number[] }, area: BeforeAfter,
+ *   volume: BeforeAfter | null, closed: { before: boolean, after: boolean }
+ * }} GeometrySummary
  * @typedef {{
  *   tier: number,
  *   vertices: { before: number, after: number, unchanged: number, moved: number, added: number, removed: number },
  *   faces: { before: number, after: number, unchanged: number, modified: number, added: number, removed: number },
- *   maxDisplacement: number, parts: PartSummary[], partsTotal: number, transform: TransformSummary | null
+ *   maxDisplacement: number, parts: PartSummary[], partsTotal: number, transform: TransformSummary | null,
+ *   geometry: GeometrySummary | null
  * }} DiffSummary
  * @typedef {{
  *   path: string, oldPath: string | null, change: string, status: string, image: string | null,
@@ -109,6 +115,33 @@ function meshCounts(v, where) {
   return { vertices: count(v.vertices, `${where}.vertices`), faces: count(v.faces, `${where}.faces`) };
 }
 
+function measure(v, where) {
+  const x = real(v, where);
+  if (x < 0) fail(`${where} must not be negative`);
+  return x;
+}
+
+/** @returns {GeometrySummary | null} */
+function geometrySummary(v, where) {
+  if (v === null || v === undefined) return null;
+  if (!isObject(v) || !isObject(v.size) || !isObject(v.area) || !isObject(v.closed)) fail(`${where} must be a geometry summary`);
+  const triple = (a, w) => {
+    if (!Array.isArray(a) || a.length !== 3) fail(`${w} must be three numbers`);
+    return a.map((x, i) => measure(x, `${w}[${i}]`));
+  };
+  const pair = (o, w) => {
+    if (!isObject(o)) fail(`${w} must be an object`);
+    return { before: measure(o.before, `${w}.before`), after: measure(o.after, `${w}.after`) };
+  };
+  return {
+    unit: /** @type {'mm' | 'm' | null} */ (v.unit === null || v.unit === undefined ? null : oneOf(v.unit, ['mm', 'm'], `${where}.unit`)),
+    size: { before: triple(v.size.before, `${where}.size.before`), after: triple(v.size.after, `${where}.size.after`) },
+    area: pair(v.area, `${where}.area`),
+    volume: v.volume === null || v.volume === undefined ? null : pair(v.volume, `${where}.volume`),
+    closed: { before: v.closed.before === true, after: v.closed.after === true },
+  };
+}
+
 function diffSummary(v, where) {
   if (v === null || v === undefined) return null;
   if (!isObject(v) || !isObject(v.vertices) || !isObject(v.faces)) fail(`${where} must be a diff summary`);
@@ -138,6 +171,7 @@ function diffSummary(v, where) {
     }),
     partsTotal: count(v.partsTotal, `${where}.partsTotal`),
     transform,
+    geometry: geometrySummary(v.geometry, `${where}.geometry`),
   };
 }
 

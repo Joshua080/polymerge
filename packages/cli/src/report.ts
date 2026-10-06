@@ -1,12 +1,19 @@
 import {
   describeVertexChange,
+  displayUnit,
+  formatChange,
+  formatMeasure,
   stepInfo,
   VertexStatus,
+  volumeNote,
   type IDiffLogger,
   type IDiffResult,
   type IMesh,
+  type IMeshMetrics,
   type IMeshSummary,
+  type IMetricsComparison,
   type Mat4,
+  type MetricUnit,
 } from 'polymerge-core';
 
 const useColor = (stream: NodeJS.WriteStream) => stream.isTTY === true && !process.env.NO_COLOR;
@@ -91,6 +98,59 @@ export function stepNote(base: IMesh, target: IMesh): string | null {
   return `  STEP   tessellated by OpenCascade (deflection ${tol}); a flat face re-triangulated around an edit counts as modified`;
 }
 
+/** "100 × 60 × 10 mm" (or bare numbers when the unit is unknown). */
+export function formatSize(size: readonly number[], unit: MetricUnit | undefined): string {
+  const magnitude = Math.max(...size.map(Math.abs));
+  const parts = size.map((v) => formatMeasure(v, 1, unit, magnitude));
+  // Keep the unit once, at the end: "100 × 60 × 10 mm".
+  const suffix = unit ? ` ${parts[0].split(' ')[1]}` : '';
+  return parts.map((p) => (unit ? p.split(' ')[0] : p)).join(' × ') + suffix;
+}
+
+/** Volume, or why there is none. */
+function volumeText(m: IMeshMetrics, unit: MetricUnit | undefined): string {
+  return m.volume !== null ? formatMeasure(m.volume, 3, unit) : '—';
+}
+
+/** Metric lines of one model (polymerge info). */
+export function formatMetricsLines(m: IMeshMetrics, label = (s: string) => s): string[] {
+  const unit = m.unit;
+  const note = volumeNote(m);
+  return [
+    `  ${label('size')}          ${formatSize(m.size, unit)}${unit ? '' : '  (in the file\'s units)'}`,
+    `  ${label('surface area')}  ${formatMeasure(m.surfaceArea, 2, unit)}`,
+    `  ${label('volume')}        ${volumeText(m, unit)}${note ? `  (${note})` : '  (closed)'}`,
+    `  ${label('parts')}         ${m.parts}`,
+  ];
+}
+
+/** The "Geometry" table of a diff: base, target and the change, per metric. */
+export function formatMetricsTable(cmp: IMetricsComparison, c: Palette): string[] {
+  const unit = displayUnit(cmp);
+  const rows: [string, string, string, string][] = [];
+  const sizeChanges = (['x', 'y', 'z'] as const)
+    .map((axis, i) => (cmp.size[i].delta !== 0 ? `${axis} ${formatChange(cmp.size[i], 1, unit).replace(/ \(.*\)$/, '')}` : ''))
+    .filter(Boolean);
+  rows.push(['size', formatSize(cmp.base.size, unit), formatSize(cmp.target.size, unit), sizeChanges.join(', ') || 'no change']);
+  rows.push(['volume', volumeText(cmp.base, unit), volumeText(cmp.target, unit), cmp.volume ? formatChange(cmp.volume, 3, unit) : '']);
+  rows.push(['surface area', formatMeasure(cmp.surfaceArea.base, 2, unit), formatMeasure(cmp.surfaceArea.target, 2, unit), formatChange(cmp.surfaceArea, 2, unit)]);
+  if (cmp.base.parts !== cmp.target.parts || cmp.base.parts > 1) {
+    const d = cmp.target.parts - cmp.base.parts;
+    rows.push(['parts', String(cmp.base.parts), String(cmp.target.parts), d === 0 ? 'no change' : `${d > 0 ? '+' : '−'}${Math.abs(d)}`]);
+  }
+  const closed = (m: IMeshMetrics) => (m.volume !== null ? 'yes' : (volumeNote(m) ?? 'no').replace(/^not closed: /, 'no: '));
+  rows.push(['closed', closed(cmp.base), closed(cmp.target), '']);
+  const w = [Math.max(...rows.map((r) => r[0].length)) + 2, Math.max(4, ...rows.map((r) => r[1].length)), Math.max(6, ...rows.map((r) => r[2].length))];
+  const out = [`${c.bold('Geometry'.padEnd(w[0] + 2))}${c.dim('base'.padEnd(w[1] + 2))}${c.dim('target'.padEnd(w[2] + 2))}${c.dim('change')}`];
+  for (const [name, b, t, d] of rows) {
+    const changed = d !== '' && d !== 'no change';
+    out.push(`  ${name.padEnd(w[0])}${b.padEnd(w[1] + 2)}${t.padEnd(w[2] + 2)}${changed ? c.modified(d) : c.dim(d)}`.trimEnd());
+  }
+  if (cmp.unitsDiffer) out.push(c.dim(`  The files state different units (${cmp.base.unit} and ${cmp.target.unit}); the numbers are each in their own.`));
+  else if (!unit) out.push(c.dim('  In the files\' own units (STL, OBJ and PLY do not state one).'));
+  return out;
+}
+
 export function formatDiffReport(result: IDiffResult, base: IMesh, target: IMesh, opts: ReportOptions): string {
   const c = palette();
   const out: string[] = [];
@@ -144,6 +204,10 @@ export function formatDiffReport(result: IDiffResult, base: IMesh, target: IMesh
           `${p.deformedVertices > 0 ? `, ${p.deformedVertices} vertex(es) also edited` : ''} ${c.dim(`[${how}]`)}`,
       );
     }
+  }
+  if (result.metrics) {
+    out.push('');
+    out.push(...formatMetricsTable(result.metrics, c));
   }
   if (opts.topMoves > 0 && v.moved > 0) {
     const moved: number[] = [];

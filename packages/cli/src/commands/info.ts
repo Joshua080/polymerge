@@ -1,6 +1,6 @@
-import { boundsDiagonal, stepInfo } from 'polymerge-core';
+import { boundsDiagonal, computeMetrics, stepInfo } from 'polymerge-core';
 import { loadMeshFile } from '../io.js';
-import { fmt, palette } from '../report.js';
+import { fmt, formatMetricsLines, palette } from '../report.js';
 
 function stepLines(mesh: Parameters<typeof stepInfo>[0]): string[] {
   const s = stepInfo(mesh);
@@ -23,6 +23,7 @@ export async function runInfo(filePath: string): Promise<number> {
     `  faces         ${mesh.faceCount} (${m.sourceFaceCount} from loader, ${m.degenerateFacesDropped} degenerate dropped)`,
     `  bounds        min (${m.bounds.min.map((x) => fmt(x)).join(', ')})  max (${m.bounds.max.map((x) => fmt(x)).join(', ')})  diag ${fmt(boundsDiagonal(m.bounds))}`,
     `  vertex IDs    ${mesh.vertexIds ? 'yes' : 'no'}`,
+    ...formatMetricsLines(computeMetrics(mesh)),
     ...stepLines(mesh),
     `  groups (${mesh.groups.length})`,
     ...mesh.groups.map((g) => `    - ${g.name}: faces ${g.faceStart}..${g.faceStart + g.faceCount - 1}`),

@@ -317,6 +317,63 @@ export interface IFace {
 }
 
 // ---------------------------------------------------------------------------
+// Geometry metrics  (implemented in src/metrics.ts)
+// ---------------------------------------------------------------------------
+
+/** Length units a format states: STEP and 3MF are loaded in millimetres, glTF is metres by specification. */
+export type MetricUnit = 'mm' | 'm';
+
+export interface IMeshMetrics {
+  vertices: number;
+  faces: number;
+  /** Connected pieces (vertices joined through faces). */
+  parts: number;
+  bounds: IBounds;
+  /** Bounding-box extent along x, y and z. */
+  size: Vec3;
+  /** Sum of the triangle areas. */
+  surfaceArea: number;
+  /** Enclosed volume, when the surface is closed and consistently oriented; otherwise null. */
+  volume: number | null;
+  /** Watertight: no open and no non-manifold edges. */
+  closed: boolean;
+  /** Edges used by one face only: the borders of holes and open sheets. */
+  openEdges: number;
+  /** Edges shared by more than two faces. */
+  nonManifoldEdges: number;
+  /** Edges whose two faces run the same way along them: one of the faces is flipped. */
+  flippedEdges: number;
+  /** A closed surface whose faces point inwards (its signed volume is negative). */
+  insideOut: boolean;
+  /** Centre of the volume when there is one, else the area-weighted centre of the surface. */
+  centroid: Vec3;
+  /** Units the format states (undefined for STL, OBJ and PLY, which do not say). */
+  unit?: MetricUnit;
+}
+
+/** One number before and after. `percent` is null when the base value is 0. */
+export interface IMetricChange {
+  base: number;
+  target: number;
+  delta: number;
+  percent: number | null;
+}
+
+export interface IMetricsComparison {
+  base: IMeshMetrics;
+  target: IMeshMetrics;
+  /** Null unless both versions have a volume. */
+  volume: IMetricChange | null;
+  surfaceArea: IMetricChange;
+  size: [x: IMetricChange, y: IMetricChange, z: IMetricChange];
+  /**
+   * True when the two versions state different units (e.g. a 3MF in mm against a glTF in
+   * metres): the numbers are then not comparable as they stand.
+   */
+  unitsDiffer: boolean;
+}
+
+// ---------------------------------------------------------------------------
 // Loading API  (implemented in src/parsers/)
 // ---------------------------------------------------------------------------
 
@@ -554,6 +611,8 @@ export interface IDiffOptions {
    * than Removed + Added, and report every part motion in `IDiffResult.parts`. Default true.
    */
   detectParts?: boolean;
+  /** Compute geometry metrics for both versions (`IDiffResult.metrics`). Default true; O(faces). */
+  metrics?: boolean;
   /**
    * Log sink. Defaults to `console`. Regardless of the sink, the engine ALWAYS
    * emits one info line per tier attempt and one line naming the accepted tier.
@@ -718,6 +777,11 @@ export interface IDiffResult {
   stats: IDiffStats;
   /** Parts that moved rigidly on their own (relative to `alignment`). Empty when none. */
   parts: IPartMotion[];
+  /**
+   * Size, surface area, volume and closedness of both versions and how they changed. Absent when
+   * `IDiffOptions.metrics` is false, and in results serialised before metrics existed.
+   */
+  metrics?: IMetricsComparison;
   durationMs: number;
 }
 
