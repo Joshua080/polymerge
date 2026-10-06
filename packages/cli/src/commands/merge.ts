@@ -1,7 +1,8 @@
 import { execFileSync } from 'node:child_process';
-import { writeFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import {
+  formatFromFileName,
   loadMesh,
   mergeMeshes,
   writeMesh,
@@ -10,8 +11,9 @@ import {
   type MergeResolution,
   type SourceFormat,
 } from 'polymerge-core';
-import { loadMeshFile } from '../io.js';
+import { loadModel, refuseStep } from '../io.js';
 import { fmt, palette, silentLogger, stderrLogger } from '../report.js';
+import { stepNotMergeable } from '../step.js';
 
 export interface MergeCommandOptions {
   output?: string;
@@ -135,10 +137,18 @@ export function mergeReportJson(r: IMergeResult): string {
   );
 }
 
+/** The three inputs of a merge, read and checked: STEP is refused (view and diff only, D51). */
+async function readMergeInputs(paths: string[], name = (p: string) => path.basename(p)): Promise<{ fileName: string; bytes: Uint8Array }[]> {
+  const inputs = await Promise.all(paths.map(async (p) => ({ fileName: name(p), bytes: new Uint8Array(await readFile(p)) })));
+  for (const f of inputs) refuseStep(f.bytes, f.fileName);
+  return inputs;
+}
+
 /** `polymerge merge <base> <ours> <theirs>` — returns 0 when clean, 1 with unresolved conflicts. */
 export async function runMerge(basePath: string, oursPath: string, theirsPath: string, o: MergeCommandOptions): Promise<number> {
+  const inputs = await readMergeInputs([basePath, oursPath, theirsPath]);
   const format = o.output ? outputFormat(o.output, o.format) : undefined;
-  const [base, ours, theirs] = await Promise.all([loadMeshFile(basePath), loadMeshFile(oursPath), loadMeshFile(theirsPath)]);
+  const [base, ours, theirs] = await Promise.all(inputs.map(async (f) => ({ fileName: f.fileName, mesh: await loadModel(f.bytes, f.fileName) })));
   const result = mergeMeshes(base.mesh, ours.mesh, theirs.mesh, {
     logger: o.quiet ? silentLogger : stderrLogger(false),
     defaultResolution: o.resolve ? parseResolution('--resolve', o.resolve) : null,
@@ -173,17 +183,17 @@ export async function runGitMerge(args: string[], o: { resolve?: string; collisi
   }
   const [ancestor, current, other, repoPath] = args;
   let format: SourceFormat;
+  let inputs: { fileName: string; bytes: Uint8Array }[];
   try {
+    if (formatFromFileName(repoPath) === 'step') throw stepNotMergeable(repoPath);
     format = outputFormat(repoPath);
+    inputs = await readMergeInputs([ancestor, current, other], () => repoPath);
   } catch (err) {
-    process.stderr.write(`polymerge git-merge: ${repoPath}: ${(err as Error).message}; leaving the file for manual merging\n`);
+    const message = (err as Error).message;
+    process.stderr.write(`polymerge git-merge: ${message.startsWith(repoPath) ? '' : `${repoPath}: `}${message}; leaving the file for manual merging\n`);
     return 2;
   }
-  const [base, ours, theirs] = await Promise.all([
-    loadMeshFile(ancestor, repoPath),
-    loadMeshFile(current, repoPath),
-    loadMeshFile(other, repoPath),
-  ]);
+  const [base, ours, theirs] = await Promise.all(inputs.map(async (f) => ({ mesh: await loadModel(f.bytes, path.basename(f.fileName)) })));
   const result = mergeMeshes(base.mesh, ours.mesh, theirs.mesh, {
     logger: silentLogger,
     defaultResolution: o.resolve ? parseResolution('--resolve', o.resolve) : null,
@@ -221,8 +231,13 @@ export async function resolveStages(
   repoPath: string,
   o: MergeCommandOptions,
 ): Promise<{ result: IMergeResult; bytes: Uint8Array }> {
+  if (formatFromFileName(repoPath) === 'step') throw stepNotMergeable(repoPath);
   const format = outputFormat(repoPath, o.format);
-  const load = (n: 1 | 2 | 3) => loadMesh(new Uint8Array(stage(n)), { fileName: path.basename(repoPath) });
+  const load = (n: 1 | 2 | 3) => {
+    const bytes = new Uint8Array(stage(n));
+    refuseStep(bytes, path.basename(repoPath));
+    return loadMesh(bytes, { fileName: path.basename(repoPath) });
+  };
   const [base, ours, theirs] = await Promise.all([load(1), load(2), load(3)]);
   const result = mergeMeshes(base, ours, theirs, {
     logger: silentLogger,

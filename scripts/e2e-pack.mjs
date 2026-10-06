@@ -3,7 +3,8 @@
  * End-to-end check of the npm packages as a user gets them — not the monorepo:
  *   npm pack polymerge-core + polymerge  →  npm install the two tarballs into an empty project
  *   →  the installed `polymerge` bin: --version, diff, merge, demo, and `view` in headless Chromium
- *   (served from the viewer bundled in the package), plus `import 'polymerge-core'`.
+ *   (served from the viewer bundled in the package), plus `import 'polymerge-core'`; STEP fails
+ *   with install instructions until occt-import-js is installed next to it, then diffs and views.
  *
  *   node scripts/e2e-pack.mjs
  *
@@ -62,6 +63,18 @@ try {
   const fx = (c, f) => path.join(root, 'fixtures/cases', c, f);
   const diff = polymerge(['diff', fx('moved-part', 'base.obj'), fx('moved-part', 'target.obj'), '--exit-code']);
   if (diff.code !== 1 || !/moved/.test(diff.out)) fail(`diff: exit ${diff.code}\n${diff.out}`);
+
+  // STEP needs OpenCascade, an optional download (D51): a plain install does not have it, and
+  // says how to get it; installing occt-import-js next to polymerge is all it takes.
+  dog.mark('STEP without its reader');
+  const stepFile = (n) => path.join(root, 'examples/step-plate', `${n}.step`);
+  if (fs.existsSync(path.join(app, 'node_modules/occt-import-js'))) fail('installing polymerge pulled in occt-import-js (LGPL); it must stay optional');
+  const noReader = polymerge(['diff', stepFile('base'), stepFile('ours')]);
+  if (noReader.code !== 1 || !/optional download/.test(noReader.out) || !/npm install -g occt-import-js@/.test(noReader.out)) fail(`STEP without occt-import-js: exit ${noReader.code}\n${noReader.out}`);
+  dog.mark('STEP with its reader');
+  run(npm, ['install', '--no-audit', '--no-fund', '--prefer-offline', 'occt-import-js@0.0.23'], { cwd: app });
+  const withReader = polymerge(['diff', stepFile('base'), stepFile('ours'), '--exit-code']);
+  if (withReader.code !== 1 || !/moved 50/.test(withReader.out) || !/deflection 0\.05 mm for both/.test(withReader.out)) fail(`STEP with occt-import-js: exit ${withReader.code}\n${withReader.out}`);
 
   dog.mark('library');
   // The README's library example, verbatim, against the installed polymerge-core.
@@ -131,7 +144,18 @@ await writeFile('merged.stl', writeStl(resolved.merged));
   } catch {
     fail('the installed package failed e2e-view');
   }
-  console.log('e2e-pack: PASS — installed from tarballs: --version, diff, merge, library import, demo, view');
+  dog.mark('view STEP in browser');
+  // The installed package serves the occt-import-js installed next to it to the browser.
+  try {
+    execFileSync(process.execPath, [path.join(root, 'scripts/e2e-step.mjs'), '--cli-only'], {
+      cwd: root,
+      env: { ...env, POLYMERGE_CLI: cliJs },
+      stdio: 'inherit',
+    });
+  } catch {
+    fail('the installed package failed e2e-step --cli-only');
+  }
+  console.log('e2e-pack: PASS — installed from tarballs: --version, diff, STEP (without and with its optional reader), merge, library import, demo, view');
 } finally {
   fs.rmSync(tmp, { recursive: true, force: true });
 }

@@ -1,5 +1,5 @@
 import { diffMeshes, type IDiffLogger } from 'polymerge-core';
-import { loadMeshFile } from '../io.js';
+import { loadMeshFile, loadMeshPair } from '../io.js';
 import { formatDiffReport } from '../report.js';
 
 const NULL_FILES = new Set(['/dev/null', 'nul', 'NUL']);
@@ -31,7 +31,7 @@ export async function runGitDiff(args: string[]): Promise<number> {
       out(`deleted model: ${header} (${mesh.vertexCount} vertices · ${mesh.faceCount} faces)`);
       return 0;
     }
-    const [base, target] = await Promise.all([loadMeshFile(oldFile, repoPath), loadMeshFile(newFile, newPath)]);
+    const [base, target] = await loadMeshPair({ path: oldFile, name: repoPath }, { path: newFile, name: newPath });
     // Engine log lines go to the same stream as the report so they stay in order inside git's pager.
     const logger: IDiffLogger = { info: out, warn: out };
     const result = diffMeshes(base.mesh, target.mesh, { logger });
@@ -53,6 +53,10 @@ export function gitSetupText(): string {
   return [
     '# 1) Tell git which files polymerge should diff and merge — add to .gitattributes:',
     ...exts.map((e) => `*.${e} diff=polymerge merge=polymerge`),
+    '# STEP: diff only (needs the optional occt-import-js). It is text, but a line-by-line merge',
+    '# corrupts it, so merge=binary keeps your side and marks the file conflicted instead.',
+    '*.step diff=polymerge merge=binary',
+    '*.stp diff=polymerge merge=binary',
     '',
     '# 2) Register the drivers (drop --global to scope them to one repo):',
     'git config --global diff.polymerge.command "polymerge git-diff"',

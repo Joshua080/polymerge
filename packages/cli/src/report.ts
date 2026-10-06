@@ -1,5 +1,6 @@
 import {
   describeVertexChange,
+  stepInfo,
   VertexStatus,
   type IDiffLogger,
   type IDiffResult,
@@ -82,12 +83,22 @@ export interface ReportOptions {
   topMoves: number;
 }
 
+/** How STEP models were tessellated, and what that means for the counts. */
+export function stepNote(base: IMesh, target: IMesh): string | null {
+  const [b, t] = [stepInfo(base), stepInfo(target)];
+  if (!b && !t) return null;
+  const tol = !b || !t ? `${(b ?? t)!.deflection} mm` : b.deflection === t.deflection ? `${b.deflection} mm for both` : `${b.deflection} / ${t.deflection} mm`;
+  return `  STEP   tessellated by OpenCascade (deflection ${tol}); a flat face re-triangulated around an edit counts as modified`;
+}
+
 export function formatDiffReport(result: IDiffResult, base: IMesh, target: IMesh, opts: ReportOptions): string {
   const c = palette();
   const out: string[] = [];
   out.push(c.bold('polymerge diff'));
   out.push(describeMesh('base', result.base, opts.baseName));
   out.push(describeMesh('target', result.target, opts.targetName));
+  const step = stepNote(base, target);
+  if (step) out.push(c.dim(step));
   out.push('');
   out.push(`${c.bold('Correspondence:')} ${result.tierName}`);
   for (const a of result.attempts) {

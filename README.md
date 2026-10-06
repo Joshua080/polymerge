@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/Joshua080/polymerge/actions/workflows/ci.yml/badge.svg)](https://github.com/Joshua080/polymerge/actions/workflows/ci.yml)
 
-**Diff and three-way merge for 3D models (STL, OBJ, glTF/GLB), with a visual review in the browser and drivers for git.**
+**Diff and three-way merge for 3D models (STL, OBJ, glTF/GLB), with a visual review in the browser and drivers for git. CAD files in STEP can be diffed and viewed too.**
 
 Most 3D "diff" tools paint a heatmap of how far two surfaces are apart. polymerge works out which vertex in the old model *became* which vertex in the new one, even when the file was re-exported, re-ordered, converted from inches to millimetres, or had a part moved. On top of that correspondence it can:
 - tell you exactly what changed;
@@ -38,7 +38,7 @@ The package is `@joshuahurley/polymerge`; the command it installs is `polymerge`
 
 ## Using it
 
-The examples below are real runs. The files are in this repository: `fixtures/cases/` holds the diff pairs, and `examples/plate/` holds a three-way merge example.
+The examples below are real runs. The files are in this repository: `fixtures/cases/` holds the diff pairs, `examples/plate/` holds a three-way merge example, and `examples/step-plate/` holds the same kind of plate as STEP files.
 
 ### Diff two models
 
@@ -195,6 +195,8 @@ polymerge git-setup      # prints the lines below
 *.obj  diff=polymerge merge=polymerge
 *.gltf diff=polymerge merge=polymerge
 *.glb  diff=polymerge merge=polymerge
+*.step diff=polymerge merge=binary      # STEP: diff only (see "STEP files" below)
+*.stp  diff=polymerge merge=binary
 
 git config --global diff.polymerge.command "polymerge git-diff"
 git config --global difftool.polymerge.cmd 'polymerge view "$LOCAL" "$REMOTE" --name "$MERGED"'
@@ -214,7 +216,7 @@ git commit                                        # after saving; or: polymerge 
 
 ### Use it in pull requests
 
-A GitHub Action comments on pull requests that change STL, OBJ, glTF or GLB files. For each changed model it shows a before/after image from the same camera, coloured by what changed, plus a short structural summary. There is one comment per pull request, updated on every push.
+A GitHub Action comments on pull requests that change STL, OBJ, glTF, GLB or STEP files. For each changed model it shows a before/after image from the same camera, coloured by what changed, plus a short structural summary. There is one comment per pull request, updated on every push.
 
 ![Before/after card from the GitHub Action](docs/images/action-card.png)
 
@@ -256,6 +258,49 @@ https://joshua080.github.io/polymerge/?base=https://raw.githubusercontent.com/Jo
 - Everything runs in the visitor's browser. Nothing is uploaded, and nobody runs a server for it. The panel's "Loaded from" row shows which site each model came from.
 - A host that doesn't allow cross-origin reads gives an error that says so. Private files can't be opened this way; use `polymerge view` locally for those.
 
+### STEP files (CAD)
+
+STEP (`.step`, `.stp`) is what most CAD tools export. polymerge can **diff and view** STEP files: `diff`, `view`, `info`, the git diff driver, the pull-request Action and the hosted viewer all take them. It does not merge them (see below).
+
+STEP stores exact surfaces, not triangles, so it has to be tessellated first. That needs OpenCascade, a CAD kernel, from the [`occt-import-js`](https://github.com/kovacsv/occt-import-js) package (about 8 MB). It is an **optional download** that polymerge does not install by itself:
+
+```bash
+npm install -g occt-import-js@0.0.23        # next to a global polymerge
+npx -p @joshuahurley/polymerge -p occt-import-js@0.0.23 polymerge diff old.step new.step   # or without installing
+```
+
+Without it, polymerge says exactly that and stops. A plate whose right-hand hole moved 5 mm:
+
+```console
+$ polymerge diff examples/step-plate/base.step examples/step-plate/ours.step --top 2
+polymerge diff
+  base   base.step  STEP  188 vertices · 380 faces
+  target ours.step  STEP  188 vertices · 380 faces
+  STEP   tessellated by OpenCascade (deflection 0.05 mm for both); a flat face re-triangulated around an edit counts as modified
+
+Correspondence: Tier 2 · topological (geometric + adjacency)
+…
+Vertices  unchanged 130  moved 50  added 8  removed 8
+Faces     unchanged 234  modified 100  added 46  removed 46
+Displacement  max 5.0000  mean 4.2364
+
+Largest vertex moves (2 of 50):
+  base #51 → target #24  Δ (5.0000, 0, 0)  |Δ| 5.0000
+  base #72 → target #43  Δ (5.0000, 0, 0)  |Δ| 5.0000
+```
+
+How to read it:
+- **Both versions are tessellated with the same tolerance**, the largest gap allowed between a triangle and the true surface. It comes from the old version's size (1/2000 of its diagonal, rounded down to 1, 2 or 5 × 10ⁿ mm); otherwise surfaces that didn't change would get different triangles. STEP is always read in millimetres, whatever unit the file uses.
+- **The hole's edge moved exactly 5 mm**, which is the real edit.
+- **The counts also include re-triangulation.** OpenCascade re-triangulates a whole flat face when a hole in it moves, so the top and bottom faces read as modified, added and removed, although their shape didn't change. Reading changes per CAD face instead is possible future work; it is not built.
+- Each solid becomes a part named as in the file (a part used twice gets "#2"), and colours become materials.
+
+The hosted viewer reads STEP too. It **asks first**, then downloads OpenCascade from jsDelivr. The version is pinned and checked against its SHA-256 before it runs, and nothing is uploaded. `polymerge view` serves your own installed copy instead, so nothing is fetched from elsewhere.
+
+**Merging STEP is refused** (`merge`, `review`, `resolve`, the git merge driver). polymerge merges triangles, so the result could only be a mesh, never STEP again, and re-triangulation would invent conflicts that CAD wouldn't have. Merge the change in your CAD tool. `git-setup` marks STEP as `merge=binary`, so git keeps your side and marks the file as conflicted instead of merging it line by line.
+
+**Licence.** OpenCascade and `occt-import-js` are LGPL-2.1. polymerge (MIT) doesn't bundle or modify them. You install them yourself, or the hosted viewer downloads them when you agree. They stay a separate module you can replace: `POLYMERGE_OCCT=/path/to/occt-import-js` points the CLI at another build.
+
 ### Use it as a library
 
 The engine is a separate package, `polymerge-core`. It runs in Node and in the browser.
@@ -293,11 +338,13 @@ polymerge info <file>                            the normalised mesh summary
 polymerge git-diff | git-merge | git-setup       git drivers, and the config to use them
 ```
 
+STEP files work with `diff`, `view`, `info` and `git-diff`, given the optional reader ([STEP files](#step-files-cad)).
+
 `polymerge --help` lists every option.
 
 ## How it works
 
-1. **Normalise.** STL, OBJ and glTF/GLB are loaded with the three.js loaders and converted into one mesh form:
+1. **Normalise.** STL, OBJ and glTF/GLB are loaded with the three.js loaders, and STEP is tessellated by OpenCascade. All of them are converted into one mesh form:
    - vertices are welded;
    - glTF node transforms are baked in, and the scene (nodes, transforms, meshes) is recorded alongside, so glTF output can rebuild it.
 
@@ -318,7 +365,7 @@ polymerge git-diff | git-merge | git-setup       git drivers, and the config to 
 
 **Handles**
 - **Formats.**
-  - Input: STL (ASCII and binary), OBJ, GLB, and `.gltf` with embedded buffers.
+  - Input: STL (ASCII and binary), OBJ, GLB, and `.gltf` with embedded buffers. STEP for diff and view, with the optional OpenCascade reader.
   - Output for merges: STL, OBJ (keeps groups), GLB and self-contained `.gltf` (keep the base's nodes, names, transforms and meshes; positions round-trip bit for bit).
 - **Diff.**
   - Direct vertex edits, re-ordered files, and local topology edits (holes, new patches, re-triangulated areas).
@@ -342,6 +389,7 @@ polymerge git-diff | git-merge | git-setup       git drivers, and the config to 
   - anything else that needs design intent.
 
   A merge can be free of collisions and still be wrong for your part. Review it.
+- **STEP is diffed as triangles, and never merged** ([STEP files](#step-files-cad)). A flat face re-triangulated around an edit reads as modified. Parameter changes (a hole Ø8 → Ø8.1) read as moved vertices. IGES, STEP-XML and compressed `.stpZ` are not read.
 - **Re-meshed sides can't be merged vertex by vertex.** If one side re-tessellated the model, the merge reports a whole-model `lineage` conflict: you pick one side's whole mesh. Transferring edits between tessellations is future work.
 - **A side that splits a part and moves half of it** is seen as local moves, not a part motion. The other side's edits on that half then conflict.
 - **Appearance merges for glTF/GLB only** ([rules](docs/appearance-merge-design.md)). STL and OBJ have no materials or UVs to merge (OBJ `vt` / `.mtl` and STL colours are not merged). Limits:
@@ -380,7 +428,7 @@ npm install
 npm run build          # core → CLI → web viewer
 npm link -w @joshuahurley/polymerge   # optional: puts this checkout's `polymerge` on your PATH
 npm test               # unit, fixture and merge tests, then the perf tests on their own
-npm run e2e            # headless-browser viewer, CLI → browser, worker, merge review, real git, packed npm install
+npm run e2e            # headless-browser viewer, CLI → browser, worker, merge review, real git, STEP, packed npm install
 npm run verify         # everything CI runs
 npm run dev            # viewer dev server with the built-in examples
 ```
@@ -391,9 +439,9 @@ packages/cli    @joshuahurley/polymerge — the polymerge command, with the web 
 apps/web        the Vite + three.js viewer
 action/         the pull-request GitHub Action (action.yml at the root runs it)
 fixtures/       known-answer model pairs and their generator
-examples/       the three-way merge example used in this README
+examples/       the three-way merge example and the STEP plate used in this README
 docs/           design notes (merge semantics, appearance merge, write-back security, the GitHub Action) and README images
-scripts/        end-to-end checks (CLI → browser, merge review, git, packed install, the Action) and image capture
+scripts/        end-to-end checks (CLI → browser, merge review, git, STEP, packed install, the Action), image capture, the STEP example generator
 ```
 
 CI runs `npm run verify` on every push. One of its checks, `scripts/e2e-pack.mjs`, packs both npm packages, installs them into an empty project and uses them from there: the CLI, the library example above, and the bundled viewer in a real browser.

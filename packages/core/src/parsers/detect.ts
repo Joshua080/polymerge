@@ -4,7 +4,7 @@
 import { MeshLoadError, type SourceFormat } from '../types.js';
 import { decodeUtf8, namePrefix, readU32LE, toBytes } from './bytes.js';
 
-const EXTENSIONS: Record<string, SourceFormat> = { stl: 'stl', obj: 'obj', gltf: 'gltf', glb: 'glb' };
+const EXTENSIONS: Record<string, SourceFormat> = { stl: 'stl', obj: 'obj', gltf: 'gltf', glb: 'glb', step: 'step', stp: 'step' };
 
 /** How much of the file is decoded as text for sniffing. */
 const SNIFF_BYTES = 64 * 1024;
@@ -36,8 +36,8 @@ function hasObjFaceLine(bytes: Uint8Array, from: number): boolean {
 /**
  * Guess the format from the bytes alone. Order: GLB magic → exact binary-STL size
  * (84 + 50 × triangleCount, which is checked before any text heuristic because many
- * binary STL headers start with "solid") → JSON `{` → ASCII `solid … facet` → OBJ
- * `v x y z` + `f …` lines. Returns undefined if nothing matches.
+ * binary STL headers start with "solid") → JSON `{` → STEP `ISO-10303-21;` → ASCII
+ * `solid … facet` → OBJ `v x y z` + `f …` lines. Returns undefined if nothing matches.
  */
 export function sniffFormat(data: ArrayBuffer | Uint8Array): SourceFormat | undefined {
   const bytes = toBytes(data);
@@ -50,6 +50,8 @@ export function sniffFormat(data: ArrayBuffer | Uint8Array): SourceFormat | unde
   const head = decodeUtf8(bytes.subarray(0, Math.min(n, SNIFF_BYTES)));
   const text = head.trimStart();
   if (text.startsWith('{')) return 'gltf';
+  // A STEP exchange file (Part 21) opens with this keyword; the mandatory HEADER section follows.
+  if (/^ISO-10303-21\s*;/.test(text)) return 'step';
   if (text.startsWith('solid') && /\b(facet|endsolid)\b/.test(text)) return 'stl';
   if (/^[ \t]*v[ \t]+[-+.\dEeIiNn]/m.test(head)) {
     if (/^[ \t]*f[ \t]+\S/m.test(head)) return 'obj';
@@ -67,6 +69,6 @@ export function detectFormat(data: ArrayBuffer | Uint8Array, fileName?: string):
   const sniffed = sniffFormat(bytes);
   if (sniffed) return sniffed;
   throw new MeshLoadError(
-    `${namePrefix(fileName)}unknown mesh format: expected STL (ASCII or binary), OBJ, glTF (.gltf JSON) or GLB`,
+    `${namePrefix(fileName)}unknown mesh format: expected STL (ASCII or binary), OBJ, glTF (.gltf JSON), GLB or STEP`,
   );
 }

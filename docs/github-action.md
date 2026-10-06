@@ -1,6 +1,6 @@
 # polymerge in pull requests (GitHub Action)
 
-When a pull request changes an STL, OBJ, glTF or GLB file, this action posts **one comment** on it:
+When a pull request changes an STL, OBJ, glTF, GLB or STEP file, this action posts **one comment** on it:
 a before / after image of every changed model, rendered from the same camera and coloured by what
 changed, with a short structural summary. The comment is updated in place on every push.
 
@@ -158,12 +158,15 @@ PNGs, in `all` / `render` mode) and `comment-url`.
 ## How it works
 
 1. **Changed models.** `git diff --raw -z -M <merge base> <head>`, filtered to `.stl`, `.obj`,
-   `.gltf` and `.glb` in any letter case. Renames are detected; a rename with identical content,
+   `.gltf`, `.glb`, `.step` and `.stp` in any letter case. Renames are detected; a rename with identical content,
    or a change of the file mode only, is listed without an image.
 2. **Diff.** Each version is read from git (not from the working tree), checked for the size caps
    and for an LFS pointer, parsed by `polymerge-core` and diffed. A model whose geometry did not
    change (a re-export, a re-ordered file, or only a whole-model unit change) is listed with that
-   explanation instead of two identical images.
+   explanation instead of two identical images. STEP files are tessellated by OpenCascade
+   (`occt-import-js`, LGPL-2.1, installed with the action's own dependencies), the after version
+   with the before version's tolerance, and drawn from those meshes: the browser never downloads
+   OpenCascade. The comment's local command for a STEP file uses `npx -p` to fetch it too.
 3. **Render.** The built viewer (the same one `polymerge view` opens) runs in headless Chromium
    with software WebGL, in its capture mode (`?capture=1`): two panels with the same size, the
    same framing box and the same view direction, so their cameras are identical. The base version
@@ -254,6 +257,8 @@ account and a secret).
   character limit by dropping per-file details first.
 - The diff's own limits apply (README, "What v1 does and doesn't handle"), including `.gltf`
   files with external buffers, which cannot be read.
+- STEP is compared as triangles: a flat face re-triangulated around an edit is coloured as changed
+  although its shape is not (README, "STEP files").
 - The camera is the viewer's 3/4 view turned towards the changes; a change hidden inside the model
   (a cavity) may not be visible, but it is still in the summary.
 - One comment per pull request per repository: two workflows using this action on the same

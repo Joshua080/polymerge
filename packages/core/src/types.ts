@@ -9,7 +9,7 @@
  *
  * Conventions
  * -----------
- * - Units: whatever the source file uses (no unit conversion in v1).
+ * - Units: whatever the source file uses (no unit conversion in v1), except STEP: always mm.
  * - Coordinates: right-handed, world space (glTF node transforms are baked in).
  * - Bulk data lives in typed arrays (interleaved xyz for positions, 3 indices per
  *   triangle for faces). Object-style views (IVertex, IFace) exist for reporting
@@ -32,10 +32,14 @@ export interface IBounds {
   max: Vec3;
 }
 
-/** Formats accepted by the loaders. `gltf` = JSON glTF (embedded/data-URI buffers only in v1). */
-export type SourceFormat = 'stl' | 'obj' | 'gltf' | 'glb';
+/**
+ * Formats accepted by the loaders. `gltf` = JSON glTF (embedded/data-URI buffers only in v1).
+ * `step` = STEP (ISO 10303-21, `.step` / `.stp`): tessellated by an importer the caller passes in
+ * (`ILoadOptions.step`); read only, never written.
+ */
+export type SourceFormat = 'stl' | 'obj' | 'gltf' | 'glb' | 'step';
 
-export const SOURCE_FORMATS: readonly SourceFormat[] = ['stl', 'obj', 'gltf', 'glb'];
+export const SOURCE_FORMATS: readonly SourceFormat[] = ['stl', 'obj', 'gltf', 'glb', 'step'];
 
 // ---------------------------------------------------------------------------
 // Normalised mesh (the ONE internal representation every format is loaded into)
@@ -321,6 +325,83 @@ export interface ILoadOptions {
   fileName?: string;
   /** Weld tolerance in model units. 0 (default) = exact float32 equality. */
   weldEpsilon?: number;
+  /** STEP only, and required for it: the importer that tessellates the B-rep, and how finely. */
+  step?: IStepLoadOptions;
+}
+
+// ---------------------------------------------------------------------------
+// STEP  (implemented in src/parsers/step.ts)
+// ---------------------------------------------------------------------------
+
+/**
+ * How a STEP file is turned into triangles. STEP stores exact surfaces (a B-rep), and only a
+ * geometry kernel can tessellate them: polymerge uses OpenCascade's, from the optional
+ * `occt-import-js` package (LGPL-2.1), which the caller loads and passes in, so polymerge-core
+ * stays dependency-free.
+ */
+export interface IStepLoadOptions {
+  /** The importer: the initialised `occt-import-js` module (anything with its `ReadStepFile`). */
+  importer: IStepImporter;
+  /**
+   * Maximum distance between a triangle and the true surface, in millimetres (STEP models are
+   * always loaded in mm). Two versions of a part MUST be tessellated with the same value, or
+   * unchanged surfaces get different triangles: load the base first and pass its value
+   * (`stepInfo(base).deflection`) for the other version. Default: derived from the model's size
+   * (`stepDeflectionFor`).
+   */
+  deflection?: number;
+  /** Maximum angle between neighbouring triangles on a curved surface, in radians (default 0.5). */
+  angularDeflection?: number;
+}
+
+/** What a loaded STEP model records about its tessellation (`IMeshMetadata.extras.step`). */
+export interface IStepInfo {
+  /** Linear deflection used, in mm (see `IStepLoadOptions.deflection`). */
+  deflection: number;
+  /** Angular deflection used, in radians. */
+  angularDeflection: number;
+  /** Always 'mm': the importer converts inch, metre, ... files. */
+  unit: 'mm';
+  /** Solids and shells read (the importer's meshes; one group each). */
+  solids: number;
+  /** B-rep faces tessellated. */
+  brepFaces: number;
+}
+
+/** The part of the `occt-import-js` API that polymerge uses. */
+export interface IStepImporter {
+  ReadStepFile(content: Uint8Array, params: IStepImportParams | null): IStepImportResult;
+}
+
+export interface IStepImportParams {
+  linearUnit?: 'millimeter' | 'centimeter' | 'meter' | 'inch' | 'foot';
+  linearDeflectionType?: 'bounding_box_ratio' | 'absolute_value';
+  linearDeflection?: number;
+  angularDeflection?: number;
+}
+
+/** `occt-import-js` output: meshes in world space, a node tree that refers to them by index. */
+export interface IStepImportResult {
+  success: boolean;
+  root?: IStepImportNode;
+  meshes?: IStepImportMesh[];
+}
+
+export interface IStepImportNode {
+  name?: string;
+  /** Indices into `IStepImportResult.meshes`. */
+  meshes?: number[];
+  children?: IStepImportNode[];
+}
+
+/** One solid or shell. Colours are linear RGB in [0, 1]. */
+export interface IStepImportMesh {
+  name?: string;
+  color?: readonly number[] | null;
+  /** The B-rep faces, each a contiguous inclusive range of triangles. */
+  brep_faces?: { first: number; last: number; color?: readonly number[] | null }[];
+  attributes: { position: { array: ArrayLike<number> }; normal?: { array: ArrayLike<number> } };
+  index: { array: ArrayLike<number> };
 }
 
 /** Signature of the public loader (see src/parsers/index.ts). */

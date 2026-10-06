@@ -94,6 +94,11 @@ describe('buildComment', () => {
     );
   });
 
+  it('the command for a STEP file brings the optional OpenCascade reader along', () => {
+    const body = buildComment(result([file('cad/bracket.STP', { image: '0.png' })]), { imageUrl: url });
+    expect(body).toContain('npx -p @joshuahurley/polymerge -p occt-import-js@0.0.23 polymerge view before.stp after.stp');
+  });
+
   it('keeps a hostile file name inert: code spans only, rows intact, no command for it', () => {
     const body = buildComment(
       result([file(HOSTILE, { image: '0.png' }), file('models/other.stl', { status: 'error', image: null, diff: null, error: `<b>boom</b> ${HOSTILE}` }), file(`${HOSTILE}.2.stl`, { status: 'same-content', image: null, diff: null, change: 'renamed', oldPath: HOSTILE })]),

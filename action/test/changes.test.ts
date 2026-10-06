@@ -13,6 +13,10 @@ describe('modelFormat', () => {
     expect(['a.stl', 'b/C.STL', 'x.Obj', 'm.GLTF', 'scene.glb'].map(modelFormat)).toEqual(['stl', 'stl', 'obj', 'gltf', 'glb']);
   });
 
+  it('reads .step and .stp as STEP', () => {
+    expect(['part.step', 'B/PART.STP', 'asm.Step'].map(modelFormat)).toEqual(['step', 'step', 'step']);
+  });
+
   it('ignores everything else', () => {
     expect(['a.stl.bak', 'stl', 'readme.md', 'model.3mf', '', 'dir.stl/file.txt'].map(modelFormat)).toEqual([null, null, null, null, null, null]);
   });

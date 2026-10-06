@@ -6,8 +6,10 @@ import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { detectFormat, formatFromFileName } from 'polymerge-core';
 import { handleReviewApi, REVIEW_API_PREFIX } from '../review-api.js';
 import { hostAllowed, isLoopbackAddress, SECURITY_HEADERS, staticAllowlist, staticFile, urlHost } from '../serve-guard.js';
+import { findOcct, occtMissingMessage, stepNotMergeable, type OcctLocation } from '../step.js';
 import { ReviewWriteBack } from '../write-back.js';
 
 /** Content types of the MODELS served: model types only, never e.g. text/html (docs/write-back-security.md §4.9). */
@@ -16,6 +18,20 @@ const MODEL_TYPES: Record<string, string> = {
   '.obj': 'model/obj',
   '.gltf': 'model/gltf+json',
   '.glb': 'model/gltf-binary',
+  '.step': 'model/step',
+  '.stp': 'model/step',
+};
+
+/**
+ * Where the viewer finds the optional STEP reader (OpenCascade, occt-import-js), relative to the
+ * page: served from the user's own install, so the browser never fetches it from elsewhere.
+ */
+export const OCCT_VENDOR_PREFIX = '/vendor/occt-import-js/';
+const OCCT_VENDOR_FILES: Record<string, string> = {
+  'occt-import-js.js': 'text/javascript; charset=utf-8',
+  'occt-import-js.wasm': 'application/wasm',
+  'license.occt-import-js.txt': 'text/plain; charset=utf-8',
+  'license.occt.txt': 'text/plain; charset=utf-8',
 };
 
 const CONTENT_TYPES: Record<string, string> = {
@@ -104,6 +120,23 @@ export async function startViewServer(
     };
   };
   const models = await Promise.all(files.map((f, i) => model(sides[i], f)));
+  // STEP: view and diff only (D51), and only with the reader installed.
+  const stepSide = models.findIndex((m) => isStep(m.bytes, decodeURIComponent(m.urlPath.split('/').pop() ?? '')));
+  if (stepSide >= 0 && files.length === 3) throw stepNotMergeable(displayName(files[stepSide], o));
+  let occt: OcctLocation | null = null;
+  try {
+    occt = findOcct();
+  } catch (err) {
+    if (stepSide >= 0) throw err; // a broken $POLYMERGE_OCCT matters only when there is STEP to read
+  }
+  if (stepSide >= 0 && !occt) throw new Error(occtMissingMessage(displayName(files[stepSide], o)));
+  const vendor = new Map<string, { file: string; type: string }>();
+  if (occt) {
+    for (const [name, type] of Object.entries(OCCT_VENDOR_FILES)) {
+      const file = path.join(occt.dir, 'dist', name);
+      if (existsSync(file)) vendor.set(`${OCCT_VENDOR_PREFIX}${name}`, { file, type });
+    }
+  }
 
   let port = 0;
   let api: ReviewWriteBack | null = null;
@@ -126,6 +159,14 @@ export async function startViewServer(
     if (hit) {
       res.writeHead(200, { 'content-type': hit.contentType, 'cache-control': 'no-store' });
       res.end(hit.bytes);
+      return;
+    }
+    const lib = vendor.get(url.pathname);
+    if (lib) {
+      const body = await readFile(lib.file).catch(() => null);
+      if (!body) return void res.writeHead(404).end('not found');
+      res.writeHead(200, { 'content-type': lib.type });
+      res.end(body);
       return;
     }
     const file = staticFile(staticFiles, url.pathname);
@@ -174,6 +215,18 @@ export async function startViewServer(
   return { server, url: `http://${urlHost(host)}:${port}/?${query.toString()}${fragment}`, writeRoutes: api !== null };
 }
 
+function displayName(src: ModelSource, o: ViewOptions): string {
+  return path.basename(o.name ?? (typeof src === 'string' ? src : src.name));
+}
+
+function isStep(bytes: Uint8Array, name: string): boolean {
+  try {
+    return detectFormat(bytes, name) === 'step';
+  } catch {
+    return false; // the viewer reports unknown formats itself
+  }
+}
+
 export function openBrowser(url: string): void {
   const [cmd, args] =
     process.platform === 'darwin'
@@ -198,6 +251,7 @@ export function openBrowser(url: string): void {
  * docs/write-back-security.md).
  */
 export async function runReview(repoPath: string, o: ViewOptions): Promise<number> {
+  if (formatFromFileName(repoPath) === 'step') throw stepNotMergeable(repoPath);
   const session = await ReviewWriteBack.open(repoPath);
   const files = ([1, 2, 3] as const).map((n) => ({ name: path.basename(repoPath), bytes: session.stages[n] }));
   return runView(files, { ...o, name: repoPath }, undefined, session);

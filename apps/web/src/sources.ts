@@ -1,7 +1,42 @@
 /** Where meshes come from: local files, URLs (`?base=&target=`) and the fixture manifest. */
-import { SOURCE_FORMATS, loadMesh, type IFixtureManifest, type IMesh, type SourceFormat } from 'polymerge-core';
+import { detectFormat, formatFromFileName, loadMesh, stepInfo, type IFixtureManifest, type IMesh, type SourceFormat } from 'polymerge-core';
+import { stepImporter } from './step.js';
 
-export const ACCEPTED_EXTENSIONS = SOURCE_FORMATS.map((f) => `.${f}`);
+export const ACCEPTED_EXTENSIONS = ['.stl', '.obj', '.gltf', '.glb', '.step', '.stp'];
+
+/** How to read one model. */
+export interface ILoadOptions {
+  /**
+   * STEP: the tessellation tolerance to use, usually the other version's (two versions must share
+   * it, or unchanged surfaces get different triangles). Only awaited when the model IS STEP.
+   */
+  stepDeflection?: () => Promise<number | undefined>;
+  /** Refuse STEP before downloading anything (the merge review: STEP is view / diff only). */
+  refuseStep?: boolean;
+}
+
+/** One side's loader: the options let a pair share what one side learnt. */
+export type Loader = (options?: ILoadOptions) => Promise<ILoadedMesh>;
+
+/**
+ * Start loading two versions in parallel. A STEP target waits for the base and is tessellated
+ * with the base's tolerance (any other target does not wait).
+ */
+export function pairLoads(base: Loader | null, target: Loader | null): [Promise<ILoadedMesh | null>, Promise<ILoadedMesh | null>] {
+  let settle: (deflection: number | undefined) => void = () => {};
+  const deflection = new Promise<number | undefined>((resolve) => (settle = resolve));
+  const b = base
+    ? base().then(
+        (m) => (settle(stepInfo(m.mesh)?.deflection), m),
+        (err: unknown) => {
+          settle(undefined);
+          throw err;
+        },
+      )
+    : (settle(undefined), Promise.resolve(null));
+  const t = target ? target({ stepDeflection: () => deflection }) : Promise.resolve(null);
+  return [b, t];
+}
 
 export interface ILoadedMesh {
   mesh: IMesh;
@@ -21,9 +56,7 @@ export class SourceError extends Error {
 }
 
 export function formatFromName(name: string): SourceFormat | undefined {
-  const m = /\.([a-z0-9]+)$/i.exec(name);
-  const ext = m?.[1].toLowerCase();
-  return SOURCE_FORMATS.find((f) => f === ext);
+  return formatFromFileName(name);
 }
 
 /** Last path segment of a URL (decoded), without query / hash. */
@@ -42,22 +75,45 @@ export function fileNameFromUrl(url: string): string {
   }
 }
 
-async function parse(bytes: ArrayBuffer, fileName: string, origin: string): Promise<ILoadedMesh> {
-  const format = formatFromName(fileName);
-  const mesh = await loadMesh(bytes, format ? { fileName, format } : { fileName });
+/**
+ * Normalise model bytes. `formatName` decides the format (by extension, else by content);
+ * `fileName` is what the mesh is called. STEP goes through the optional OpenCascade reader.
+ */
+async function parse(bytes: ArrayBuffer, formatName: string, fileName: string, origin: string, options: ILoadOptions): Promise<ILoadedMesh> {
+  let format = formatFromName(formatName);
+  if (!format) {
+    try {
+      format = detectFormat(bytes, formatName);
+    } catch {
+      // loadMesh reports the unknown format
+    }
+  }
+  let mesh: IMesh;
+  if (format === 'step') {
+    if (options.refuseStep) {
+      throw new SourceError(
+        `“${fileName}” is a STEP file. STEP files can be viewed and diffed, not merged: a merged result could only be a mesh, never STEP again. Merge the change in your CAD tool.`,
+      );
+    }
+    const importer = await stepImporter(fileName);
+    const deflection = await options.stepDeflection?.();
+    mesh = await loadMesh(bytes, { fileName, format, step: { importer, deflection } });
+  } else {
+    mesh = await loadMesh(bytes, format ? { fileName, format } : { fileName });
+  }
   return { mesh, name: fileName, bytes: bytes.byteLength, origin };
 }
 
-export async function loadFromFile(file: File): Promise<ILoadedMesh> {
+export async function loadFromFile(file: File, options: ILoadOptions = {}): Promise<ILoadedMesh> {
   if (!formatFromName(file.name)) {
     throw new SourceError(`"${file.name}" is not a supported model (expected ${ACCEPTED_EXTENSIONS.join(', ')}).`);
   }
   const bytes = await file.arrayBuffer();
-  return parse(bytes, file.name, file.name);
+  return parse(bytes, file.name, file.name, file.name, options);
 }
 
 /** Fetch + parse a model. `displayName` overrides the name derived from the URL. */
-export async function loadFromUrl(url: string, displayName?: string): Promise<ILoadedMesh> {
+export async function loadFromUrl(url: string, displayName?: string, options: ILoadOptions = {}): Promise<ILoadedMesh> {
   const resolved = new URL(url, document.baseURI).href;
   let res: Response;
   try {
@@ -76,10 +132,7 @@ export async function loadFromUrl(url: string, displayName?: string): Promise<IL
   const bytes = await res.arrayBuffer();
   const urlName = fileNameFromUrl(url);
   // Format always follows the URL's extension (e.g. /models/base.glb); the display name is cosmetic.
-  const format = formatFromName(urlName);
-  const name = displayName || urlName;
-  const mesh = await loadMesh(bytes, format ? { fileName: name, format } : { fileName: name });
-  return { mesh, name, bytes: bytes.byteLength, origin: url };
+  return parse(bytes, urlName, displayName || urlName, url, options);
 }
 
 /** Candidate manifest URLs: relative to the page (works under any base path), then site root. */
