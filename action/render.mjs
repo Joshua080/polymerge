@@ -234,7 +234,7 @@ async function main() {
   const { diffMeshes, loadMesh, stepInfo, writeGlb } = await import('polymerge-core');
   const silent = { info() {}, warn() {} };
   const renderer = new Renderer();
-  /** @type {{ image: string, path: string, tier: number | null, stats: unknown, capture: unknown }[]} */
+  /** @type {{ image: string, path: string, tier: number | null, stats: unknown, view: unknown, capture: unknown }[]} */
   const captures = [];
   const labels = { before: base.slice(0, 7), after: headSha.slice(0, 7) };
   try {
