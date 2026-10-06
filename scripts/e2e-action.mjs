@@ -528,7 +528,7 @@ try {
   check(r.code === 0 && empty.files.length === 0, `render --list writes an empty result by itself (${empty.files.length} files)`);
   api.pulls.set(42, pull(head3));
   r = await run('action/post.mjs', [], postEnv('pull_request', event(head3), out3));
-  check(r.code === 0 && ours().length === 1 && ours()[0].body.includes('no longer changes any STL, OBJ, glTF or GLB files') && !ours()[0].body.includes('<img'), 'the comment is updated to say there are no model changes any more');
+  check(r.code === 0 && ours().length === 1 && ours()[0].body.includes('no longer changes any 3D model files') && !ours()[0].body.includes('<img'), 'the comment is updated to say there are no model changes any more');
   check(api.unauthorised === 0, 'every API call carried the token');
 
   // ---- GitHub's merge ref, with an out-of-date base.sha in the event ----------------------------------

@@ -18,7 +18,7 @@ describe('modelFormat', () => {
   });
 
   it('ignores everything else', () => {
-    expect(['a.stl.bak', 'stl', 'readme.md', 'model.3mf', '', 'dir.stl/file.txt'].map(modelFormat)).toEqual([null, null, null, null, null, null]);
+    expect(['a.stl.bak', 'stl', 'readme.md', 'model.fbx', '', 'dir.stl/file.txt'].map(modelFormat)).toEqual([null, null, null, null, null, null]);
   });
 });
 

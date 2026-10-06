@@ -581,7 +581,7 @@ describe('polymerge review: saving to the repository', () => {
   });
 
   it('an unwritable format, or a writer that throws, fails cleanly with nothing written', async () => {
-    const ext = ['gltf', 'glb'].find((f) => !(WRITABLE_FORMATS as readonly string[]).includes(f)) ?? 'ply';
+    const ext = ['gltf', 'glb'].find((f) => !(WRITABLE_FORMATS as readonly string[]).includes(f)) ?? 'fbx';
     const repo = conflictRepo(GRID, `part.${ext}`);
     const r = await startReview(repo);
     const info = JSON.parse((await send(r.port, '/api/review/session', { headers: { 'x-polymerge-token': r.token } })).body);

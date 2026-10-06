@@ -14,6 +14,8 @@ const CONTENT_TYPES: Record<string, string> = {
   '.mtl': 'model/mtl',
   '.gltf': 'model/gltf+json',
   '.glb': 'model/gltf-binary',
+  '.3mf': 'model/3mf',
+  '.ply': 'application/octet-stream',
   '.bin': 'application/octet-stream',
   '.png': 'image/png',
   '.jpg': 'image/jpeg',

@@ -162,7 +162,7 @@ describe('buildComment', () => {
   it('says so when a later push removes every model change', () => {
     const body = buildNoChangesComment(HEAD);
     expect(body.startsWith(`${MARKER}\n`)).toBe(true);
-    expect(body).toContain('no longer changes any STL, OBJ, glTF or GLB files (as of `9f8e7d6`)');
+    expect(body).toContain('no longer changes any 3D model files (as of `9f8e7d6`)');
   });
 
   it('uses the engine’s tier names', () => {

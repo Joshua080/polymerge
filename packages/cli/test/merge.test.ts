@@ -113,7 +113,7 @@ describe('polymerge merge', () => {
     expect(() => parsePicks(['x=ours'])).toThrow(/--pick/);
     expect(() => parsePicks(['1=mine'])).toThrow(/ours, theirs or base/);
     expect(outputFormat('a/b/model.STL')).toBe('stl');
-    expect(() => outputFormat('model.ply')).toThrow(/cannot write/);
+    expect(() => outputFormat('model.fbx')).toThrow(/cannot write/);
   });
 });
 
@@ -126,7 +126,7 @@ describe('polymerge git-merge (merge driver protocol)', () => {
     writeFileSync(file('A2.tmp'), readFileSync(file('ours.stl')));
     expect(await runGitMerge([file('base.stl'), file('A2.tmp'), file('base.stl'), 'parts/bracket.stl'])).toBe(0);
     expect(await zAt(file('A2.tmp'), 2, 2)).toBe(1);
-    expect(await runGitMerge([file('base.stl'), file('A2.tmp'), file('theirs.stl'), 'x.ply'])).toBe(2);
+    expect(await runGitMerge([file('base.stl'), file('A2.tmp'), file('theirs.stl'), 'x.fbx'])).toBe(2);
     expect(await runGitMerge(['only-one'])).toBe(2);
   });
 

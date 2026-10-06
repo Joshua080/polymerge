@@ -9,7 +9,8 @@
  *
  * Conventions
  * -----------
- * - Units: whatever the source file uses (no unit conversion in v1), except STEP: always mm.
+ * - Units: whatever the source file uses (no unit conversion), except STEP and 3MF, which state
+ *   their units: always mm.
  * - Coordinates: right-handed, world space (glTF node transforms are baked in).
  * - Bulk data lives in typed arrays (interleaved xyz for positions, 3 indices per
  *   triangle for faces). Object-style views (IVertex, IFace) exist for reporting
@@ -35,11 +36,12 @@ export interface IBounds {
 /**
  * Formats accepted by the loaders. `gltf` = JSON glTF (embedded/data-URI buffers only in v1).
  * `step` = STEP (ISO 10303-21, `.step` / `.stp`): tessellated by an importer the caller passes in
- * (`ILoadOptions.step`); read only, never written.
+ * (`ILoadOptions.step`); read only, never written. `ply` = Stanford PLY (ASCII or binary).
+ * `3mf` = 3D Manufacturing Format (a ZIP package; geometry and colours, in mm).
  */
-export type SourceFormat = 'stl' | 'obj' | 'gltf' | 'glb' | 'step';
+export type SourceFormat = 'stl' | 'obj' | 'gltf' | 'glb' | 'step' | 'ply' | '3mf';
 
-export const SOURCE_FORMATS: readonly SourceFormat[] = ['stl', 'obj', 'gltf', 'glb', 'step'];
+export const SOURCE_FORMATS: readonly SourceFormat[] = ['stl', 'obj', 'gltf', 'glb', 'step', 'ply', '3mf'];
 
 // ---------------------------------------------------------------------------
 // Normalised mesh (the ONE internal representation every format is loaded into)

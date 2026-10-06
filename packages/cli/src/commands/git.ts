@@ -50,11 +50,15 @@ export async function runGitDiff(args: string[]): Promise<number> {
 
 /** What `polymerge init` writes and `polymerge git-setup` prints: .gitattributes lines… */
 export const GIT_ATTRIBUTES: readonly { pattern: string; attributes: string }[] = [
-  ...['stl', 'obj', 'gltf', 'glb'].map((e) => ({ pattern: `*.${e}`, attributes: 'diff=polymerge merge=polymerge' })),
+  ...['stl', 'obj', 'gltf', 'glb', 'ply'].map((e) => ({ pattern: `*.${e}`, attributes: 'diff=polymerge merge=polymerge' })),
   // STEP: diff only (needs the optional occt-import-js). It is text, but a line-by-line merge
   // corrupts it, so merge=binary keeps your side and marks the file conflicted instead.
   { pattern: '*.step', attributes: 'diff=polymerge merge=binary' },
   { pattern: '*.stp', attributes: 'diff=polymerge merge=binary' },
+  // 3MF: a merged 3MF holds geometry and colours only, not the slicer project (settings, plates),
+  // so git never writes one by itself: merge=binary marks the file conflicted, and
+  // `polymerge resolve` merges it when you ask.
+  { pattern: '*.3mf', attributes: 'diff=polymerge merge=binary' },
 ];
 
 /** …and git config entries (the drivers). */
@@ -76,6 +80,8 @@ export function gitSetupText(): string {
     ...GIT_ATTRIBUTES.filter((a) => !a.attributes.includes('merge=binary')).map((a) => `${a.pattern} ${a.attributes}`),
     '# STEP: diff only (needs the optional occt-import-js). It is text, but a line-by-line merge',
     '# corrupts it, so merge=binary keeps your side and marks the file conflicted instead.',
+    '# 3MF: merged only when you ask ("polymerge resolve"), because a merged 3MF keeps the geometry',
+    '# and colours but not the slicer project (settings, plates).',
     ...GIT_ATTRIBUTES.filter((a) => a.attributes.includes('merge=binary')).map((a) => `${a.pattern} ${a.attributes}`),
     '',
     '# 2) Register the drivers (drop --global to scope them to one repo):',

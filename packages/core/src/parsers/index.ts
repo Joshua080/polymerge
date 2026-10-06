@@ -8,14 +8,16 @@ import { namePrefix, toArrayBuffer, toMeshLoadError } from './bytes.js';
 import { detectFormat as detectFormatImpl } from './detect.js';
 import { loadGltf } from './gltf.js';
 import { loadObj } from './obj.js';
+import { loadPly } from './ply.js';
 import { loadStep } from './step.js';
 import { loadStl } from './stl.js';
+import { loadThreeMf } from './threemf.js';
 
-/** Extension first (.stl/.obj/.gltf/.glb/.step/.stp, case-insensitive), then content sniffing. Throws MeshLoadError if unknown. */
+/** Extension first (.stl/.obj/.gltf/.glb/.step/.stp/.ply/.3mf, case-insensitive), then content sniffing. Throws MeshLoadError if unknown. */
 export const detectFormat: DetectFormatFn = (data, fileName) => detectFormatImpl(data, fileName);
 
 /**
- * Load STL / OBJ / glTF / GLB / STEP bytes into a welded IMesh. `data` may be an ArrayBuffer or
+ * Load STL / OBJ / glTF / GLB / STEP / PLY / 3MF bytes into a welded IMesh. `data` may be an ArrayBuffer or
  * any Uint8Array view (a non-zero byteOffset is honoured). Throws MeshLoadError for
  * unsupported, corrupt or empty input, including files that yield no triangles. STEP needs
  * `options.step` (the importer that tessellates it: ./step.ts).
@@ -44,6 +46,10 @@ export const loadMesh: LoadMeshFn = async (data, options = {}) => {
         return await loadGltf(buffer, ctx);
       case 'step':
         return loadStep(buffer, ctx, options.step);
+      case 'ply':
+        return loadPly(buffer, ctx);
+      case '3mf':
+        return loadThreeMf(buffer, ctx);
     }
   } catch (err) {
     throw toMeshLoadError(err, format, fileName);

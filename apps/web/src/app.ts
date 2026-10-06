@@ -756,7 +756,7 @@ export class App {
       setChildren(
         this.el.empty,
         h('div', { class: 'empty-title' }, 'Drop two versions of a model here'),
-        h('div', null, 'first = Base (old), second = Target (new) · STL, OBJ, glTF, GLB'),
+        h('div', null, 'first = Base (old), second = Target (new) · STL, OBJ, glTF, GLB, 3MF, PLY, STEP'),
         h('div', { class: 'muted' }, 'or pick an example in the panel'),
       );
     }

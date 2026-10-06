@@ -22,6 +22,8 @@ export {
   writeStl,
   writeGlb,
   writeGltf,
+  writePly,
+  writeThreeMf,
   buildGltfDocument,
   formatFloat32,
   WRITABLE_FORMATS,

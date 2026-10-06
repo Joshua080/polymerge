@@ -53,7 +53,7 @@ describe('writers', () => {
   });
 
   it('writeMesh writes every source format and rejects anything else', () => {
-    expect(() => writeMesh(f32, 'ply' as SourceFormat)).toThrow(/not supported/);
-    for (const format of ['obj', 'stl', 'glb', 'gltf'] as const) expect(writeMesh(f32, format).length).toBeGreaterThan(0);
+    expect(() => writeMesh(f32, 'step')).toThrow(/not supported/);
+    for (const format of ['obj', 'stl', 'glb', 'gltf', 'ply', '3mf'] as const) expect(writeMesh(f32, format).length).toBeGreaterThan(0);
   });
 });

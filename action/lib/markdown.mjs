@@ -285,7 +285,7 @@ export function buildNoChangesComment(head) {
     MARKER,
     '### 3D model diff',
     '',
-    `This pull request no longer changes any STL, OBJ, glTF or GLB files (as of ${short(head)}).`,
+    `This pull request no longer changes any 3D model files (as of ${short(head)}).`,
     '',
     `<sub>Rendered by [polymerge](${PROJECT_URL}), structural diff for 3D models · updated for ${short(head)}</sub>`,
   ].join('\n');

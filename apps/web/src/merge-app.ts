@@ -836,7 +836,7 @@ export class MergeApp {
       setChildren(
         this.el.empty,
         h('div', { class: 'empty-title' }, 'Drop three versions of a model here'),
-        h('div', null, 'first = Base (common ancestor), then Ours, then Theirs · STL, OBJ, glTF, GLB'),
+        h('div', null, 'first = Base (common ancestor), then Ours, then Theirs · STL, OBJ, glTF, GLB, 3MF, PLY'),
         h('div', { class: 'muted' }, 'or pick a merge example in the panel'),
       );
     }

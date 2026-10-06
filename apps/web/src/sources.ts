@@ -2,7 +2,7 @@
 import { detectFormat, formatFromFileName, loadMesh, stepInfo, type IFixtureManifest, type IMesh, type SourceFormat } from 'polymerge-core';
 import { stepImporter } from './step.js';
 
-export const ACCEPTED_EXTENSIONS = ['.stl', '.obj', '.gltf', '.glb', '.step', '.stp'];
+export const ACCEPTED_EXTENSIONS = ['.stl', '.obj', '.gltf', '.glb', '.3mf', '.ply', '.step', '.stp'];
 
 /** How to read one model. */
 export interface ILoadOptions {
