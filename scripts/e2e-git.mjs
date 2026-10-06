@@ -12,6 +12,8 @@
  *      conflict is saved from the review exactly as `polymerge resolve` writes it.
  *   5. a textured .glb: material properties, textures and UVs merge in the driver; a material
  *      conflict keeps the base colour, and `polymerge resolve` writes the chosen side's.
+ *   6. `polymerge init` in a fresh repository, with polymerge on PATH (as after `npm install -g`):
+ *      the config it writes calls `polymerge` by name, and plain `git diff` / `git merge` work.
  *
  *   node scripts/e2e-git.mjs        (needs `npm run build` first)
  */
@@ -314,6 +316,32 @@ async function checkGlbAppearance() {
   check(git('status', '--short').trim() === '', 'textured .glb merge committed, working tree clean');
 }
 
+/** 6. `polymerge init`, then git finds the drivers by name on PATH (a shim stands in for npm install -g). */
+function checkInit() {
+  dog.mark('6. polymerge init');
+  const repo = path.join(dir, 'init-repo');
+  const bin = path.join(dir, 'bin');
+  fs.mkdirSync(repo);
+  fs.mkdirSync(bin);
+  fs.writeFileSync(path.join(bin, 'polymerge'), `#!/bin/sh\nexec "${process.execPath}" "${cli}" "$@"\n`, { mode: 0o755 });
+  const env = { ...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH}` };
+  const run = (cmd, ...args) => spawnSync(cmd, args, { cwd: repo, encoding: 'utf8', env });
+  run('git', 'init', '-q', '-b', 'main');
+  run('git', 'config', 'user.email', 'e2e@polymerge.test');
+  run('git', 'config', 'user.name', 'polymerge e2e');
+  const init = run('polymerge', 'init');
+  check(init.status === 0 && /added\s+\*\.obj diff=polymerge merge=polymerge/.test(init.stdout) && !/not on your PATH/.test(init.stdout), `polymerge init sets the repository up (exit ${init.status})`);
+  fs.writeFileSync(path.join(repo, 'part.obj'), baseObj);
+  run('git', 'add', '-A');
+  run('git', 'commit', '-qm', 'base');
+  fs.writeFileSync(path.join(repo, 'part.obj'), withZ(baseObj, 2, 2, 0.5));
+  const d = run('git', 'diff', '--', 'part.obj');
+  check(d.status === 0 && /polymerge diff --git a\/part\.obj/.test(d.stdout) && /moved 1\b/.test(d.stdout), 'after init, plain `git diff` prints the polymerge report');
+  run('git', 'commit', '-qam', 'raise');
+  const again = run('polymerge', 'init');
+  check(again.status === 0 && /Nothing to do/.test(again.stdout), 'a second polymerge init changes nothing');
+}
+
 try {
   git('init', '-q', '-b', 'main');
   git('config', 'user.email', 'e2e@polymerge.test');
@@ -371,6 +399,7 @@ try {
 
   await checkGlb();
   await checkGlbAppearance();
+  checkInit();
 } catch (err) {
   console.error(err.stderr ?? err);
   failures++;

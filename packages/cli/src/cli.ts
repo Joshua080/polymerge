@@ -12,11 +12,13 @@
  *   polymerge git-diff <git external-diff args...>
  *   polymerge git-merge %O %A %B %P
  *   polymerge git-setup
+ *   polymerge init [--global] [--dry-run]
  */
 import { parseArgs } from 'node:util';
 import { runDiff } from './commands/diff.js';
 import { gitSetupText, runGitDiff } from './commands/git.js';
 import { runInfo } from './commands/info.js';
+import { runInit } from './commands/init.js';
 import { runGitMerge, runGitResolve, runMerge } from './commands/merge.js';
 import { createRequire } from 'node:module';
 import { MERGE_DEMOS, runDemo, runReview, runView } from './commands/view.js';
@@ -65,6 +67,8 @@ Usage:
                                              Merge review: ${MERGE_DEMOS.join(', ')} (default ${MERGE_DEMOS[0]})
                                              Diff: e.g. moved-part, grid-bump, units-inch-to-mm, mixed-topology-edit
   polymerge info <file>                      Print the normalised mesh summary
+  polymerge init [--global] [--dry-run]      Set git up for polymerge: .gitattributes and the drivers
+                                             (this repository; --global: all your repositories)
   polymerge git-diff <7 git args>            git external diff driver (diff.<name>.command)
   polymerge git-merge %O %A %B %P            git merge driver (merge.<name>.driver)
   polymerge git-setup                        Print the git configuration snippet
@@ -237,6 +241,15 @@ async function main(argv: string[]): Promise<number> {
     case 'git-setup':
       process.stdout.write(gitSetupText() + '\n');
       return 0;
+    case 'init': {
+      const { values, positionals } = parseArgs({
+        args: rest,
+        allowPositionals: true,
+        options: { global: { type: 'boolean' }, 'dry-run': { type: 'boolean' } },
+      });
+      if (positionals.length > 0) throw new UsageError(`polymerge init: takes no file arguments (got ${positionals.join(' ')})`);
+      return runInit({ global: values.global, dryRun: values['dry-run'] });
+    }
     default:
       process.stderr.write(`polymerge: unknown command "${command}"\n\n${HELP}`);
       return 2;

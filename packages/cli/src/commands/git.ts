@@ -48,21 +48,38 @@ export async function runGitDiff(args: string[]): Promise<number> {
   return 0;
 }
 
+/** What `polymerge init` writes and `polymerge git-setup` prints: .gitattributes lines… */
+export const GIT_ATTRIBUTES: readonly { pattern: string; attributes: string }[] = [
+  ...['stl', 'obj', 'gltf', 'glb'].map((e) => ({ pattern: `*.${e}`, attributes: 'diff=polymerge merge=polymerge' })),
+  // STEP: diff only (needs the optional occt-import-js). It is text, but a line-by-line merge
+  // corrupts it, so merge=binary keeps your side and marks the file conflicted instead.
+  { pattern: '*.step', attributes: 'diff=polymerge merge=binary' },
+  { pattern: '*.stp', attributes: 'diff=polymerge merge=binary' },
+];
+
+/** …and git config entries (the drivers). */
+export const GIT_CONFIG: readonly [key: string, value: string][] = [
+  ['diff.polymerge.command', 'polymerge git-diff'],
+  ['difftool.polymerge.cmd', 'polymerge view "$LOCAL" "$REMOTE" --name "$MERGED"'],
+  ['merge.polymerge.name', 'polymerge three-way 3D merge'],
+  ['merge.polymerge.driver', 'polymerge git-merge %O %A %B %P'],
+];
+
+/** A value for a shell command line, quoted the way the README shows it. */
+const shellArg = (v: string): string => (v.includes('"') ? `'${v}'` : `"${v}"`);
+
 export function gitSetupText(): string {
-  const exts = ['stl', 'obj', 'gltf', 'glb'];
   return [
+    '# Or let polymerge do both steps: "polymerge init" (this repository) or "polymerge init --global".',
+    '',
     '# 1) Tell git which files polymerge should diff and merge — add to .gitattributes:',
-    ...exts.map((e) => `*.${e} diff=polymerge merge=polymerge`),
+    ...GIT_ATTRIBUTES.filter((a) => !a.attributes.includes('merge=binary')).map((a) => `${a.pattern} ${a.attributes}`),
     '# STEP: diff only (needs the optional occt-import-js). It is text, but a line-by-line merge',
     '# corrupts it, so merge=binary keeps your side and marks the file conflicted instead.',
-    '*.step diff=polymerge merge=binary',
-    '*.stp diff=polymerge merge=binary',
+    ...GIT_ATTRIBUTES.filter((a) => a.attributes.includes('merge=binary')).map((a) => `${a.pattern} ${a.attributes}`),
     '',
     '# 2) Register the drivers (drop --global to scope them to one repo):',
-    'git config --global diff.polymerge.command "polymerge git-diff"',
-    `git config --global difftool.polymerge.cmd 'polymerge view "$LOCAL" "$REMOTE" --name "$MERGED"'`,
-    'git config --global merge.polymerge.name "polymerge three-way 3D merge"',
-    'git config --global merge.polymerge.driver "polymerge git-merge %O %A %B %P"',
+    ...GIT_CONFIG.map(([k, v]) => `git config --global ${k} ${shellArg(v)}`),
     '',
     '# 3) Use it:',
     'git diff -- model.stl                      # structural summary in the terminal',
