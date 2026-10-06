@@ -27,7 +27,12 @@ export const TIER_LABELS = {
   3: 'point cloud (ICP + nearest surface)',
 };
 
-const COLOR = { moved: '🟨', added: '🟩', removed: '🟥', warn: '⚠️' };
+/** Status squares per palette (the `palette` input): they match the image's colours. */
+const COLORS = {
+  standard: { moved: '🟨', added: '🟩', removed: '🟥', warn: '⚠️' },
+  colorblind: { moved: '🟨', added: '🟦', removed: '🟧', warn: '⚠️' },
+};
+const COLOR = COLORS.standard;
 
 /** Control, invisible and bidirectional-override characters, as code point ranges. */
 const HIDDEN_RANGES = [
@@ -112,15 +117,15 @@ function fileCell(f) {
   return f.oldPath ? `${codeSpan(f.oldPath, { table: true })} → ${codeSpan(f.path, { table: true })}` : codeSpan(f.path, { table: true });
 }
 
-function statusCell(f, limits) {
+function statusCell(f, limits, C = COLOR) {
   const faces = (side) => (f.mesh[side] ? ` · ${plural(f.mesh[side].faces, 'face')}` : '');
   switch (f.status) {
     case 'rendered':
     case 'render-failed': {
-      const warn = f.status === 'render-failed' ? `${COLOR.warn} image failed · ` : '';
-      if (f.change === 'added') return `${warn || `${COLOR.added} `}added${faces('after')}`;
-      if (f.change === 'deleted') return `${warn || `${COLOR.removed} `}deleted${faces('before')}`;
-      return `${warn || `${COLOR.moved} `}${f.change === 'renamed' ? 'renamed · ' : ''}${f.diff ? changeFacts(f.diff) : 'changed'}`;
+      const warn = f.status === 'render-failed' ? `${C.warn} image failed · ` : '';
+      if (f.change === 'added') return `${warn || `${C.added} `}added${faces('after')}`;
+      if (f.change === 'deleted') return `${warn || `${C.removed} `}deleted${faces('before')}`;
+      return `${warn || `${C.moved} `}${f.change === 'renamed' ? 'renamed · ' : ''}${f.diff ? changeFacts(f.diff) : 'changed'}`;
     }
     case 'same-content':
       return f.change === 'renamed' ? 'renamed, content unchanged' : f.modeChanged ? 'file mode changed, content unchanged' : 'content unchanged';
@@ -201,7 +206,9 @@ function exploreBlock(result, files) {
     const after = shellQuote(`${result.head.slice(0, 12)}:${f.path}`);
     if (!before || !after) continue;
     const run = ext === 'step' || ext === 'stp' ? RUN_COMMAND_STEP : RUN_COMMAND;
-    groups.push([`git show ${before} > before.${ext}`, `git show ${after} > after.${ext}`, `${run} view before.${ext} after.${ext}`].join('\n'));
+    // The same view as the image: an up axis chosen for every model, and the palette.
+    const flags = `${result.upAxis === 'y' || result.upAxis === 'z' ? ` --up ${result.upAxis}` : ''}${result.palette === 'colorblind' ? ' --palette colorblind' : ''}`;
+    groups.push([`git show ${before} > before.${ext}`, `git show ${after} > after.${ext}`, `${run} view before.${ext} after.${ext}${flags}`].join('\n'));
   }
   if (groups.length === 0) return [];
   return [
@@ -227,15 +234,16 @@ function render(result, { imageUrl, baseRef, maxSections, maxRows }) {
   const lines = [MARKER, '### 3D model diff', ''];
   const against = baseRef ? `${codeSpan(baseRef, { max: 80 })} (merge base ${short(result.base)})` : `the merge base ${short(result.base)}`;
   lines.push(`**${files.length === 1 ? '1 model file' : `${int(files.length)} model files`} changed** against ${against}.`);
+  const C = COLORS[result.palette ?? 'standard'] ?? COLOR;
   const withImages = files.filter((f) => f.image && imageUrl(f.image));
   if (withImages.length > 0) {
-    lines.push(`<sub>Before on the left, after on the right, seen from the same camera. ${COLOR.moved} moved · ${COLOR.added} added · ${COLOR.removed} removed · grey unchanged</sub>`);
+    lines.push(`<sub>Before on the left, after on the right, seen from the same camera. ${C.moved} moved · ${C.added} added · ${C.removed} removed · grey unchanged</sub>`);
   }
   lines.push('');
   const single = files.length === 1 && files[0].image;
   if (!single) {
     lines.push('| File | Change |', '| --- | --- |');
-    for (const f of files.slice(0, maxRows)) lines.push(`| ${fileCell(f)} | ${statusCell(f, result.limits)} |`);
+    for (const f of files.slice(0, maxRows)) lines.push(`| ${fileCell(f)} | ${statusCell(f, result.limits, C)} |`);
     if (files.length > maxRows) lines.push(`| … | ${plural(files.length - maxRows, 'more file')} |`);
     lines.push('');
   }

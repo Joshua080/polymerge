@@ -485,6 +485,33 @@ export const MERGE_COLORS = {
   conflict: '#f97316',
 } as const;
 
+/** Colour schemes the viewer, the CLI and the PR action can draw with. */
+export type PaletteName = 'standard' | 'colorblind';
+export const PALETTE_NAMES: readonly PaletteName[] = ['standard', 'colorblind'];
+
+/**
+ * Diff colours per palette. 'standard' is DIFF_COLORS. 'colorblind' keeps the meanings (blue =
+ * added, orange = removed, yellow = moved, grey = unchanged) but stays apart for red-green and
+ * blue-yellow colour blindness: the worst pair of the four is OKLab ΔE×100 22.4 under normal,
+ * protan and deutan vision (Machado 2009 simulation) and 17.7 under tritan, every colour ≥ 3:1
+ * against the viewer's background. (Standard red ↔ green is 7.4 under deutan vision.) Yellow is
+ * deliberately light: faces are shaded by the lights, and a darker yellow reads as brown.
+ */
+export const DIFF_PALETTES: Readonly<Record<PaletteName, Readonly<Record<keyof typeof DIFF_COLORS, string>>>> = {
+  standard: DIFF_COLORS,
+  colorblind: { added: '#3f69d3', removed: '#b0540e', modified: '#f5ea5c', unchanged: '#a9afb4' },
+};
+
+/**
+ * Merge review colours per palette. 'colorblind': ours blue, theirs yellow, the same on both
+ * pale, conflict burnt orange; worst pair ΔE 19.6 (normal, protan, deutan), 13.9 (tritan).
+ * (Standard ours ↔ theirs, blue ↔ purple, is 0.9 under deutan vision: indistinguishable.)
+ */
+export const MERGE_PALETTES: Readonly<Record<PaletteName, Readonly<Record<keyof typeof MERGE_COLORS, string>>>> = {
+  standard: MERGE_COLORS,
+  colorblind: { unchanged: '#a9afb4', ours: '#0280f7', theirs: '#f2cf3b', both: '#e0f6fe', conflict: '#b2511e' },
+};
+
 export interface IDiffLogger {
   info(message: string): void;
   warn(message: string): void;

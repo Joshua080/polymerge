@@ -94,6 +94,18 @@ describe('buildComment', () => {
     );
   });
 
+  it('uses the colour-blind squares, and opens the local view the same way, when the images did', () => {
+    const r = { ...result([file('models/a.obj', { image: '0.png' }), file('models/b.stl', { change: 'added', image: '1.png', diff: null, mesh: { before: null, after: { vertices: 8, faces: 12 } } })]), palette: 'colorblind' as const, upAxis: 'z' as const };
+    const body = buildComment(r, { imageUrl: url });
+    expect(body).toContain('🟨 moved · 🟦 added · 🟧 removed · grey unchanged');
+    expect(body).toContain('| 🟦 added · 12 faces |');
+    expect(body).not.toContain('🟩');
+    expect(body).toContain('npx @joshuahurley/polymerge view before.obj after.obj --up z --palette colorblind');
+    const standard = buildComment(result([file('models/a.obj', { image: '0.png' })]), { imageUrl: url });
+    expect(standard).toContain('🟨 moved · 🟩 added · 🟥 removed');
+    expect(standard).toContain('polymerge view before.obj after.obj\n');
+  });
+
   it('the command for a STEP file brings the optional OpenCascade reader along', () => {
     const body = buildComment(result([file('cad/bracket.STP', { image: '0.png' })]), { imageUrl: url });
     expect(body).toContain('npx -p @joshuahurley/polymerge -p occt-import-js@0.0.23 polymerge view before.stp after.stp');

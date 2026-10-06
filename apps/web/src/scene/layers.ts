@@ -5,7 +5,6 @@
  */
 import * as THREE from 'three';
 import {
-  DIFF_COLORS,
   FaceStatus,
   VertexStatus,
   type IDiffResult,
@@ -13,35 +12,44 @@ import {
   type FaceStatusCode,
   type Mat4,
 } from 'polymerge-core';
+import { diffColors, paletteName } from '../view-options.js';
 
 export type RGB = [r: number, g: number, b: number];
 
-/** DIFF_COLORS converted from sRGB hex into three's linear working space (for vertex colours). */
+/** An sRGB hex colour in three's linear working space (for vertex colours). */
 export function linearColor(hex: string): RGB {
   const c = new THREE.Color().setStyle(hex);
   return [c.r, c.g, c.b];
 }
 
-export const LINEAR = {
-  added: linearColor(DIFF_COLORS.added),
-  removed: linearColor(DIFF_COLORS.removed),
-  modified: linearColor(DIFF_COLORS.modified),
-  unchanged: linearColor(DIFF_COLORS.unchanged),
-} as const;
+type DiffLinear = Readonly<Record<'added' | 'removed' | 'modified' | 'unchanged', RGB>>;
+const linearCache = new Map<string, DiffLinear>();
+
+/** The current palette's diff colours, linear (view-options.ts). Read when a layer is built. */
+export function diffLinear(): DiffLinear {
+  const name = paletteName();
+  let out = linearCache.get(name);
+  if (!out) {
+    const c = diffColors();
+    out = { added: linearColor(c.added), removed: linearColor(c.removed), modified: linearColor(c.modified), unchanged: linearColor(c.unchanged) };
+    linearCache.set(name, out);
+  }
+  return out;
+}
 
 /** Base / "old" accent used for the ghost and the tail of displacement vectors (not a status colour). */
 export const BASE_ACCENT = '#93c5fd';
 
-export function faceStatusColor(status: number): RGB {
+export function faceStatusColor(status: number, colors: DiffLinear = diffLinear()): RGB {
   switch (status as FaceStatusCode) {
     case FaceStatus.Added:
-      return LINEAR.added;
+      return colors.added;
     case FaceStatus.Removed:
-      return LINEAR.removed;
+      return colors.removed;
     case FaceStatus.Modified:
-      return LINEAR.modified;
+      return colors.modified;
     default:
-      return LINEAR.unchanged;
+      return colors.unchanged;
   }
 }
 
@@ -113,9 +121,10 @@ export function buildFaceLayer(
   const ox = origin.x;
   const oy = origin.y;
   const oz = origin.z;
+  const colors = diffLinear();
   for (let k = 0; k < n; k++) {
     const f = faceMap[k];
-    const c = faceStatusColor(status ? status[f] : FaceStatus.Unchanged);
+    const c = faceStatusColor(status ? status[f] : FaceStatus.Unchanged, colors);
     for (let j = 0; j < 3; j++) {
       const v = faces[f * 3 + j] * 3;
       const o = k * 9 + j * 3;
@@ -181,11 +190,12 @@ export function buildMarkers(
     col[k * 3 + 2] = c[2];
     k++;
   };
+  const colors = diffLinear();
   for (let i = 0; i < tvs.length; i++) {
-    if (tvs[i] === VertexStatus.Moved) put(target.positions, i, LINEAR.modified);
-    else if (tvs[i] === VertexStatus.Added) put(target.positions, i, LINEAR.added);
+    if (tvs[i] === VertexStatus.Moved) put(target.positions, i, colors.modified);
+    else if (tvs[i] === VertexStatus.Added) put(target.positions, i, colors.added);
   }
-  for (let i = 0; i < bvs.length; i++) if (bvs[i] === VertexStatus.Removed) put(alignedBase, i, LINEAR.removed);
+  for (let i = 0; i < bvs.length; i++) if (bvs[i] === VertexStatus.Removed) put(alignedBase, i, colors.removed);
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute('position', new THREE.BufferAttribute(pos, 3));
   geometry.setAttribute('color', new THREE.BufferAttribute(col, 3));
@@ -209,7 +219,7 @@ export function buildDisplacementVectors(
   const pos = new Float32Array(n * 6);
   const col = new Float32Array(n * 6);
   const tail = linearColor(BASE_ACCENT);
-  const head = LINEAR.modified;
+  const head = diffLinear().modified;
   let k = 0;
   for (let i = 0; i < tvs.length; i++) {
     const b = t2b[i];

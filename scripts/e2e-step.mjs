@@ -14,8 +14,9 @@
  *       - declining is reported as such;
  *       - the merge review refuses STEP without asking or downloading anything.
  *  4. The pull-request action (action/render.mjs) on a branch that edits a .step file and adds a
- *     .stp one: both rendered, the edit matched as the moved hole, and the comment's "explore"
- *     command brings OpenCascade along.
+ *     .stp one, with palette: colorblind: both rendered Z up, the edit matched as the moved hole,
+ *     the comment's colour key in the same palette, and its "explore" command brings OpenCascade
+ *     along.
  *
  *   node scripts/e2e-step.mjs     (needs `npm run build`, and occt-import-js installed: a
  *                                  devDependency of the monorepo)
@@ -91,6 +92,10 @@ try {
     check(Math.abs((hook?.stats?.maxDisplacement ?? 0) - 5) < 1e-4, `by exactly 5 mm (max ${hook?.stats?.maxDisplacement})`);
     check(JSON.stringify(tessellation) === JSON.stringify(['0.05 mm', '0.05 mm']), `both versions share one tolerance (${JSON.stringify(tessellation)})`);
     check(foreign.length === 0, `OpenCascade came from the CLI, nothing from another origin (${foreign.slice(0, 2).join(', ')})`);
+    check(hook?.view?.up === 'z' && (await page.inputValue('#up-axis')) === 'z', `STEP opens Z up, the CAD convention (${JSON.stringify(hook?.view)})`);
+    await page.selectOption('#up-axis', 'y');
+    const turned = await readHook(page);
+    check(turned?.view?.up === 'y' && new URL(page.url()).searchParams.get('up') === 'y', 'switching to Y up turns it and keeps the choice in the address');
     await page.close();
     viewer.stop();
     viewer = null;
@@ -252,7 +257,7 @@ function actionRender() {
     const r = spawnSync(process.execPath, [path.join(root, 'action/render.mjs')], {
       encoding: 'utf8',
       timeout: 240_000,
-      env: { ...process.env, GITHUB_EVENT_NAME: 'pull_request', GITHUB_EVENT_PATH: event, GITHUB_WORKSPACE: repo, GITHUB_OUTPUT: path.join(tmp, 'output.txt'), GITHUB_STEP_SUMMARY: summary, POLYMERGE_OUT: out },
+      env: { ...process.env, GITHUB_EVENT_NAME: 'pull_request', GITHUB_EVENT_PATH: event, GITHUB_WORKSPACE: repo, GITHUB_OUTPUT: path.join(tmp, 'output.txt'), GITHUB_STEP_SUMMARY: summary, POLYMERGE_OUT: out, POLYMERGE_PALETTE: 'colorblind' },
     });
     check(r.status === 0, `the action's render step exits 0 on STEP files${r.status ? `:\n${r.stdout}${r.stderr}` : ''}`);
     const result = JSON.parse(fs.readFileSync(path.join(out, 'result.json'), 'utf8'));
@@ -266,11 +271,14 @@ function actionRender() {
     for (const [i, f] of images.entries()) if (f && fs.existsSync(f)) fs.copyFileSync(f, path.join(root, 'apps/web/e2e/screenshots', `action-step-${i}.png`));
     const log = JSON.parse(fs.readFileSync(path.join(out, 'render-log.json'), 'utf8'));
     check(log.find((l) => l.path === 'models/plate.step')?.tier === 2, 'the image was drawn from the same match as the summary (Tier 2)');
+    const views = log.map((l) => l.view);
+    check(views.length === 2 && views.every((v) => v?.up === 'z' && v?.palette === 'colorblind'), `up-axis auto turns STEP Z up, and palette: colorblind reaches the images (${JSON.stringify(views)})`);
     const comment = fs.readFileSync(summary, 'utf8');
     check(
-      comment.includes(`npx -p @joshuahurley/polymerge -p occt-import-js@0.0.23 polymerge view before.step after.step`),
+      comment.includes(`npx -p @joshuahurley/polymerge -p occt-import-js@0.0.23 polymerge view before.step after.step --palette colorblind`),
       "the comment's explore command fetches OpenCascade too",
     );
+    check(result.palette === 'colorblind' && comment.includes('🟦 added'), "the comment's status squares match the colour-blind images (🟦 added)");
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }

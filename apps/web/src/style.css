@@ -9,6 +9,17 @@
   --danger: #ef4444;
   --radius: 8px;
   --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;
+  /* Diff and merge colours: view-options.ts sets these from the current palette (DIFF_PALETTES /
+     MERGE_PALETTES in polymerge-core); these defaults are the standard palette. */
+  --pm-added: #22c55e;
+  --pm-removed: #ef4444;
+  --pm-modified: #facc15;
+  --pm-unchanged: #9ca3af;
+  --pm-merge-unchanged: #9ca3af;
+  --pm-ours: #3b82f6;
+  --pm-theirs: #a855f7;
+  --pm-both: #14b8a6;
+  --pm-conflict: #f97316;
   color-scheme: dark;
 }
 
@@ -205,6 +216,11 @@ select {
 
 .buttons button {
   flex: 1;
+}
+
+.view-options select {
+  flex: 1;
+  min-width: 0;
 }
 
 .drops {

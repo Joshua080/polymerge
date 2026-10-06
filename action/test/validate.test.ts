@@ -70,6 +70,11 @@ describe('validateResult', () => {
     expect('tierName' in v.files[0].diff!).toBe(false);
   });
 
+  it('defaults the view settings of an older result, and keeps valid ones', () => {
+    expect(validateResult(good())).toMatchObject({ palette: 'standard', upAxis: 'auto' });
+    expect(validateResult({ ...good(), palette: 'colorblind', upAxis: 'z' })).toMatchObject({ palette: 'colorblind', upAxis: 'z' });
+  });
+
   const broken: [string, (r: any) => void][] = [
     ['another schema', (r) => (r.schema = 2)],
     ['a short commit id', (r) => (r.head = 'abc1234')],
@@ -89,6 +94,8 @@ describe('validateResult', () => {
     ['an unknown unit', (r) => (r.files[0].diff.transform.units.to = 'parsec')],
     ['too many parts', (r) => (r.files[0].diff.parts = Array.from({ length: 21 }, () => ({ name: null, rotationDeg: 0, distance: 0 })))],
     ['too many files', (r) => (r.files = Array.from({ length: LIMITS.files + 1 }, () => good().files[1]))],
+    ['an unknown palette', (r) => (r.palette = 'rainbow')],
+    ['an unknown up axis', (r) => (r.upAxis = 'x')],
   ];
   for (const [what, edit] of broken) {
     it(`rejects ${what}`, () => {

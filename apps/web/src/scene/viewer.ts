@@ -6,10 +6,15 @@
  * Merge review (showMerge) reuses the same stage: the merged mesh coloured by who shaped each
  * face, an outline of the selected conflict region and ghost previews of its versions.
  * World space == the MERGED frame.
+ *
+ * "Model space" below is that target (or merged) space. Scene world space equals it when Y is up;
+ * with Z up (CAD, 3D printing) the content is turned −90° about X around the model's centre, so
+ * every point or box coming in or going out is converted (toWorld / toModel).
  */
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { DIFF_COLORS, FaceStatus, type FaceStatusCode, type IDiffResult, type IMesh, type Vec3 } from 'polymerge-core';
+import { FaceStatus, type FaceStatusCode, type IDiffResult, type IMesh, type Vec3 } from 'polymerge-core';
+import { diffColors, type UpAxis } from '../view-options.js';
 import {
   BASE_ACCENT,
   alignPositions,
@@ -112,6 +117,14 @@ const BACKGROUND = '#0f141d';
 /** Default view direction, from the look-at point towards the camera: a 3/4 view from above. */
 export const DEFAULT_VIEW: Vec3 = [0.9, 0.62, 1.25];
 
+/**
+ * DEFAULT_VIEW in model space for an up axis: the same 3/4 view from above on screen. With Z up
+ * that is from the front (−Y), the right and above, like a CAD tool's default view.
+ */
+export function defaultView(up: UpAxis): Vec3 {
+  return up === 'z' ? [DEFAULT_VIEW[0], -DEFAULT_VIEW[2], DEFAULT_VIEW[1]] : [...DEFAULT_VIEW];
+}
+
 export class DiffViewer {
   readonly renderer: THREE.WebGLRenderer;
   readonly scene = new THREE.Scene();
@@ -150,6 +163,14 @@ export class DiffViewer {
   private origin = new THREE.Vector3();
   private sceneRadius = 1;
   private home: { position: THREE.Vector3; target: THREE.Vector3 } | null = null;
+  private up: UpAxis = 'y';
+  /** The last framing (model space; a null direction = the up axis's default view). */
+  private lastFit: { box: THREE.Box3; direction: Vec3 | null } | null = null;
+  /** Redraws the current content (the last show* call), to repaint it in a new palette. */
+  private replay: (() => void) | null = null;
+  /** While set, framing updates "home" but leaves the camera where the user put it. */
+  private holdCamera = false;
+  private selectionState: { from: Vec3 | null; to: Vec3 | null } | null = null;
   private dirty = true;
   private raf = 0;
   private renderWaiters: (() => void)[] = [];
@@ -168,7 +189,7 @@ export class DiffViewer {
       polygonOffsetUnits: 1,
     }),
     removed: new THREE.MeshLambertMaterial({
-      color: DIFF_COLORS.removed,
+      color: diffColors().removed,
       flatShading: true,
       side: THREE.DoubleSide,
       // Behind coincident target faces: "what is there now" wins, red shows what is gone.
@@ -308,6 +329,7 @@ export class DiffViewer {
   /** Show one mesh in neutral grey (only one side loaded so far). */
   showPreview(mesh: IMesh, side: 'base' | 'target'): void {
     this.clear();
+    this.replay = () => this.showPreview(mesh, side);
     this.previewMode = true;
     this.origin.copy(centerOf(mesh.positions));
     this.content.position.copy(this.origin);
@@ -327,6 +349,7 @@ export class DiffViewer {
   /** Show a full diff. Returns per-layer element counts for the UI. */
   showDiff(base: IMesh, target: IMesh, result: IDiffResult): ILayerCounts {
     this.clear();
+    this.replay = () => void this.showDiff(base, target, result);
     this.previewMode = false;
     const matrix = isIdentityMatrix(result.alignment.matrix) ? null : result.alignment.matrix;
     const alignedBase = alignPositions(base.positions, matrix);
@@ -411,6 +434,7 @@ export class DiffViewer {
    */
   showSide(base: IMesh, target: IMesh, result: IDiffResult, side: 'base' | 'target'): void {
     this.clear();
+    this.replay = () => this.showSide(base, target, result, side);
     this.previewMode = false;
     const matrix = isIdentityMatrix(result.alignment.matrix) ? null : result.alignment.matrix;
     const alignedBase = alignPositions(base.positions, matrix);
@@ -426,6 +450,7 @@ export class DiffViewer {
   /** Show one whole mesh in a single status colour (an added file green, a deleted one red). */
   showSingle(mesh: IMesh, side: 'base' | 'target', status: FaceStatusCode): void {
     this.clear();
+    this.replay = () => this.showSingle(mesh, side, status);
     this.previewMode = false;
     this.origin.copy(centerOf(mesh.positions));
     this.content.position.copy(this.origin);
@@ -446,11 +471,66 @@ export class DiffViewer {
   }
 
   /**
-   * Frame `box` looking along `direction` (from the box towards the camera). Deterministic:
-   * two viewers of the same size framing the same box the same way get identical cameras.
+   * Frame `box` looking along `direction` (from the box towards the camera; both in model space;
+   * default: the up axis's default view). Deterministic: two viewers of the same size framing the
+   * same box the same way get identical cameras.
    */
-  frame(box: THREE.Box3, direction: Vec3 = DEFAULT_VIEW): void {
+  frame(box: THREE.Box3, direction?: Vec3): void {
     this.fit(box, direction);
+  }
+
+  /** Which model axis points up on screen. Changing it turns the model and re-frames it. */
+  setUpAxis(up: UpAxis): void {
+    if (up === this.up) return;
+    this.up = up;
+    this.content.rotation.x = up === 'z' ? -Math.PI / 2 : 0;
+    this.content.updateMatrixWorld(true);
+    if (this.lastFit) this.fit(this.lastFit.box, this.lastFit.direction ?? undefined);
+    this.dirty = true;
+  }
+
+  get upAxis(): UpAxis {
+    return this.up;
+  }
+
+  /**
+   * Repaint the content in the current palette (view-options.ts applyPalette first). The camera,
+   * the layer toggles and the selection stay as they are. The merge review redraws itself.
+   */
+  refreshColors(): void {
+    this.materials.removed.color.set(diffColors().removed);
+    const replay = this.replay;
+    const selection = this.selectionState;
+    if (replay) {
+      this.holdCamera = true;
+      try {
+        replay();
+      } finally {
+        this.holdCamera = false;
+      }
+      if (selection) this.setSelection(selection);
+    }
+    this.dirty = true;
+  }
+
+  /** Model space → scene world (the content's rotation about the model centre). */
+  private modelToWorld(): THREE.Matrix4 {
+    this.content.updateMatrixWorld(true);
+    return this.content.matrixWorld.clone().multiply(new THREE.Matrix4().makeTranslation(-this.origin.x, -this.origin.y, -this.origin.z));
+  }
+
+  toWorld(p: Vec3): THREE.Vector3 {
+    return new THREE.Vector3(p[0], p[1], p[2]).applyMatrix4(this.modelToWorld());
+  }
+
+  toModel(world: THREE.Vector3): Vec3 {
+    const v = world.clone().applyMatrix4(this.modelToWorld().invert());
+    return [v.x, v.y, v.z];
+  }
+
+  /** The camera position in model space. */
+  eyeInModel(): Vec3 {
+    return this.toModel(this.camera.position);
   }
 
   /** Camera position, look-at target, fov, aspect, near and far (to compare two viewers' framing). */
@@ -462,6 +542,7 @@ export class DiffViewer {
   /** Remove all model content (keeps camera). */
   clear(): void {
     this.setSelection(null);
+    this.replay = null;
     const geometries = new Set<THREE.BufferGeometry>();
     for (const obj of Object.values(this.objects)) {
       if (obj instanceof THREE.Object3D) {
@@ -497,7 +578,7 @@ export class DiffViewer {
    */
   showMerge(merged: IMesh, kinds: MergeFaceKind[], base: IMesh, baseToMerged: THREE.Matrix4, opts: { refit: boolean }): IMergeLayer {
     const keep = !opts.refit && !!this.merge.mesh;
-    this.clear();
+    this.clear(); // no replay: the merge review redraws itself (highlight and ghosts included)
     this.previewMode = false;
     if (!keep) {
       this.origin.copy(centerOf(merged.positions));
@@ -603,9 +684,9 @@ export class DiffViewer {
     this.dirty = true;
   }
 
-  /** Screen position (CSS pixels, relative to the canvas) of a world point, or null if behind the camera. */
+  /** Screen position (CSS pixels, relative to the canvas) of a model-space point, or null if behind the camera. */
   project(p: Vec3): [number, number] | null {
-    const v = new THREE.Vector3(p[0], p[1], p[2]).project(this.camera);
+    const v = this.toWorld(p).project(this.camera);
     if (v.z > 1) return null;
     const rect = this.renderer.domElement.getBoundingClientRect();
     return [((v.x + 1) / 2) * rect.width, ((1 - v.y) / 2) * rect.height];
@@ -646,6 +727,7 @@ export class DiffViewer {
 
   /** Highlight a vertex change: ring at `to` (target), smaller ring at `from` (aligned base), line between. */
   setSelection(sel: { from: Vec3 | null; to: Vec3 | null } | null): void {
+    this.selectionState = sel;
     const { to, from, line } = this.selection;
     const local = (p: Vec3) => new THREE.Vector3(p[0], p[1], p[2]).sub(this.origin);
     to.visible = !!sel?.to;
@@ -675,7 +757,7 @@ export class DiffViewer {
     if (!hit || hit.faceIndex == null) return null;
     const p = this.pickableOf(hit.object)!;
     const face = p.faceMap ? p.faceMap[hit.faceIndex] : hit.faceIndex;
-    const point: Vec3 = [hit.point.x, hit.point.y, hit.point.z];
+    const point: Vec3 = this.toModel(hit.point);
     let best = -1;
     let bestD = Infinity;
     for (let j = 0; j < 3; j++) {
@@ -708,13 +790,22 @@ export class DiffViewer {
   // Camera
   // -------------------------------------------------------------------------
 
-  /** Frame `box` seen from `direction` (the default 3/4 view), at the distance where all 8 box corners fit with a margin. */
-  private fit(box: THREE.Box3, direction: Vec3 = DEFAULT_VIEW): void {
-    if (box.isEmpty()) box = new THREE.Box3(new THREE.Vector3(-1, -1, -1), new THREE.Vector3(1, 1, 1));
+  /**
+   * Frame `box` (model space) seen from `direction` (model space; default: the up axis's 3/4
+   * view), at the distance where all 8 box corners fit with a margin.
+   */
+  private fit(modelBox: THREE.Box3, direction?: Vec3): void {
+    this.lastFit = { box: modelBox.clone(), direction: direction ?? null };
+    const toWorld = this.modelToWorld();
+    // A turn of 0° or −90° about X keeps an axis-aligned box axis-aligned: no growth.
+    const box = modelBox.isEmpty()
+      ? new THREE.Box3(new THREE.Vector3(-1, -1, -1), new THREE.Vector3(1, 1, 1))
+      : modelBox.clone().applyMatrix4(toWorld);
     const center = box.getCenter(new THREE.Vector3());
     const radius = Math.max(box.getSize(new THREE.Vector3()).length() / 2, 1e-9);
     this.sceneRadius = radius;
-    const zAxis = new THREE.Vector3(...direction).normalize(); // from target towards the camera
+    // From the target towards the camera, in world space.
+    const zAxis = new THREE.Vector3(...(direction ?? defaultView(this.up))).transformDirection(toWorld);
     const xAxis = new THREE.Vector3().crossVectors(new THREE.Vector3(0, 1, 0), zAxis).normalize();
     const yAxis = new THREE.Vector3().crossVectors(zAxis, xAxis);
     const margin = 0.82;
@@ -731,7 +822,7 @@ export class DiffViewer {
     this.home = { target: center.clone(), position: center.clone().addScaledVector(zAxis, distance) };
     this.controls.maxDistance = distance * 20;
     this.controls.minDistance = radius * 1e-4;
-    this.resetView();
+    if (!this.holdCamera) this.resetView();
   }
 
   resetView(): void {
@@ -744,9 +835,9 @@ export class DiffViewer {
     this.dirty = true;
   }
 
-  /** Orbit around a point (target space) without changing the viewing distance. */
+  /** Orbit around a point (model space) without changing the viewing distance. */
   focus(point: Vec3): void {
-    const p = new THREE.Vector3(point[0], point[1], point[2]);
+    const p = this.toWorld(point);
     const offset = p.clone().sub(this.controls.target);
     this.controls.target.add(offset);
     this.camera.position.add(offset);

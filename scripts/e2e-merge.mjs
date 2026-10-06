@@ -7,7 +7,9 @@
  *     blue / purple; clicking "Theirs" resolves it (orange gone, --pick in the command), and the
  *     downloaded STL and GLB have theirs' boss height.
  *  2. The thin-wall example (a collision conflict): clicking the orange region IN THE 3D VIEW
- *     selects it, and the key "1" resolves it to ours.
+ *     selects it, and the key "1" resolves it to ours. Then again with the model turned Z up and
+ *     the colour-blind palette (?up=z&palette=colorblind): the click must still land, which needs
+ *     the screen point and the pick to convert between model and world space.
  *  3. The mixed-choices example: two conflicts whose mixed resolution collides → a warning.
  *
  *   node scripts/e2e-merge.mjs      (needs `npm run build` first)
@@ -223,6 +225,25 @@ try {
     h = await hook(p2);
     check(h.merge?.conflicts[0].resolution === 'ours' && h.merge.warnings.length === 0, 'key "1" resolves it to ours, with no warning');
     await p2.close();
+
+    dog.mark('2b. thin-wall example, Z up, colour-blind palette');
+    const p2b = await browser.newPage({ viewport: { width: 1280, height: 800 } });
+    await p2b.goto(`${origin}/?mode=merge&demo=thin-wall&up=z&palette=colorblind`);
+    await ready(p2b);
+    h = await hook(p2b);
+    check(h.view?.up === 'z' && h.view?.palette === 'colorblind', `?up=z&palette=colorblind reach the review (${JSON.stringify(h.view)})`);
+    check((await p2b.inputValue('#up-axis')) === 'z' && (await p2b.inputValue('#palette')) === 'colorblind', 'the view menus show them');
+    await p2b.keyboard.press('Escape');
+    h = await hook(p2b);
+    const atZ = h.merge?.conflicts[0].screen;
+    const boxZ = await p2b.locator('canvas').boundingBox();
+    check(!!atZ && JSON.stringify(atZ) !== JSON.stringify(at), `turned Z up, the conflict sits elsewhere on screen (${atZ?.map(Math.round)} vs ${at?.map(Math.round)})`);
+    if (atZ && boxZ) await p2b.mouse.click(boxZ.x + atZ[0], boxZ.y + atZ[1]);
+    h = await hook(p2b);
+    check(!!atZ && h.merge?.selected === 0, 'and clicking it there still selects it');
+    const cb = await colours(p2b, 'merge-thin-wall-zup-colorblind.png');
+    check(cb.conflict > 200, `the conflict is drawn in the colour-blind palette's burnt orange (${cb.conflict} px)`);
+    await p2b.close();
 
     dog.mark('3. mixed-choices example');
     // 3. Two conflicts whose MIXED resolution collides → a warning.

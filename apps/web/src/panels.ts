@@ -1,7 +1,6 @@
 /** Render functions for the side-panel sections and the inspector card. */
 import * as THREE from 'three';
 import {
-  DIFF_COLORS,
   FaceStatus,
   VertexStatus,
   stepInfo,
@@ -12,6 +11,7 @@ import {
   type Vec3,
 } from 'polymerge-core';
 import { h, swatch } from './dom.js';
+import { DIFF_CSS } from './view-options.js';
 import { fmtBytes, fmtInt, fmtMs, fmtNum, fmtSource, fmtVec } from './format.js';
 import type { ILoadedMesh } from './sources.js';
 import type { IPickHit } from './scene/viewer.js';
@@ -23,10 +23,10 @@ export const VERTEX_STATUS_LABEL: Record<number, string> = {
   [VertexStatus.Removed]: 'Removed',
 };
 export const VERTEX_STATUS_COLOR: Record<number, string> = {
-  [VertexStatus.Unchanged]: DIFF_COLORS.unchanged,
-  [VertexStatus.Moved]: DIFF_COLORS.modified,
-  [VertexStatus.Added]: DIFF_COLORS.added,
-  [VertexStatus.Removed]: DIFF_COLORS.removed,
+  [VertexStatus.Unchanged]: DIFF_CSS.unchanged,
+  [VertexStatus.Moved]: DIFF_CSS.modified,
+  [VertexStatus.Added]: DIFF_CSS.added,
+  [VertexStatus.Removed]: DIFF_CSS.removed,
 };
 export const FACE_STATUS_LABEL: Record<number, string> = {
   [FaceStatus.Unchanged]: 'Unchanged',
@@ -35,10 +35,10 @@ export const FACE_STATUS_LABEL: Record<number, string> = {
   [FaceStatus.Removed]: 'Removed',
 };
 export const FACE_STATUS_COLOR: Record<number, string> = {
-  [FaceStatus.Unchanged]: DIFF_COLORS.unchanged,
-  [FaceStatus.Modified]: DIFF_COLORS.modified,
-  [FaceStatus.Added]: DIFF_COLORS.added,
-  [FaceStatus.Removed]: DIFF_COLORS.removed,
+  [FaceStatus.Unchanged]: DIFF_CSS.unchanged,
+  [FaceStatus.Modified]: DIFF_CSS.modified,
+  [FaceStatus.Added]: DIFF_CSS.added,
+  [FaceStatus.Removed]: DIFF_CSS.removed,
 };
 
 /** Tier badge + counts table + displacement + alignment. */
@@ -46,10 +46,10 @@ export function renderSummary(result: IDiffResult): HTMLElement[] {
   const s = result.stats;
   const accepted = result.attempts.find((a) => a.accepted);
   const rows: [string, string, number, number][] = [
-    [DIFF_COLORS.unchanged, 'Unchanged', s.vertices.unchanged, s.faces.unchanged],
-    [DIFF_COLORS.modified, 'Moved / Modified', s.vertices.moved, s.faces.modified],
-    [DIFF_COLORS.added, 'Added', s.vertices.added, s.faces.added],
-    [DIFF_COLORS.removed, 'Removed', s.vertices.removed, s.faces.removed],
+    [DIFF_CSS.unchanged, 'Unchanged', s.vertices.unchanged, s.faces.unchanged],
+    [DIFF_CSS.modified, 'Moved / Modified', s.vertices.moved, s.faces.modified],
+    [DIFF_CSS.added, 'Added', s.vertices.added, s.faces.added],
+    [DIFF_CSS.removed, 'Removed', s.vertices.removed, s.faces.removed],
   ];
   const out: HTMLElement[] = [
     h(
@@ -155,7 +155,7 @@ function renderParts(result: IDiffResult): HTMLElement {
         h(
           'li',
           { title: p.source === 'registration' ? 'Re-matched by rigid registration (would otherwise read as removed + added)' : 'Already matched; one rigid motion explains it' },
-          swatch(DIFF_COLORS.modified),
+          swatch(DIFF_CSS.modified),
           `${p.baseName ?? p.targetName ?? `${p.baseVertices.length}-vertex part`}: `,
           `${fmtNum(p.rotationDeg, 3)}°, shift ${fmtVec(cleanVec(p.centroidShift, 1e-6 * Math.max(1, ...p.centroidShift.map(Math.abs))))}`,
           p.deformedVertices > 0 ? ` · ${p.deformedVertices} edited` : '',
@@ -272,7 +272,7 @@ export function renderInspector(m: IInspectorModel, actions: IInspectorActions):
 
   const body: (HTMLElement | null)[] = [];
   if (c) {
-    const color = VERTEX_STATUS_COLOR[c.status] ?? DIFF_COLORS.unchanged;
+    const color = VERTEX_STATUS_COLOR[c.status] ?? DIFF_CSS.unchanged;
     body.push(
       h('div', { class: 'insp-status' }, swatch(color), h('strong', null, VERTEX_STATUS_LABEL[c.status] ?? `status ${c.status}`)),
       h('div', { class: 'insp-map' }, link('base', c.baseIndex), h('span', { class: 'arrow' }, '→'), link('target', c.targetIndex)),
@@ -308,7 +308,7 @@ export function renderInspector(m: IInspectorModel, actions: IInspectorActions):
       h(
         'div',
         { class: 'insp-face' },
-        status != null ? swatch(FACE_STATUS_COLOR[status] ?? DIFF_COLORS.unchanged) : null,
+        status != null ? swatch(FACE_STATUS_COLOR[status] ?? DIFF_CSS.unchanged) : null,
         `picked ${m.hit.side} face #${m.hit.face}`,
         status != null ? ` · ${FACE_STATUS_LABEL[status] ?? status}` : '',
         m.hit.layer === 'ghost' ? ' · (ghost)' : '',

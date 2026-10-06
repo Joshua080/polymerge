@@ -56,3 +56,13 @@ describe('gitSetupText', () => {
     expect(t).toContain('difftool.polymerge.cmd');
   });
 });
+
+describe('view --up / --palette', () => {
+  it('turns them into the viewer\'s query, and refuses anything else', async () => {
+    const { viewParams } = await import('../src/commands/view.js');
+    expect(viewParams({})).toEqual({});
+    expect(viewParams({ up: 'Z', palette: 'colorblind' })).toEqual({ up: 'z', palette: 'colorblind' });
+    expect(() => viewParams({ up: 'x' })).toThrow(/--up must be y or z/);
+    expect(() => viewParams({ palette: 'rainbow' })).toThrow(/--palette must be standard or colorblind/);
+  });
+});

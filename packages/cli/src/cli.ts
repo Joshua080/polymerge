@@ -42,6 +42,9 @@ Usage:
       --host <addr>          Bind address (default 127.0.0.1)
       --name <file>          Display name for every side (git difftool passes $MERGED)
       --no-open              Do not launch a browser, just print the URL
+      --up <y|z>             Which axis of the model points up (default: Z for STEP, else Y;
+                             CAD and 3D-printing STL files are usually Z up)
+      --palette <name>       standard, or colorblind (blue / orange / yellow); also a menu in the viewer
       --web-dist <dir>       Path to a built viewer (default: the one bundled with polymerge)
   polymerge merge <base> <ours> <theirs> [options]   Three-way merge (exit 1 = unresolved conflicts)
       -o, --output <file>    Write the merged model: .stl, .obj, .glb or .gltf (glTF keeps the nodes)
@@ -121,6 +124,8 @@ async function main(argv: string[]): Promise<number> {
           name: { type: 'string' },
           'no-open': { type: 'boolean' },
           'web-dist': { type: 'string' },
+          up: { type: 'string' },
+          palette: { type: 'string' },
         },
       });
       if (positionals.length !== 2 && positionals.length !== 3) {
@@ -132,6 +137,8 @@ async function main(argv: string[]): Promise<number> {
         open: !values['no-open'],
         webDist: values['web-dist'],
         name: values.name,
+        up: values.up,
+        palette: values.palette,
       });
     }
     case 'demo': {
@@ -143,10 +150,12 @@ async function main(argv: string[]): Promise<number> {
           host: { type: 'string' },
           'no-open': { type: 'boolean' },
           'web-dist': { type: 'string' },
+          up: { type: 'string' },
+          palette: { type: 'string' },
         },
       });
       if (positionals.length > 1) throw new UsageError(`polymerge demo: expected at most 1 example name, got ${positionals.length}`);
-      return runDemo(positionals[0], { port: values.port, host: values.host, open: !values['no-open'], webDist: values['web-dist'] });
+      return runDemo(positionals[0], { port: values.port, host: values.host, open: !values['no-open'], webDist: values['web-dist'], up: values.up, palette: values.palette });
     }
     case 'info': {
       const { positionals } = parseArgs({ args: rest, allowPositionals: true, options: {} });
@@ -187,10 +196,12 @@ async function main(argv: string[]): Promise<number> {
           host: { type: 'string' },
           'no-open': { type: 'boolean' },
           'web-dist': { type: 'string' },
+          up: { type: 'string' },
+          palette: { type: 'string' },
         },
       });
       requirePositionals('review', positionals, 1);
-      return runReview(positionals[0], { port: values.port, host: values.host, open: !values['no-open'], webDist: values['web-dist'] });
+      return runReview(positionals[0], { port: values.port, host: values.host, open: !values['no-open'], webDist: values['web-dist'], up: values.up, palette: values.palette });
     }
     case 'resolve': {
       const { values, positionals } = parseArgs({
