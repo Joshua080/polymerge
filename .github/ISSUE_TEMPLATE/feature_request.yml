@@ -1,0 +1,34 @@
+name: Feature request
+description: Something polymerge should do, or do differently.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do?
+      description: The problem or the task, in your own words. "When I … I can't …" is a good start.
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would help?
+      description: How you imagine it working. Optional, if you're not sure.
+  - type: dropdown
+    id: area
+    attributes:
+      label: Which part?
+      multiple: true
+      options:
+        - Formats (reading or writing a file type)
+        - Diff (what counts as changed)
+        - Merge (conflicts, resolutions)
+        - Viewer
+        - git integration
+        - Pull-request Action
+        - Docs
+  - type: textarea
+    id: models
+    attributes:
+      label: Where do your models come from?
+      description: The CAD tool, 3D-printing slicer, game engine or scanner, and the file format you use. It helps decide what to support first.

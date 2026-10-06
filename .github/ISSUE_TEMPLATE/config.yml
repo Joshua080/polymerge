@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Report a security problem privately
+    url: https://github.com/Joshua080/polymerge/blob/main/SECURITY.md
+    about: Security problems go to a private report, not a public issue.
+  - name: Try polymerge in your browser
+    url: https://joshua080.github.io/polymerge/
+    about: Drop two versions of a model on the hosted viewer, no install needed.
