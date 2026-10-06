@@ -1,0 +1,62 @@
+# Step 1 of a release, from the Actions tab: "Prepare release" → Run workflow → the new version
+# (e.g. 0.3.0). It opens a pull request that sets every package.json and the lockfile to that
+# version and moves CHANGELOG.md's "Unreleased" notes under it. Merging the pull request is
+# step 2, the release itself (.github/workflows/release.yml).
+#
+# Needs, once: Settings → Actions → General → Workflow permissions → "Allow GitHub Actions to
+# create and approve pull requests". Without it the branch is still pushed and the run says where
+# to open the pull request by hand.
+name: Prepare release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: The new version, like 0.3.0 (no "v")
+        required: true
+        type: string
+
+permissions:
+  contents: write # push the release branch
+  pull-requests: write # open the pull request
+
+concurrency:
+  group: prepare-release
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    if: github.repository == 'Joshua080/polymerge'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      VERSION: ${{ inputs.version }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+
+      # Checks the version (x.y.z, newer than the current one) and that CHANGELOG.md has notes
+      # under "Unreleased" before it changes anything.
+      - name: Bump the version and date the changelog
+        run: node scripts/release.mjs prepare "$VERSION"
+
+      - name: Open the pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          branch="release/v$VERSION"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "$branch"
+          git commit -qam "Release $VERSION"
+          git push origin "$branch"
+          node scripts/release.mjs pr-body "$VERSION" > "$RUNNER_TEMP/body.md"
+          if ! url=$(gh pr create --base main --head "$branch" --title "Release $VERSION" --body-file "$RUNNER_TEMP/body.md"); then
+            echo "::error::Could not open the pull request. Allow it once: Settings → Actions → General → Workflow permissions → 'Allow GitHub Actions to create and approve pull requests'. The branch is pushed; open it by hand at https://github.com/$GITHUB_REPOSITORY/compare/main...$branch"
+            exit 1
+          fi
+          echo "Release pull request: $url" >> "$GITHUB_STEP_SUMMARY"
