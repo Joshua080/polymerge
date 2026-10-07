@@ -12,6 +12,7 @@ import {
   type FaceStatusCode,
   type Mat4,
 } from 'polymerge-core';
+import { sceneTheme } from '../theme.js';
 import { diffColors, paletteName } from '../view-options.js';
 
 export type RGB = [r: number, g: number, b: number];
@@ -38,7 +39,9 @@ export function diffLinear(): DiffLinear {
 }
 
 /** Base / "old" accent used for the ghost and the tail of displacement vectors (not a status colour). */
-export const BASE_ACCENT = '#93c5fd';
+export function baseAccent(): string {
+  return sceneTheme().baseAccent;
+}
 
 export function faceStatusColor(status: number, colors: DiffLinear = diffLinear()): RGB {
   switch (status as FaceStatusCode) {
@@ -218,7 +221,7 @@ export function buildDisplacementVectors(
   for (let i = 0; i < tvs.length; i++) if (tvs[i] === VertexStatus.Moved && t2b[i] >= 0) n++;
   const pos = new Float32Array(n * 6);
   const col = new Float32Array(n * 6);
-  const tail = linearColor(BASE_ACCENT);
+  const tail = linearColor(baseAccent());
   const head = diffLinear().modified;
   let k = 0;
   for (let i = 0; i < tvs.length; i++) {

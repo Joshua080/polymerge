@@ -15,8 +15,8 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { FaceStatus, type FaceStatusCode, type IDiffResult, type IMesh, type Vec3 } from 'polymerge-core';
 import { diffColors, type UpAxis } from '../view-options.js';
+import { onThemeChange, sceneTheme } from '../theme.js';
 import {
-  BASE_ACCENT,
   alignPositions,
   boxOf,
   buildDisplacementVectors,
@@ -112,8 +112,6 @@ interface IPickable {
   status: Uint8Array | null;
 }
 
-const BACKGROUND = '#0f141d';
-
 /** Default view direction, from the look-at point towards the camera: a 3/4 view from above. */
 export const DEFAULT_VIEW: Vec3 = [0.9, 0.62, 1.25];
 
@@ -177,6 +175,7 @@ export class DiffViewer {
   private pointerDown: { x: number; y: number; id: number } | null = null;
   private readonly raycaster = new THREE.Raycaster();
   private readonly resizeObserver: ResizeObserver;
+  private readonly stopThemeWatch: () => void;
 
   private readonly materials = {
     target: new THREE.MeshLambertMaterial({
@@ -198,28 +197,28 @@ export class DiffViewer {
       polygonOffsetUnits: 2,
     }),
     ghost: new THREE.MeshLambertMaterial({
-      color: BASE_ACCENT,
+      color: sceneTheme().baseAccent,
       flatShading: true,
       side: THREE.DoubleSide,
       transparent: true,
-      opacity: 0.16,
+      opacity: sceneTheme().ghostOpacity,
       depthWrite: false,
       polygonOffset: true,
       polygonOffsetFactor: 3,
       polygonOffsetUnits: 3,
     }),
     ghostWire: new THREE.MeshBasicMaterial({
-      color: BASE_ACCENT,
+      color: sceneTheme().baseAccent,
       wireframe: true,
       transparent: true,
       opacity: 0.28,
       depthWrite: false,
     }),
     wire: new THREE.MeshBasicMaterial({
-      color: '#0b0f17',
+      color: sceneTheme().wire,
       wireframe: true,
       transparent: true,
-      opacity: 0.5,
+      opacity: sceneTheme().wireOpacity,
       depthWrite: false,
     }),
     markers: withDepthBias(
@@ -248,12 +247,12 @@ export class DiffViewer {
       size: 18,
       sizeAttenuation: false,
       map: makeRingTexture(),
-      color: BASE_ACCENT,
+      color: sceneTheme().baseAccent,
       transparent: true,
       depthTest: false,
     }),
-    selLine: new THREE.LineBasicMaterial({ color: '#ffffff', depthTest: false, transparent: true }),
-    highlight: new THREE.MeshBasicMaterial({ color: '#ffffff', wireframe: true, transparent: true, opacity: 0.85, depthTest: false }),
+    selLine: new THREE.LineBasicMaterial({ color: sceneTheme().outline, depthTest: false, transparent: true }),
+    highlight: new THREE.MeshBasicMaterial({ color: sceneTheme().outline, wireframe: true, transparent: true, opacity: 0.85, depthTest: false }),
   };
   private readonly ghostMaterials = new Map<string, { fill: THREE.Material; wire: THREE.Material }>();
 
@@ -267,7 +266,7 @@ export class DiffViewer {
     this.container = container;
     this.renderer = new THREE.WebGLRenderer({ antialias: true });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
-    this.renderer.setClearColor(BACKGROUND, 1);
+    this.renderer.setClearColor(sceneTheme().background, 1);
     this.renderer.domElement.classList.add('viewer-canvas');
     container.appendChild(this.renderer.domElement);
 
@@ -318,8 +317,26 @@ export class DiffViewer {
 
     this.resizeObserver = new ResizeObserver(() => this.resize());
     this.resizeObserver.observe(container);
+    this.stopThemeWatch = onThemeChange(() => this.applyTheme());
     this.resize();
     this.loop();
+  }
+
+  /** Repaint in the current theme (theme.ts): background, edges, outlines, the base accent. */
+  private applyTheme(): void {
+    const t = sceneTheme();
+    const m = this.materials;
+    this.renderer.setClearColor(t.background, 1);
+    m.wire.color.set(t.wire);
+    m.wire.opacity = t.wireOpacity;
+    m.ghost.color.set(t.baseAccent);
+    m.ghost.opacity = t.ghostOpacity;
+    m.ghostWire.color.set(t.baseAccent);
+    m.selFrom.color.set(t.baseAccent);
+    m.selLine.color.set(t.outline);
+    m.highlight.color.set(t.outline);
+    // The displacement vectors carry the base accent in their vertex colours: rebuild them.
+    this.refreshColors();
   }
 
   // -------------------------------------------------------------------------
@@ -894,6 +911,7 @@ export class DiffViewer {
   dispose(): void {
     cancelAnimationFrame(this.raf);
     this.resizeObserver.disconnect();
+    this.stopThemeWatch();
     this.clear();
     this.controls.dispose();
     this.renderer.dispose();

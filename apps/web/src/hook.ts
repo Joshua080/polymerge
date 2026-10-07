@@ -88,8 +88,8 @@ export interface IPolymergeHook {
   diffWindow?: [number, number];
   /** The vertex currently shown in the inspector, if any. */
   selection?: ISelectionSnapshot;
-  /** How the models are shown: which axis is up, and the colour palette. */
-  view?: { up: 'y' | 'z'; palette: 'standard' | 'colorblind' };
+  /** How the models are shown: which axis is up, the colour palette and the page theme. */
+  view?: { up: 'y' | 'z'; palette: 'standard' | 'colorblind'; theme?: 'light' | 'dark' };
 }
 
 declare global {

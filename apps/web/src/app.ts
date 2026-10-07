@@ -27,7 +27,7 @@ import {
   type IInspectorModel,
 } from './panels.js';
 import { DEFAULT_LAYERS, DiffViewer, type ILayerCounts, type ILayerVisibility, type IPickHit } from './scene/viewer.js';
-import { BASE_ACCENT } from './scene/layers.js';
+import { brandHeader } from './brand.js';
 import {
   ACCEPTED_EXTENSIONS,
   SourceError,
@@ -41,6 +41,7 @@ import {
   pairLoads,
 } from './sources.js';
 import { viewControls } from './view-controls.js';
+import { themeName } from './theme.js';
 import { applyPalette, defaultUpAxis, DIFF_CSS, paletteName, parseUpAxis, rememberPalette, setUrlParam, type UpAxis } from './view-options.js';
 
 type Side = 'base' | 'target';
@@ -55,10 +56,10 @@ const AUTO_LIMITS: Partial<Record<keyof ILayerVisibility, (c: ILayerCounts) => b
 const LAYER_DEFS: { key: keyof ILayerVisibility; label: string; color?: string; hint: string }[] = [
   { key: 'target', label: 'Target (diff-coloured)', color: DIFF_CSS.modified, hint: 'New mesh, faces coloured by status' },
   { key: 'removed', label: 'Removed geometry', color: DIFF_CSS.removed, hint: 'Base faces that no longer exist' },
-  { key: 'ghost', label: 'Base ghost', color: BASE_ACCENT, hint: 'Whole old mesh, translucent, in target space' },
+  { key: 'ghost', label: 'Base ghost', color: 'var(--pm-base)', hint: 'Whole old mesh, translucent, in target space' },
   { key: 'unchanged', label: 'Show unchanged faces', color: DIFF_CSS.unchanged, hint: 'Grey faces of the target' },
   { key: 'markers', label: 'Vertex markers', hint: 'Dots on moved, added and removed vertices, in their status colours' },
-  { key: 'vectors', label: 'Displacement vectors', hint: 'Old (light blue) → new (moved colour) position of moved vertices' },
+  { key: 'vectors', label: 'Displacement vectors', hint: 'Old (blue) → new (moved colour) position of moved vertices' },
   { key: 'wireframe', label: 'Wireframe overlay', hint: 'Triangle edges' },
 ];
 
@@ -132,7 +133,7 @@ export class App {
     this.renderEmpty();
     this.manifest = loadManifest();
     void this.populateExamples();
-    setViewProvider(() => ({ up: this.viewer.upAxis, palette: paletteName() }));
+    setViewProvider(() => ({ up: this.viewer.upAxis, palette: paletteName(), theme: themeName() }));
     publish({ state: 'idle' });
   }
 
@@ -230,13 +231,7 @@ export class App {
     const panel = h(
       'aside',
       { class: 'panel' },
-      h(
-        'header',
-        { class: 'brand' },
-        h('span', { class: 'logo' }, 'polymerge'),
-        h('span', { class: 'tagline' }, 'vertex-level 3D diff'),
-        h('a', { class: 'mode-link', href: '?mode=merge', title: 'Review a three-way merge (base, ours, theirs)' }, 'Merge →'),
-      ),
+      brandHeader('3D diff', h('a', { class: 'mode-link', href: '?mode=merge', title: 'Review a three-way merge (base, ours, theirs)' }, 'Merge review')),
       h(
         'section',
         { class: 'sec' },
@@ -738,7 +733,7 @@ export class App {
           def.key === 'markers'
             ? h('span', { class: 'swatch-group' }, swatch(DIFF_CSS.modified), swatch(DIFF_CSS.added), swatch(DIFF_CSS.removed))
             : def.key === 'vectors'
-              ? h('span', { class: 'swatch vector', style: { background: `linear-gradient(90deg, ${BASE_ACCENT}, ${DIFF_CSS.modified})` } })
+              ? h('span', { class: 'swatch vector', style: { background: `linear-gradient(90deg, var(--pm-base), ${DIFF_CSS.modified})` } })
               : def.key === 'wireframe'
                 ? h('span', { class: 'swatch wire' })
                 : swatch(def.color ?? DIFF_CSS.unchanged);

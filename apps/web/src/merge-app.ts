@@ -18,6 +18,7 @@ import {
   type WritableFormat,
 } from 'polymerge-core';
 import * as THREE from 'three';
+import { brandHeader } from './brand.js';
 import { findMergeDemo, MERGE_DEMOS } from './dev/merge-demos.js';
 import { h, nextFrame, setChildren, swatch } from './dom.js';
 import { DiffEngine } from './engine.js';
@@ -25,6 +26,7 @@ import { fmtInt, fmtMs } from './format.js';
 import { publish, setViewProvider, type IMergeHookState, type IPolymergeHook } from './hook.js';
 import { conflictGhosts, faceConflicts, mergeFaceKinds, sideToMerged, type MergeFaceKind } from './scene/merge-layers.js';
 import { viewControls } from './view-controls.js';
+import { themeName } from './theme.js';
 import { applyPalette, MERGE_CSS, paletteName, parseUpAxis, rememberPalette, setUrlParam } from './view-options.js';
 import { DiffViewer, type IMergeLayerVisibility } from './scene/viewer.js';
 import { ACCEPTED_EXTENSIONS, SourceError, loadFromFile, loadFromUrl, type ILoadedMesh } from './sources.js';
@@ -167,7 +169,7 @@ export class MergeApp {
     };
     this.renderLayers();
     this.renderAll();
-    setViewProvider(() => ({ up: this.viewer.upAxis, palette: paletteName() }));
+    setViewProvider(() => ({ up: this.viewer.upAxis, palette: paletteName(), theme: themeName() }));
     this.publishState('idle');
   }
 
@@ -230,13 +232,7 @@ export class MergeApp {
     const panel = h(
       'aside',
       { class: 'panel' },
-      h(
-        'header',
-        { class: 'brand' },
-        h('span', { class: 'logo' }, 'polymerge'),
-        h('span', { class: 'tagline' }, 'merge review'),
-        h('a', { class: 'mode-link', href: '?', title: 'Compare two versions' }, '← Diff'),
-      ),
+      brandHeader('merge review', h('a', { class: 'mode-link', href: '?', title: 'Compare two versions' }, 'Diff')),
       h(
         'section',
         { class: 'sec' },

@@ -26,6 +26,7 @@ import { publish, setViewProvider, type ICaptureHookState, type IPolymergeHook }
 import { alignPositions, boxOf, isIdentityMatrix } from './scene/layers.js';
 import { DEFAULT_VIEW, defaultView, DiffViewer } from './scene/viewer.js';
 import { loadFromUrl, pairLoads, type ILoadedMesh } from './sources.js';
+import { themeName } from './theme.js';
 import { defaultUpAxis, DIFF_CSS, paletteName, parseUpAxis, type UpAxis } from './view-options.js';
 
 type Side = 'base' | 'target';
@@ -78,7 +79,7 @@ export class CaptureApp {
     // The viewers measure their containers, so they are created once the card is in the page.
     const panel = (p: typeof before): IPanel => ({ root: p.el, viewer: new DiffViewer(p.viewport), label: p.label, empty: p.empty });
     this.panels = { base: panel(before), target: panel(after) };
-    setViewProvider(() => ({ up: this.panels.target.viewer.upAxis, palette: paletteName() }));
+    setViewProvider(() => ({ up: this.panels.target.viewer.upAxis, palette: paletteName(), theme: themeName() }));
     publish({ state: 'idle', mode: 'capture' });
   }
 
