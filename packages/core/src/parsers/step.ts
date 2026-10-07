@@ -25,11 +25,16 @@
  *    colour, else its solid's. Uncoloured faces have no material.
  *  - Faces of one B-rep face are welded to their neighbours exactly (shared edges are discretised
  *    once), so a closed solid loads as a closed mesh.
+ *  - CAD faces (`IMesh.brep`): every triangle is tagged with the B-rep face it came from, and each
+ *    face's surface is fitted from its vertices and the exact normals OpenCascade gives (../brep.ts),
+ *    so the diff can compare faces as surfaces instead of triangles.
  */
+import { fitSurface } from '../brep.js';
 import { boundsDiagonal, defaultGroupName } from '../mesh.js';
 import {
   MeshLoadError,
   type IBounds,
+  type IBrepFace,
   type IMaterial,
   type IMesh,
   type IStepImportMesh,
@@ -183,6 +188,12 @@ function toMesh(meshes: readonly IStepImportMesh[], holders: readonly (string | 
 
   const parts: TrianglePart[] = [];
   let brepFaces = 0;
+  // CAD faces: a surface fit per B-rep face, in importer order; `faceOfPart[i]` holds which part
+  // (importer mesh) each face belongs to until groups are known.
+  const cadFaces: IBrepFace[] = [];
+  const faceOfPart: number[] = [];
+  const bounds = vertexBounds(meshes);
+  const fitTol = Math.max(1e-6, 2e-5 * (bounds ? boundsDiagonal(bounds) : 1));
   meshes.forEach((m, i) => {
     const positions = m.attributes?.position?.array ?? [];
     const indices = m.index?.array ?? [];
@@ -199,22 +210,90 @@ function toMesh(meshes: readonly IStepImportMesh[], holders: readonly (string | 
         for (let t = Math.max(0, f.first); t <= Math.min(triangles - 1, f.last); t++) faceMaterials[t] = own;
       }
     }
+    const faceTags = new Int32Array(triangles).fill(-1);
+    const normals = m.attributes?.normal?.array ?? null;
+    for (const f of faces) {
+      const first = Math.max(0, f.first);
+      const last = Math.min(triangles - 1, f.last);
+      if (last < first) continue;
+      const id = cadFaces.length;
+      for (let t = first; t <= last; t++) faceTags[t] = id;
+      cadFaces.push(measureFace(positions, normals, indices, first, last, fitTol));
+      faceOfPart.push(i);
+    }
     parts.push({
       name: unique(m.name || holders[i] || ctx.fallback),
       positions,
       indices,
       material: solidMaterial,
       faceMaterials,
+      faceTags,
     });
   });
 
   const info: IStepInfo = { deflection: ctx.deflection, angularDeflection: ctx.angularDeflection, unit: 'mm', solids: meshes.length, brepFaces };
-  return buildWeldedMesh({
+  const groupParts: number[] = [];
+  const tagsOut: { tags?: Int32Array } = {};
+  const mesh = buildWeldedMesh({
     format: 'step',
     parts,
     materials,
     fileName: ctx.fileName,
     weldEpsilon: ctx.weldEpsilon,
     extras: { step: info },
+    groupParts,
+    faceTagsOut: tagsOut,
   });
+  if (tagsOut.tags && cadFaces.length > 0) {
+    const groupOfPart = new Map(groupParts.map((part, group) => [part, group]));
+    for (let k = 0; k < cadFaces.length; k++) cadFaces[k].group = groupOfPart.get(faceOfPart[k]) ?? -1;
+    mesh.brep = { faceOf: tagsOut.tags, faces: cadFaces };
+  }
+  return mesh;
+}
+
+/** Area, centre and fitted surface of one B-rep face (triangles first..last of an importer mesh). */
+function measureFace(
+  positions: ArrayLike<number>,
+  normals: ArrayLike<number> | null,
+  indices: ArrayLike<number>,
+  first: number,
+  last: number,
+  tol: number,
+): IBrepFace {
+  let area = 0;
+  const c = [0, 0, 0];
+  const used = new Map<number, number>();
+  for (let t = first; t <= last; t++) {
+    const a = indices[t * 3] * 3;
+    const b = indices[t * 3 + 1] * 3;
+    const d = indices[t * 3 + 2] * 3;
+    const ux = positions[b] - positions[a];
+    const uy = positions[b + 1] - positions[a + 1];
+    const uz = positions[b + 2] - positions[a + 2];
+    const vx = positions[d] - positions[a];
+    const vy = positions[d + 1] - positions[a + 1];
+    const vz = positions[d + 2] - positions[a + 2];
+    const w = Math.hypot(uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx) / 2;
+    area += w;
+    for (let k = 0; k < 3; k++) c[k] += (w * (positions[a + k] + positions[b + k] + positions[d + k])) / 3;
+    for (let k = 0; k < 3; k++) {
+      const v = indices[t * 3 + k];
+      if (!used.has(v)) used.set(v, used.size);
+    }
+  }
+  const centroid = (area > 0 ? c.map((x) => x / area) : [positions[indices[first * 3] * 3], positions[indices[first * 3] * 3 + 1], positions[indices[first * 3] * 3 + 2]]) as IBrepFace['centroid'];
+  let surface: IBrepFace['surface'] = { type: 'other' };
+  if (normals && normals.length >= positions.length) {
+    const pts = new Float64Array(used.size * 3);
+    const nrm = new Float64Array(used.size * 3);
+    for (const [v, i] of used) {
+      for (let k = 0; k < 3; k++) {
+        pts[i * 3 + k] = positions[v * 3 + k];
+        nrm[i * 3 + k] = normals[v * 3 + k];
+      }
+    }
+    surface = fitSurface(pts, nrm, used.size, tol);
+  }
+  return { group: -1, surface, triangles: last - first + 1, area, centroid };
 }

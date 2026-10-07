@@ -199,3 +199,21 @@ describe('geometry in the comment', () => {
     expect(() => result([file('a.stl', { image: '0.png', diff: { ...diff, geometry: geometry({ area: { before: -1, after: 2 } }) } })])).toThrow(/negative/);
   });
 });
+
+describe('CAD faces in the comment (STEP)', () => {
+  const cad = { faces: 12, unchanged: 9, changes: [{ kind: 'moved', text: 'hole Ø8 moved 5 mm (+5, 0, 0)' }, { kind: 'reshaped', text: 'flat face facing −Z: outline changed' }, { kind: 'reshaped', text: 'flat face facing +Z: outline changed, area 5878.29 → 5850.29 mm²' }], changesTotal: 3 };
+
+  it('lists the face changes in words, and uses them as the table summary', () => {
+    const body = buildComment(result([file('plate.step', { image: '0.png', diff: { ...diff, cad } }), file('b.stl', { image: '1.png' })]));
+    expect(body).toContain('- **CAD faces** 9 of 12 unchanged; re-triangulation is not counted as a change');
+    expect(body).toContain('  - 🟨 hole Ø8 moved 5 mm (+5, 0, 0)');
+    expect(body).toMatch(/\| `plate\.step` \| 🟨 hole Ø8 moved 5 mm \(\+5, 0, 0\) · flat face facing −Z: outline changed · 1 more face change \|/);
+  });
+
+  it('rejects change text with anything markdown or HTML could use', () => {
+    for (const text of ['<img src=x>', 'a *b*', '[l](x)', 'x | y', 'a `b`', 'line\nbreak']) {
+      expect(() => result([file('p.step', { image: '0.png', diff: { ...diff, cad: { ...cad, changes: [{ kind: 'moved', text }] } } })])).toThrow(/characters a CAD change never has/);
+    }
+    expect(() => result([file('p.step', { image: '0.png', diff: { ...diff, cad: { ...cad, changes: [{ kind: 'exploded', text: 'x' }] } } })])).toThrow(/kind/);
+  });
+});

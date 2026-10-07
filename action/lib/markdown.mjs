@@ -106,6 +106,13 @@ function transformText(t) {
 
 /** The few facts that best say what changed, for the table. */
 function changeFacts(d) {
+  // STEP: the CAD-face changes say it in the model's own terms ("hole Ø8 moved 5 mm").
+  if (d.cad) {
+    if (d.cad.changesTotal === 0) return 'no CAD face changed';
+    const shown = d.cad.changes.slice(0, 2).map((c) => c.text);
+    const more = d.cad.changesTotal - shown.length;
+    return `${shown.join(' · ')}${more > 0 ? ` · ${plural(more, 'more face change')}` : ''}`;
+  }
   const facts = [];
   if (d.partsTotal > 0) facts.push(`${plural(d.partsTotal, 'part')} moved`);
   if (d.vertices.moved > 0) facts.push(`${plural(d.vertices.moved, 'vertex', 'vertices')} moved`);
@@ -194,7 +201,7 @@ function notes(files, limits) {
   return out;
 }
 
-function section(f, imageUrl) {
+function section(f, imageUrl, C = COLOR) {
   const lines = [];
   const title = f.oldPath ? `${codeSpan(f.oldPath)} → ${codeSpan(f.path)}` : codeSpan(f.path);
   lines.push(`#### ${title}`, '');
@@ -218,6 +225,13 @@ function section(f, imageUrl) {
     lines.push(`- **Faces** ${int(fc.modified)} modified · ${int(fc.added)} added · ${int(fc.removed)} removed (${int(fc.before)} → ${int(fc.after)})`);
     if (d.transform) lines.push(`- **Whole model** ${transformText(d.transform)}; the before image is aligned to the after`);
     if (d.geometry) lines.push(geometryLine(d.geometry));
+    if (d.cad) {
+      const { cad } = d;
+      lines.push(`- **CAD faces** ${int(cad.unchanged)} of ${int(cad.faces)} unchanged; re-triangulation is not counted as a change`);
+      const mark = { moved: C.moved, resized: C.moved, reshaped: C.moved, added: C.added, removed: C.removed };
+      for (const c of cad.changes) lines.push(`  - ${mark[c.kind] ?? ''} ${c.text}`);
+      if (cad.changesTotal > cad.changes.length) lines.push(`  - ${plural(cad.changesTotal - cad.changes.length, 'more change')}`);
+    }
     const largest = d.maxDisplacement > 0 ? ` Largest vertex move ${num(d.maxDisplacement)}.` : '';
     lines.push('', `<sub>Matched by Tier ${d.tier} · ${TIER_LABELS[d.tier]}.${largest}</sub>`);
   }
@@ -277,7 +291,7 @@ function render(result, { imageUrl, baseRef, maxSections, maxRows }) {
   const n = notes(files, result.limits);
   if (n.length > 0) lines.push(...n, '');
   const detailed = files.filter((f) => f.status === 'rendered' || (f.status === 'render-failed' && f.diff));
-  for (const f of detailed.slice(0, maxSections)) lines.push(...section(f, imageUrl), '');
+  for (const f of detailed.slice(0, maxSections)) lines.push(...section(f, imageUrl, C), '');
   if (detailed.length > maxSections) lines.push(`<sub>${plural(detailed.length - maxSections, 'more model')} not shown in detail: the comment would be too long.</sub>`, '');
   const explore = exploreBlock(result, files.filter((f) => f.status === 'rendered' || f.status === 'render-failed' || f.status === 'same-geometry'));
   if (explore.length > 0) lines.push(...explore, '');

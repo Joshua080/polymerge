@@ -37,6 +37,23 @@ export function summarizeGeometry(metrics) {
   };
 }
 
+/** How many CAD-face changes a comment lists one by one. */
+export const MAX_CAD_CHANGES = 6;
+
+/**
+ * STEP: the CAD-face comparison (IDiffResult.brep), as counts and the first few changes in words.
+ * The words are polymerge's own (numbers and fixed terms, never names from the file).
+ */
+export function summarizeCad(brep) {
+  if (!brep) return null;
+  return {
+    faces: brep.targetFaces,
+    unchanged: brep.unchanged,
+    changes: brep.changes.slice(0, MAX_CAD_CHANGES).map((c) => ({ kind: c.kind, text: c.description })),
+    changesTotal: brep.changes.length,
+  };
+}
+
 /**
  * Summarise an IDiffResult. `named` says whether part names mean anything: an OBJ / glTF with
  * several groups has real names, a one-group mesh only repeats the file name.
@@ -82,6 +99,7 @@ export function summarizeDiff(result, { named = false } = {}) {
     partsTotal: parts.length,
     transform,
     geometry: summarizeGeometry(result.metrics),
+    cad: summarizeCad(result.brep),
   };
 }
 

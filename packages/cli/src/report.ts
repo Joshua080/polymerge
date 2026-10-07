@@ -91,11 +91,36 @@ export interface ReportOptions {
 }
 
 /** How STEP models were tessellated, and what that means for the counts. */
-export function stepNote(base: IMesh, target: IMesh): string | null {
+export function stepNote(base: IMesh, target: IMesh, faceAware = false): string | null {
   const [b, t] = [stepInfo(base), stepInfo(target)];
   if (!b && !t) return null;
   const tol = !b || !t ? `${(b ?? t)!.deflection} mm` : b.deflection === t.deflection ? `${b.deflection} mm for both` : `${b.deflection} / ${t.deflection} mm`;
-  return `  STEP   tessellated by OpenCascade (deflection ${tol}); a flat face re-triangulated around an edit counts as modified`;
+  return faceAware
+    ? `  STEP   tessellated by OpenCascade (deflection ${tol}), compared CAD face by CAD face: re-triangulation is not a change`
+    : `  STEP   tessellated by OpenCascade (deflection ${tol}); a flat face re-triangulated around an edit counts as modified`;
+}
+
+const CHANGE_MARK: Record<string, string> = { moved: '~', resized: '~', reshaped: '~', added: '+', removed: '−' };
+
+/** The CAD-face section of a STEP diff: what changed, face by face, in words. */
+export function formatBrepSection(result: IDiffResult, target: IMesh, base: IMesh, c: Palette, limit = 20): string[] {
+  const brep = result.brep;
+  if (!brep) return [];
+  const retri = brep.retriangulated.base + brep.retriangulated.target;
+  const out = [
+    `${c.bold('CAD faces')}  ${brep.unchanged} of ${brep.targetFaces} unchanged · ${brep.changes.length} change${brep.changes.length === 1 ? '' : 's'}` +
+      (retri > 0 ? c.dim(` (${retri} re-triangulated triangle${retri === 1 ? '' : 's'} ignored)`) : ''),
+  ];
+  // Name the solid only in assemblies, where it tells parts apart.
+  const several = target.groups.length > 1 || base.groups.length > 1;
+  for (const ch of brep.changes.slice(0, limit)) {
+    const color = ch.kind === 'added' ? c.added : ch.kind === 'removed' ? c.removed : c.modified;
+    const groups = ch.targetFaces.length > 0 ? target.groups : base.groups;
+    const solid = several && groups[ch.group] ? c.dim(`  [${groups[ch.group].name}]`) : '';
+    out.push(`  ${color(CHANGE_MARK[ch.kind] ?? '·')} ${ch.description}${solid}`);
+  }
+  if (brep.changes.length > limit) out.push(c.dim(`  … ${brep.changes.length - limit} more (--json has them all)`));
+  return out;
 }
 
 /** "100 × 60 × 10 mm" (or bare numbers when the unit is unknown). */
@@ -157,7 +182,7 @@ export function formatDiffReport(result: IDiffResult, base: IMesh, target: IMesh
   out.push(c.bold('polymerge diff'));
   out.push(describeMesh('base', result.base, opts.baseName));
   out.push(describeMesh('target', result.target, opts.targetName));
-  const step = stepNote(base, target);
+  const step = stepNote(base, target, result.brep !== undefined);
   if (step) out.push(c.dim(step));
   out.push('');
   out.push(`${c.bold('Correspondence:')} ${result.tierName}`);
@@ -204,6 +229,10 @@ export function formatDiffReport(result: IDiffResult, base: IMesh, target: IMesh
           `${p.deformedVertices > 0 ? `, ${p.deformedVertices} vertex(es) also edited` : ''} ${c.dim(`[${how}]`)}`,
       );
     }
+  }
+  if (result.brep) {
+    out.push('');
+    out.push(...formatBrepSection(result, target, base, c));
   }
   if (result.metrics) {
     out.push('');

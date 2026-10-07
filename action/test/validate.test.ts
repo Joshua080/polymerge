@@ -15,6 +15,7 @@ const summary = {
   partsTotal: 0,
   transform: { units: { from: 'in', to: 'mm', factor: 25.4 }, scale: 25.4, rotationDeg: 0, distance: 1 },
   geometry: { unit: 'mm', size: { before: [1, 2, 3], after: [1, 2, 4] }, area: { before: 22, after: 28 }, volume: { before: 6, after: 8 }, closed: { before: true, after: true } },
+  cad: { faces: 6, unchanged: 5, changes: [{ kind: 'moved', text: 'flat face facing +Z moved 1 mm (0, 0, +1)' }], changesTotal: 1 },
 };
 function good(): any {
   return structuredClone({

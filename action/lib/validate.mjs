@@ -27,12 +27,14 @@ import path from 'node:path';
  *   unit: 'mm' | 'm' | null, size: { before: number[], after: number[] }, area: BeforeAfter,
  *   volume: BeforeAfter | null, closed: { before: boolean, after: boolean }
  * }} GeometrySummary
+ * @typedef {{ kind: string, text: string }} CadChange
+ * @typedef {{ faces: number, unchanged: number, changes: CadChange[], changesTotal: number }} CadSummary
  * @typedef {{
  *   tier: number,
  *   vertices: { before: number, after: number, unchanged: number, moved: number, added: number, removed: number },
  *   faces: { before: number, after: number, unchanged: number, modified: number, added: number, removed: number },
  *   maxDisplacement: number, parts: PartSummary[], partsTotal: number, transform: TransformSummary | null,
- *   geometry: GeometrySummary | null
+ *   geometry: GeometrySummary | null, cad: CadSummary | null
  * }} DiffSummary
  * @typedef {{
  *   path: string, oldPath: string | null, change: string, status: string, image: string | null,
@@ -142,6 +144,31 @@ function geometrySummary(v, where) {
   };
 }
 
+export const CAD_KINDS = ['reshaped', 'moved', 'resized', 'added', 'removed'];
+
+/**
+ * The words polymerge writes for a CAD-face change: letters, digits, spaces and a few signs.
+ * Nothing in that set can open markdown or HTML (no `*_[]<>#|\` or backtick), so a change that
+ * passes is safe to show as text.
+ */
+const CAD_TEXT = /^[A-Za-z0-9 .,:()+\u2212\u00d8\u00b0\u00b2\u00b3\u2192-]{1,160}$/u;
+
+/** @returns {CadSummary | null} */
+function cadSummary(v, where) {
+  if (v === null || v === undefined) return null;
+  if (!isObject(v) || !Array.isArray(v.changes) || v.changes.length > 20) fail(`${where} must be a CAD summary with at most 20 changes`);
+  return {
+    faces: count(v.faces, `${where}.faces`),
+    unchanged: count(v.unchanged, `${where}.unchanged`),
+    changes: v.changes.map((c, i) => {
+      if (!isObject(c)) fail(`${where}.changes[${i}] must be an object`);
+      if (typeof c.text !== 'string' || !CAD_TEXT.test(c.text)) fail(`${where}.changes[${i}].text has characters a CAD change never has`);
+      return { kind: oneOf(c.kind, CAD_KINDS, `${where}.changes[${i}].kind`), text: c.text };
+    }),
+    changesTotal: count(v.changesTotal, `${where}.changesTotal`),
+  };
+}
+
 function diffSummary(v, where) {
   if (v === null || v === undefined) return null;
   if (!isObject(v) || !isObject(v.vertices) || !isObject(v.faces)) fail(`${where} must be a diff summary`);
@@ -172,6 +199,7 @@ function diffSummary(v, where) {
     partsTotal: count(v.partsTotal, `${where}.partsTotal`),
     transform,
     geometry: geometrySummary(v.geometry, `${where}.geometry`),
+    cad: cadSummary(v.cad, `${where}.cad`),
   };
 }
 
