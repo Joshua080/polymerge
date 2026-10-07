@@ -56,9 +56,17 @@ export function sectionMesh(mesh: IMesh, axis: SectionAxis, value: number): ISec
   const va = (a + 2) % 3;
   const p = mesh.positions;
   const f = mesh.faces;
-  // Point on the edge (i, j) where it crosses the plane, keyed by the edge.
+  // Point on the edge (i, j) where it crosses the plane, keyed by the edge; a crossing at a vertex
+  // that lies on the plane is that vertex, keyed by it, so the segments of all the triangles
+  // around it meet there (a cut along a row of vertices is one line, not one piece per triangle).
   const points = new Map<string, Vec3>();
   const pointOn = (i: number, j: number): string => {
+    for (const w of [i, j]) {
+      if (p[w * 3 + a] !== value) continue;
+      const key = `v${w}`;
+      if (!points.has(key)) points.set(key, [p[w * 3], p[w * 3 + 1], p[w * 3 + 2]]);
+      return key;
+    }
     const key = i < j ? `${i}:${j}` : `${j}:${i}`;
     if (!points.has(key)) {
       const lo = Math.min(i, j);

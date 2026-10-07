@@ -19,6 +19,7 @@ import { DiffEngine } from './engine.js';
 import { patch, publish, setViewProvider, snapshot, type IPolymergeHook } from './hook.js';
 import {
   renderAttempts,
+  renderCadFaces,
   renderInspector,
   renderMeshes,
   renderSingleGeometry,
@@ -40,6 +41,7 @@ import {
   type Loader,
   pairLoads,
 } from './sources.js';
+import { ReviewTools } from './tools.js';
 import { viewControls } from './view-controls.js';
 import { themeName } from './theme.js';
 import { applyPalette, defaultUpAxis, DIFF_CSS, paletteName, parseUpAxis, rememberPalette, setUrlParam, type UpAxis } from './view-options.js';
@@ -65,6 +67,7 @@ const LAYER_DEFS: { key: keyof ILayerVisibility; label: string; color?: string; 
 
 export class App {
   private readonly viewer: DiffViewer;
+  private readonly tools: ReviewTools;
   private base: ILoadedMesh | null = null;
   private target: ILoadedMesh | null = null;
   private result: IDiffResult | null = null;
@@ -107,6 +110,7 @@ export class App {
     reset: h('button', { id: 'reset-view' }, 'Reset view'),
     download: h('button', { id: 'download-json', class: 'small', disabled: true, title: 'serializeDiff(result) as a .json file' }, 'Download diff JSON'),
     summary: h('div', { class: 'summary' }),
+    cad: h('section', { class: 'sec hidden', id: 'cad-faces' }),
     attempts: h('div', { class: 'attempts-wrap' }),
     engineLog: h('pre', { class: 'engine-log' }),
     layers: h('div', { class: 'layers' }),
@@ -125,7 +129,19 @@ export class App {
   constructor(root: HTMLElement) {
     this.buildLayout(root);
     this.viewer = new DiffViewer(this.el.viewport);
+    this.tools = new ReviewTools(
+      this.viewer,
+      this.el.viewport.parentElement!,
+      () => ({ base: this.base?.mesh ?? null, target: this.target?.mesh ?? null, result: this.result }),
+      () => patch({ review: this.tools.state() }),
+    );
+    // Top left: the tier, the tools, their cards, stacked; the measure label and the divider over the view.
+    const stack = h('div', { class: 'hud-stack' });
+    this.el.hudTier.before(stack);
+    stack.append(this.el.hudTier, this.tools.toolbar, this.tools.cards);
+    this.el.viewport.after(...this.tools.overlays);
     this.viewer.onPick = (hit) => {
+      if (this.tools.pick(hit)) return;
       if (hit && hit.side !== 'merged') this.inspect(hit.side, hit.vertex, hit);
       else this.clearSelection();
     };
@@ -244,6 +260,7 @@ export class App {
         h('div', { class: 'row buttons' }, el.rerun, el.reset),
       ),
       h('section', { class: 'sec' }, h('h2', null, 'Result'), el.summary, h('div', { class: 'row' }, el.download)),
+      el.cad,
       h('section', { class: 'sec' }, h('h2', null, 'Layers'), el.layers),
       h(
         'section',
@@ -288,7 +305,7 @@ export class App {
       else if (files.length === 1) void this.loadFiles([[this.base && !this.target ? 'target' : 'base', files[0]]]);
     });
     window.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape') this.clearSelection();
+      if (e.key === 'Escape' && !this.tools?.escape()) this.clearSelection();
     });
 
     root.append(h('div', { class: 'app' }, panel, stage));
@@ -462,6 +479,8 @@ export class App {
     this.autoUp();
     if (only) this.viewer.showPreview(only.m.mesh, only.side);
     else this.viewer.clear();
+    this.tools.refresh();
+    this.renderCad();
     this.el.hudTier.classList.add('hidden');
     this.renderSummary();
     this.renderLayers();
@@ -548,6 +567,8 @@ export class App {
     this.clearSelection();
     this.autoUp();
     this.layerCounts = this.viewer.showDiff(base.mesh, target.mesh, result);
+    this.tools.refresh();
+    this.renderCad();
     // Adaptive defaults for dense layers, unless the user chose explicitly.
     for (const [key, ok] of Object.entries(AUTO_LIMITS) as [keyof ILayerVisibility, (c: ILayerCounts) => boolean][]) {
       if (!this.touchedLayers.has(key)) this.layers[key] = ok(this.layerCounts);
@@ -670,6 +691,27 @@ export class App {
         only ? renderSingleGeometry(computeMetrics(only.m.mesh), only.label) : null,
       );
     }
+  }
+
+  /** The CAD faces section: shown for a face-aware STEP comparison. */
+  private renderCad(): void {
+    const brep = this.result?.brep;
+    this.el.cad.classList.toggle('hidden', !brep);
+    if (!brep) {
+      this.el.cad.replaceChildren();
+      return;
+    }
+    const solids = this.target?.mesh.groups.map((g) => g.name) ?? [];
+    setChildren(
+      this.el.cad,
+      h('h2', null, 'CAD faces'),
+      renderCadFaces(brep, solids, {
+        focus: (p) => {
+          this.viewer.focus(p);
+          this.viewer.setSelection({ to: p, from: null });
+        },
+      }),
+    );
   }
 
   private renderMeshes(): void {
@@ -825,12 +867,14 @@ export class App {
       if (this.engine.lastWindow) hook.diffWindow = this.engine.lastWindow;
       hook.parts = r.parts?.length ?? 0;
       if (r.metrics) hook.metrics = r.metrics;
+      if (r.brep) hook.cad = { unchanged: r.brep.unchanged, changes: r.brep.changes.map((c) => ({ kind: c.kind, text: c.description, focus: c.focus })) };
     } else {
       if (this.base) hook.base = summarizeMesh(this.base.mesh);
       if (this.target) hook.target = summarizeMesh(this.target.mesh);
     }
     const sel = snapshot().selection;
     if (sel && this.selection && state === 'ready') hook.selection = sel;
+    hook.review = this.tools.state();
     publish(hook);
   }
 

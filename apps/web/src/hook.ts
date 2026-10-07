@@ -4,6 +4,7 @@
  * so tests can simply wait for `body[data-state="ready"]`.
  */
 import type { IDiffStats, IMergeStats, IMeshSummary, IMetricsComparison, ITierAttempt, IVertexChange, MatchTier, MergeResolution, Vec3 } from 'polymerge-core';
+import type { IReviewHookState } from './tools.js';
 
 export type ViewerState = 'idle' | 'loading' | 'ready' | 'error';
 
@@ -88,6 +89,10 @@ export interface IPolymergeHook {
   diffWindow?: [number, number];
   /** The vertex currently shown in the inspector, if any. */
   selection?: ISelectionSnapshot;
+  /** The review tools: section plane and its cut, the measurement, the before / after split. */
+  review?: IReviewHookState;
+  /** Face-aware STEP: the CAD faces that changed, in words, and how many did not. */
+  cad?: { unchanged: number; changes: { kind: string; text: string; focus: Vec3 }[] };
   /** How the models are shown: which axis is up, the colour palette and the page theme. */
   view?: { up: 'y' | 'z'; palette: 'standard' | 'colorblind'; theme?: 'light' | 'dark' };
 }

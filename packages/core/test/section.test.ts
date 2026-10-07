@@ -80,6 +80,29 @@ describe('sectionMesh', () => {
     expect(s.loops[0].center.map((x) => Number(x.toFixed(9)))).toEqual([0, 0, 5]);
   });
 
+  it('a cut along a row of vertices is one line, not a piece per triangle', () => {
+    // A flat 4×4-quad grid in z = 0; x = 2 runs through a column of its vertices.
+    const p: number[] = [];
+    for (let j = 0; j <= 4; j++) for (let i = 0; i <= 4; i++) p.push(i, j, 0);
+    const f: number[] = [];
+    for (let j = 0; j < 4; j++) for (let i = 0; i < 4; i++) f.push(j * 5 + i, j * 5 + i + 1, j * 5 + i + 6, j * 5 + i, j * 5 + i + 6, j * 5 + i + 5);
+    const s = sectionMesh(createMesh(p, f), 'x', 2);
+    expect(s.loops).toHaveLength(1);
+    expect(s.loops[0].closed).toBe(false);
+    expect(s.loops[0].perimeter).toBeCloseTo(4);
+    // A closed box with a ring of vertices half way up, cut exactly there: one closed square.
+    const ring = (z: number) => [0, 0, z, 2, 0, z, 2, 2, z, 0, 2, z];
+    const box: number[] = [0, 2, 1, 0, 3, 2, 8, 9, 10, 8, 10, 11];
+    for (let k = 0; k < 2; k++) {
+      for (let i = 0; i < 4; i++) {
+        const i1 = (i + 1) % 4;
+        box.push(k * 4 + i, k * 4 + i1, (k + 1) * 4 + i1, k * 4 + i, (k + 1) * 4 + i1, (k + 1) * 4 + i);
+      }
+    }
+    const mid = sectionMesh(createMesh([...ring(0), ...ring(1), ...ring(2)], box), 'z', 1);
+    expect(mid.loops.map((l) => [l.closed, Number(l.area.toFixed(9))])).toEqual([[true, 4]]);
+  });
+
   it('an open sheet gives an open line; a plane that misses the model gives nothing', () => {
     const sheet = createMesh([0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0], [0, 1, 2, 0, 2, 3]);
     const s = sectionMesh(sheet, 'x', 0.5);

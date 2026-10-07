@@ -26,13 +26,37 @@ export interface ISceneTheme {
   /** Base / "old": the base ghost, the tail of displacement vectors, the "from" ring. */
   baseAccent: string;
   ghostOpacity: number;
-  /** The section plane's cut outline and the measure line. */
+  /** The outline of a section cut. */
   ink: string;
+  /** The face of a section cut (where the plane passes through material). */
+  cap: string;
+  /** The measure tool's points and line. */
+  measure: string;
 }
 
 const SCENE: Record<ThemeName, ISceneTheme> = {
-  light: { background: '#eceef1', wire: '#1f2328', wireOpacity: 0.35, outline: '#111418', baseAccent: '#4f86f7', ghostOpacity: 0.22, ink: '#111418' },
-  dark: { background: '#1d1e21', wire: '#0b0c0e', wireOpacity: 0.5, outline: '#ffffff', baseAccent: '#93c5fd', ghostOpacity: 0.16, ink: '#f5f6f7' },
+  light: {
+    background: '#eceef1',
+    wire: '#1f2328',
+    wireOpacity: 0.35,
+    outline: '#111418',
+    baseAccent: '#4f86f7',
+    ghostOpacity: 0.22,
+    ink: '#111418',
+    cap: '#5d6673',
+    measure: '#2563eb',
+  },
+  dark: {
+    background: '#1d1e21',
+    wire: '#0b0c0e',
+    wireOpacity: 0.5,
+    outline: '#ffffff',
+    baseAccent: '#93c5fd',
+    ghostOpacity: 0.16,
+    ink: '#f5f6f7',
+    cap: '#c3c8d0',
+    measure: '#6c9fff',
+  },
 };
 
 export function sceneTheme(name: ThemeName = current): ISceneTheme {

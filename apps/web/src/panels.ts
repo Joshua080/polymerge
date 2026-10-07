@@ -8,6 +8,7 @@ import {
   formatMeasure,
   stepInfo,
   volumeNote,
+  type IBrepDiff,
   type IDiffResult,
   type IMesh,
   type IMeshMetrics,
@@ -163,6 +164,50 @@ export function renderSingleGeometry(m: IMeshMetrics, label: string): HTMLElemen
     ]),
     note || !unit ? h('ul', { class: 'notes' }, note ? h('li', null, `${note}.`) : null, !unit ? h('li', null, 'In the file’s own units.') : null) : null,
   );
+}
+
+const CAD_MARK: Record<string, [mark: string, color: string, label: string]> = {
+  moved: ['~', DIFF_CSS.modified, 'Moved'],
+  resized: ['~', DIFF_CSS.modified, 'Resized'],
+  reshaped: ['~', DIFF_CSS.modified, 'Reshaped'],
+  added: ['+', DIFF_CSS.added, 'Added'],
+  removed: ['−', DIFF_CSS.removed, 'Removed'],
+};
+
+/**
+ * Face-aware STEP: what changed, CAD face by CAD face ("hole Ø8 moved 5 mm"), each one a button
+ * that turns the view to it. `solids` names the solids when the model has several.
+ */
+export function renderCadFaces(brep: IBrepDiff, solids: string[], actions: { focus(p: Vec3, i: number): void }): HTMLElement[] {
+  const changed = brep.changes.length;
+  const out: HTMLElement[] = [
+    h(
+      'p',
+      { class: 'muted small', style: { margin: '0 0 6px' } },
+      `${brep.unchanged} of ${brep.targetFaces} CAD face${brep.targetFaces === 1 ? '' : 's'} unchanged` +
+        (changed > 0 ? ` · ${changed} change${changed === 1 ? '' : 's'}` : ' · no change to any surface') +
+        (brep.retriangulated.target + brep.retriangulated.base > 0 ? ` · ${fmtInt(brep.retriangulated.target + brep.retriangulated.base)} re-tessellated triangles ignored` : ''),
+    ),
+  ];
+  if (changed === 0) return out;
+  out.push(
+    h(
+      'ul',
+      { class: 'cad-list' },
+      brep.changes.map((c, i) => {
+        const [mark, color, label] = CAD_MARK[c.kind] ?? ['·', DIFF_CSS.unchanged, c.kind];
+        const solid = solids.length > 1 ? solids[c.group] : undefined;
+        return h(
+          'li',
+          { dataset: { kind: c.kind } },
+          h('span', { class: 'cad-mark', style: { background: color }, title: label }, mark),
+          h('span', { class: 'cad-text' }, c.description, solid ? h('span', { class: 'muted' }, solid) : null),
+          h('button', { type: 'button', class: 'small', title: 'Turn the view to it', onclick: () => actions.focus(c.focus, i) }, 'Show'),
+        );
+      }),
+    ),
+  );
+  return out;
 }
 
 /** "Tier 2 · topological (...)" → "topological (...)" when the prefix repeats the tier number. */
