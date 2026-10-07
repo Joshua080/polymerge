@@ -65,7 +65,8 @@ export function writeThreeMf(mesh: IMesh, opts: { name?: string } = {}): Uint8Ar
       tris.push(`     <triangle v1="${idx[0]}" v2="${idx[1]}" v3="${idx[2]}"${m >= 0 ? ` pid="${materialId}" p1="${m}"` : ''}/>`);
     }
     out.push(`  <object id="${id}" type="model" name="${esc(g.name)}">`);
-    out.push('   <mesh>', '    <vertices>', ...verts, '    </vertices>', '    <triangles>', ...tris, '    </triangles>', '   </mesh>');
+    // Joined first: spreading a million lines into push() would overflow the call stack.
+    out.push('   <mesh>', '    <vertices>', verts.join('\n'), '    </vertices>', '    <triangles>', tris.join('\n'), '    </triangles>', '   </mesh>');
     out.push('  </object>');
   }
   out.push(' </resources>', ' <build>');
@@ -87,11 +88,14 @@ export function writeThreeMf(mesh: IMesh, opts: { name?: string } = {}): Uint8Ar
   // A fixed time stamp, built from LOCAL fields (the ZIP format stores local time), so the same
   // mesh always gives the same bytes in any time zone.
   const mtime = new Date(1980, 0, 1, 0, 0, 0);
+  // fflate is pure JavaScript: the fastest deflate level for big models (≈2× faster, a few % larger).
+  const model = enc.encode(out.join('\n') + '\n');
+  const level = model.length > 16 * 1024 * 1024 ? 1 : 6;
   return zipSync(
     {
       '[Content_Types].xml': [enc.encode(contentTypes), { level: 6, mtime }],
       '_rels/.rels': [enc.encode(rels), { level: 6, mtime }],
-      '3D/3dmodel.model': [enc.encode(out.join('\n') + '\n'), { level: 6, mtime }],
+      '3D/3dmodel.model': [model, { level, mtime }],
     },
     { mtime },
   );

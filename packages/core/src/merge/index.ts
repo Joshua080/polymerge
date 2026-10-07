@@ -263,7 +263,8 @@ function assemble(
 export const mergeMeshes: MergeMeshesFn = (base: IMesh, ours: IMesh, theirs: IMesh, options: IMergeOptions = {}): IMergeResult => {
   const t0 = now();
   const logger = options.logger ?? console;
-  const diffOptions = { ...options.diff, logger: options.diff?.logger ?? logger };
+  // The merge never reads geometry metrics: skip them unless the caller asks (they cost O(faces) per mesh).
+  const diffOptions = { metrics: false, ...options.diff, logger: options.diff?.logger ?? logger };
   logger.info('[polymerge] merge: diffing base → ours');
   const dA = diffMeshes(base, ours, diffOptions);
   logger.info('[polymerge] merge: diffing base → theirs');

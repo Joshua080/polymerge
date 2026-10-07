@@ -20,30 +20,33 @@ export function formatUnit(format: SourceFormat): MetricUnit | undefined {
 }
 
 /**
- * Edge census in one counting sort: every edge keyed by its lower vertex, the higher vertex and
- * the direction stored together (hi·2 + 1 when the face runs lo → hi), so each vertex's short list
- * is sorted and scanned once.
+ * Edge census in one counting sort: every edge keyed by its lower vertex, with the higher vertex
+ * and the direction packed together (hi·2 + 1 when the face runs lo → hi), so each vertex's short
+ * list is sorted and scanned once.
  */
 function edgeCensus(vertexCount: number, faces: Uint32Array): { open: number; nonManifold: number; flipped: number } {
   const n = faces.length;
   const start = new Uint32Array(vertexCount + 1);
   for (let i = 0; i < n; i += 3) {
-    for (let k = 0; k < 3; k++) {
-      const a = faces[i + k];
-      const b = faces[i + (k === 2 ? 0 : k + 1)];
-      start[(a < b ? a : b) + 1]++;
-    }
+    const a = faces[i];
+    const b = faces[i + 1];
+    const c = faces[i + 2];
+    start[(a < b ? a : b) + 1]++;
+    start[(b < c ? b : c) + 1]++;
+    start[(c < a ? c : a) + 1]++;
   }
   for (let v = 0; v < vertexCount; v++) start[v + 1] += start[v];
   const fill = start.slice(0, vertexCount);
-  const keys = new Float64Array(n);
+  // hi·2 + direction fits in 32 bits for any mesh that fits in memory (< 2³¹ vertices).
+  const keys = new Uint32Array(n);
+  const put = (a: number, b: number): void => {
+    if (a < b) keys[fill[a]++] = b * 2 + 1;
+    else keys[fill[b]++] = a * 2;
+  };
   for (let i = 0; i < n; i += 3) {
-    for (let k = 0; k < 3; k++) {
-      const a = faces[i + k];
-      const b = faces[i + (k === 2 ? 0 : k + 1)];
-      if (a < b) keys[fill[a]++] = b * 2 + 1;
-      else keys[fill[b]++] = a * 2;
-    }
+    put(faces[i], faces[i + 1]);
+    put(faces[i + 1], faces[i + 2]);
+    put(faces[i + 2], faces[i]);
   }
   let open = 0;
   let nonManifold = 0;
@@ -66,11 +69,11 @@ function edgeCensus(vertexCount: number, faces: Uint32Array): { open: number; no
     }
     let i = s;
     while (i < e) {
-      const hi = Math.floor(keys[i] / 2);
+      const hi = keys[i] >>> 1;
       let j = i;
       let forward = 0;
-      while (j < e && Math.floor(keys[j] / 2) === hi) {
-        forward += keys[j] % 2;
+      while (j < e && keys[j] >>> 1 === hi) {
+        forward += keys[j] & 1;
         j++;
       }
       const count = j - i;

@@ -32,10 +32,10 @@ inputs:
     default: '10'
   max-triangles:
     description: Models with more triangles than this (either version) are listed, not rendered.
-    default: '200000'
+    default: '2000000'
   max-file-size:
     description: Models larger than this many megabytes are listed, not rendered.
-    default: '50'
+    default: '150'
   up-axis:
     description: >-
       Which model axis points up in the images. auto (default): Z for STEP files (the CAD
