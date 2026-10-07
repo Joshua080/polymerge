@@ -1,4 +1,5 @@
 import {
+  changeRegions,
   describeVertexChange,
   displayUnit,
   formatChange,
@@ -57,6 +58,20 @@ export function fmt(n: number, digits = 4): string {
   return a >= 1e5 || a < 1e-3 ? n.toExponential(3) : n.toFixed(digits);
 }
 
+/** A coordinate for people: up to 4 decimals, no trailing zeros, float noise (|x| < 1e-9) as 0. */
+export function coord(x: number): string {
+  if (!Number.isFinite(x)) return String(x);
+  if (Math.abs(x) < 1e-9) return '0';
+  const a = Math.abs(x);
+  if (a >= 1e6 || a < 1e-4) return x.toExponential(3);
+  return String(Number(x.toFixed(4)));
+}
+
+/** "(1.5, 0, −2)". */
+export function point(p: ArrayLike<number>): string {
+  return `(${Array.from(p, coord).join(', ')})`;
+}
+
 function describeMesh(label: string, s: IMeshSummary, name: string): string {
   return `  ${label.padEnd(6)} ${name}  ${s.format.toUpperCase()}  ${s.vertexCount} vertices · ${s.faceCount} faces`;
 }
@@ -88,6 +103,8 @@ export interface ReportOptions {
   targetName: string;
   /** How many individual vertex moves to list. */
   topMoves: number;
+  /** How many regions of change to list (default 5). */
+  regions?: number;
 }
 
 /** How STEP models were tessellated, and what that means for the counts. */
@@ -117,7 +134,7 @@ export function formatBrepSection(result: IDiffResult, target: IMesh, base: IMes
     const color = ch.kind === 'added' ? c.added : ch.kind === 'removed' ? c.removed : c.modified;
     const groups = ch.targetFaces.length > 0 ? target.groups : base.groups;
     const solid = several && groups[ch.group] ? c.dim(`  [${groups[ch.group].name}]`) : '';
-    out.push(`  ${color(CHANGE_MARK[ch.kind] ?? '·')} ${ch.description}${solid}`);
+    out.push(`  ${color(CHANGE_MARK[ch.kind] ?? '·')} ${ch.description}${c.dim(` at ${point(ch.focus)}`)}${solid}`);
   }
   if (brep.changes.length > limit) out.push(c.dim(`  … ${brep.changes.length - limit} more (--json has them all)`));
   return out;
@@ -173,6 +190,30 @@ export function formatMetricsTable(cmp: IMetricsComparison, c: Palette): string[
   }
   if (cmp.unitsDiffer) out.push(c.dim(`  The files state different units (${cmp.base.unit} and ${cmp.target.unit}); the numbers are each in their own.`));
   else if (!unit) out.push(c.dim('  In the files\' own units (STL, OBJ and PLY do not state one).'));
+  return out;
+}
+
+/** "Where it changed": the largest connected regions of change, in words. */
+export function formatRegions(result: IDiffResult, base: IMesh, target: IMesh, c: Palette, limit = 5): string[] {
+  if (limit <= 0) return [];
+  const regions = changeRegions(result, base, target);
+  if (regions.length === 0) return [];
+  const unit = result.metrics ? displayUnit(result.metrics) : undefined;
+  const len = (x: number) => formatMeasure(x, 1, unit);
+  const several = target.groups.length > 1 || base.groups.length > 1;
+  const out = [c.bold(`Where it changed (${regions.length} region${regions.length === 1 ? '' : 's'}):`)];
+  regions.slice(0, limit).forEach((r, i) => {
+    const what =
+      r.side === 'base'
+        ? c.removed(`${r.removed} face${r.removed === 1 ? '' : 's'} removed`)
+        : [r.modified > 0 ? c.modified(`${r.modified} modified`) : '', r.added > 0 ? c.added(`${r.added} added`) : ''].filter(Boolean).join(', ') + ` face${r.faces === 1 ? '' : 's'}`;
+    const size = formatSize(r.size, unit);
+    const moved = r.maxDisplacement > 0 ? `, largest move ${len(r.maxDisplacement)}` : '';
+    const groups = r.side === 'base' ? base.groups : target.groups;
+    const part = several && groups[r.group] ? c.dim(` [${groups[r.group].name}]`) : '';
+    out.push(`  ${i + 1}. ${what} around ${point(r.center)}, ${size}${moved}${part}`);
+  });
+  if (regions.length > limit) out.push(c.dim(`  … ${regions.length - limit} smaller region(s)`));
   return out;
 }
 
@@ -233,6 +274,9 @@ export function formatDiffReport(result: IDiffResult, base: IMesh, target: IMesh
   if (result.brep) {
     out.push('');
     out.push(...formatBrepSection(result, target, base, c));
+  } else {
+    const where = formatRegions(result, base, target, c, opts.regions ?? 5);
+    if (where.length > 0) out.push('', ...where);
   }
   if (result.metrics) {
     out.push('');

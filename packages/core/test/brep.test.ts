@@ -109,7 +109,7 @@ describe('fitSurface', () => {
 });
 
 describe('comparing surfaces', () => {
-  const hole = (x: number, r: number): IBrepSurface => ({ type: 'cylinder', axis: [0, 0, 1], origin: [x, 0, 0], radius: r, inward: true, full: true });
+  const hole = (x: number, r: number): Extract<IBrepSurface, { type: 'cylinder' }> => ({ type: 'cylinder', axis: [0, 0, 1], origin: [x, 0, 0], radius: r, inward: true, full: true });
 
   it('same surface, moved, resized', () => {
     expect(sameSurface(hole(30, 4), hole(30, 4 + 1e-9), 1e-6)).toBe(true);

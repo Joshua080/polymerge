@@ -26,6 +26,8 @@ export interface MergeCommandOptions {
   quiet?: boolean;
   /** Check the combined edits for collisions (default true; --no-collision-check). */
   collisionCheck?: boolean;
+  /** resolve: show what would be written, write nothing. */
+  dryRun?: boolean;
 }
 
 const RESOLUTIONS: readonly MergeResolution[] = ['ours', 'theirs', 'base'];
@@ -229,10 +231,11 @@ export async function runGitMerge(args: string[], o: { resolve?: string; collisi
  */
 export async function runGitResolve(repoPath: string, o: MergeCommandOptions): Promise<number> {
   const { result, bytes } = await resolveStages((n) => gitStage(n, repoPath), repoPath, o);
-  await writeFile(repoPath, bytes);
+  if (!o.dryRun) await writeFile(repoPath, bytes);
   if (!o.quiet) {
     process.stdout.write(formatMergeReport(result, { base: `${repoPath} :1`, ours: `${repoPath} :2 (ours)`, theirs: `${repoPath} :3 (theirs)` }) + '\n');
-    process.stdout.write(result.clean ? `Wrote ${repoPath} — run "git add ${repoPath}" to mark it resolved.\n` : `Wrote ${repoPath} (still conflicted).\n`);
+    if (o.dryRun) process.stdout.write(`Dry run: ${repoPath} was not written. Pick a side per conflict with --pick <id>=ours|theirs|base, then run again without --dry-run.\n`);
+    else process.stdout.write(result.clean ? `Wrote ${repoPath} — run "git add ${repoPath}" to mark it resolved.\n` : `Wrote ${repoPath} (still conflicted).\n`);
     for (const note of outputNotes(outputFormat(repoPath, o.format), result, repoPath)) process.stdout.write(`Note: ${note}\n`);
   }
   return result.clean ? 0 : 1;
