@@ -168,8 +168,15 @@ export function computeMetrics(mesh: IMesh): IMeshMetrics {
   return metrics;
 }
 
+/**
+ * Below this fraction of the values a difference is float rounding, not an edit: a part turned by
+ * 30° and stored in float32 changes its computed volume by about 1e-9 of it.
+ */
+const ROUNDING = 1e-7;
+
 function change(base: number, target: number): IMetricChange {
-  return { base, target, delta: target - base, percent: base !== 0 ? ((target - base) / Math.abs(base)) * 100 : null };
+  const delta = Math.abs(target - base) <= ROUNDING * Math.max(Math.abs(base), Math.abs(target)) ? 0 : target - base;
+  return { base, target, delta, percent: base !== 0 ? (delta / Math.abs(base)) * 100 : null };
 }
 
 /**

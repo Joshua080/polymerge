@@ -155,7 +155,18 @@ await writeFile('merged.stl', writeStl(resolved.merged));
   } catch {
     fail('the installed package failed e2e-step --cli-only');
   }
-  console.log('e2e-pack: PASS — installed from tarballs: --version, diff, STEP (without and with its optional reader), merge, library import, demo, view');
+  dog.mark('export');
+  // The installed package writes self-contained pages from the viewer bundled into it.
+  try {
+    execFileSync(process.execPath, [path.join(root, 'scripts/e2e-export.mjs')], {
+      cwd: root,
+      env: { ...env, POLYMERGE_CLI: cliJs },
+      stdio: 'inherit',
+    });
+  } catch {
+    fail('the installed package failed e2e-export');
+  }
+  console.log('e2e-pack: PASS — installed from tarballs: --version, diff, STEP (without and with its optional reader), merge, library import, demo, view, export');
 } finally {
   fs.rmSync(tmp, { recursive: true, force: true });
 }

@@ -120,9 +120,13 @@ function polymergeFixtures(): Plugin {
   };
 }
 
+/** The version users see (the polymerge CLI's), for the pages the viewer writes. */
+const version = (JSON.parse(fs.readFileSync(path.join(repoRoot, 'packages/cli/package.json'), 'utf8')) as { version: string }).version;
+
 export default defineConfig({
   // Relative asset URLs so dist/ can be served from any path (e.g. by `polymerge view`).
   base: './',
+  define: { __POLYMERGE_VERSION__: JSON.stringify(version) },
   resolve: {
     // Consume polymerge-core straight from source so the viewer never needs a core build.
     alias: { 'polymerge-core': path.join(repoRoot, 'packages/core/src/index.ts') },

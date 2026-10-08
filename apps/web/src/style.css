@@ -674,6 +674,20 @@ table.metrics tbody th {
   font-weight: 400;
 }
 
+/* Geometry: four columns in a narrow panel, so values may wrap (at their spaces). */
+table.metrics {
+  table-layout: fixed;
+}
+
+table.metrics th:first-child {
+  width: 62px;
+}
+
+table.metrics td {
+  white-space: normal;
+  vertical-align: top;
+}
+
 .notes {
   margin: 8px 0 0;
   padding-left: 16px;

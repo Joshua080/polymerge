@@ -7,6 +7,7 @@
  *   polymerge view <base> <target> [--port N] [--no-open]
  *   polymerge view <base> <ours> <theirs> [--port N] [--no-open]
  *   polymerge review <path>              (merge review of a conflicted git merge)
+ *   polymerge export <base> <target> [-o page.html]   (the diff and the viewer in one HTML file)
  *   polymerge demo [example]             (the viewer on a built-in example)
  *   polymerge info <file> [--json]
  *   polymerge section <file> [<file2>] [--x|--y|--z <value>] [--svg out.svg] [--json]
@@ -20,6 +21,7 @@
 import { parseArgs } from 'node:util';
 import { installAsciiOutput, wantsAscii } from './ascii.js';
 import { runDiff } from './commands/diff.js';
+import { runExport } from './commands/export.js';
 import { gitSetupText, runGitDiff } from './commands/git.js';
 import { runInfo } from './commands/info.js';
 import { runInit } from './commands/init.js';
@@ -77,6 +79,10 @@ See it in the browser
   polymerge view <base> <ours> <theirs>      The merge review: see conflicts, resolve by clicking
   polymerge review <path>                    The merge review of a conflicted git merge of <path>;
                                              "Save to repository" writes <path> and stages it
+  polymerge export <old> <new> [-o <page.html>] [--up y|z]
+                                             The diff and the viewer in ONE HTML file: it opens in
+                                             any browser, offline, nothing to install (email it,
+                                             attach it to a ticket). Default name: <old>__<new>.html
   polymerge demo [example]                   The viewer on a built-in example, no files needed
                                              Merge review: ${MERGE_DEMOS.join(', ')} (default ${MERGE_DEMOS[0]})
                                              Diff: e.g. moved-part, grid-bump, units-inch-to-mm
@@ -98,7 +104,7 @@ Everywhere
   --ascii / --unicode        Plain ASCII output (automatic in the classic Windows console), or not
   polymerge --version | --help
 
-STEP (.step, .stp) works with diff, view, info, section, measure and git-diff, not with merge. It
+STEP (.step, .stp) works with diff, view, export, info, section, measure and git-diff, not merge. It
 needs OpenCascade, an optional download: npm install -g occt-import-js@0.0.23 (LGPL-2.1, ~8 MB).
 `;
 
@@ -190,6 +196,34 @@ async function main(args: string[]): Promise<number> {
       });
       if (positionals.length > 1) throw new UsageError(`polymerge demo: expected at most 1 example name, got ${positionals.length}`);
       return runDemo(positionals[0], { port: values.port, host: values.host, open: !values['no-open'], webDist: values['web-dist'], up: values.up, palette: values.palette });
+    }
+    case 'export': {
+      const { values, positionals } = parseArgs({
+        args: rest,
+        allowPositionals: true,
+        options: {
+          output: { type: 'string', short: 'o' },
+          up: { type: 'string' },
+          'web-dist': { type: 'string' },
+          'force-tier': { type: 'string' },
+          'move-eps': { type: 'string' },
+          'surface-tol': { type: 'string' },
+          quiet: { type: 'boolean', short: 'q' },
+          verbose: { type: 'boolean', short: 'v' },
+        },
+      });
+      requirePositionals('export', positionals, 2);
+      return runExport(positionals[0], positionals[1], {
+        output: values.output,
+        up: values.up,
+        webDist: values['web-dist'],
+        forceTier: values['force-tier'],
+        moveEpsilon: values['move-eps'],
+        surfaceTolerance: values['surface-tol'],
+        quiet: values.quiet,
+        verbose: values.verbose,
+        version: VERSION,
+      });
     }
     case 'info': {
       const { values, positionals } = parseArgs({ args: rest, allowPositionals: true, options: { json: { type: 'boolean' } } });

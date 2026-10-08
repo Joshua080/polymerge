@@ -44,7 +44,8 @@ import {
 import { ReviewTools } from './tools.js';
 import { viewControls } from './view-controls.js';
 import { themeName } from './theme.js';
-import { applyPalette, defaultUpAxis, DIFF_CSS, paletteName, parseUpAxis, rememberPalette, setUrlParam, type UpAxis } from './view-options.js';
+import { isStandalonePage, readEmbedded, standalonePage } from './standalone.js';
+import { applyPalette, defaultUpAxis, DIFF_CSS, paletteName, parseUpAxis, rememberPalette, replaceUrl, setUrlParam, type UpAxis } from './view-options.js';
 
 type Side = 'base' | 'target';
 const SIDE_LABEL: Record<Side, string> = { base: 'Base (old)', target: 'Target (new)' };
@@ -76,7 +77,7 @@ export class App {
   private seq = 0;
   private engineLog: string[] = [];
   /** Runs diffMeshes in a Web Worker (main-thread fallback). */
-  private readonly engine = new DiffEngine(new URLSearchParams(location.search).get('worker') !== '0');
+  private readonly engine = new DiffEngine(new URLSearchParams(location.search).get('worker') !== '0' && !isStandalonePage());
   private manifest: Promise<IManifestInfo | null>;
   private currentCase: IFixtureCase | null = null;
   private touchedLayers = new Set<keyof ILayerVisibility>();
@@ -109,6 +110,11 @@ export class App {
     rerun: h('button', { id: 'rerun', disabled: true }, 'Re-run diff'),
     reset: h('button', { id: 'reset-view' }, 'Reset view'),
     download: h('button', { id: 'download-json', class: 'small', disabled: true, title: 'serializeDiff(result) as a .json file' }, 'Download diff JSON'),
+    saveHtml: h(
+      'button',
+      { id: 'save-html', class: 'small', disabled: true, title: 'One HTML file with this diff and the viewer: it opens in any browser, offline, with nothing to install' },
+      'Save as HTML',
+    ),
     summary: h('div', { class: 'summary' }),
     cad: h('section', { class: 'sec hidden', id: 'cad-faces' }),
     attempts: h('div', { class: 'attempts-wrap' }),
@@ -147,8 +153,10 @@ export class App {
     };
     this.renderLayers();
     this.renderEmpty();
-    this.manifest = loadManifest();
-    void this.populateExamples();
+    // A self-contained page has no examples next to it (and file:// pages cannot fetch).
+    this.manifest = isStandalonePage() ? Promise.resolve(null) : loadManifest();
+    if (isStandalonePage()) this.el.examples.parentElement?.classList.add('hidden');
+    else void this.populateExamples();
     setViewProvider(() => ({ up: this.viewer.upAxis, palette: paletteName(), theme: themeName() }));
     publish({ state: 'idle' });
   }
@@ -217,6 +225,7 @@ export class App {
     el.rerun.addEventListener('click', () => void this.runDiff());
     el.reset.addEventListener('click', () => this.viewer.resetView());
     el.download.addEventListener('click', () => this.downloadJson());
+    el.saveHtml.addEventListener('click', () => void this.saveHtml());
 
     const inspectForm = h(
       'form',
@@ -259,7 +268,7 @@ export class App {
         this.view.root,
         h('div', { class: 'row buttons' }, el.rerun, el.reset),
       ),
-      h('section', { class: 'sec' }, h('h2', null, 'Result'), el.summary, h('div', { class: 'row' }, el.download)),
+      h('section', { class: 'sec' }, h('h2', null, 'Result'), el.summary, h('div', { class: 'row buttons' }, el.download, el.saveHtml)),
       el.cad,
       h('section', { class: 'sec' }, h('h2', null, 'Layers'), el.layers),
       h(
@@ -342,6 +351,32 @@ export class App {
       const side: Side = baseUrl ? 'base' : 'target';
       return this.loadSide(side, (o) => loadFromUrl((baseUrl ?? targetUrl)!, params.get(`${side}Name`) ?? undefined, o), 'url');
     }
+  }
+
+  /** A self-contained page: show the diff it carries (nothing to load, compute or download). */
+  async startEmbedded(params: URLSearchParams): Promise<void> {
+    const seq = ++this.seq;
+    this.setLoading('Opening the saved diff…');
+    await nextFrame();
+    let saved;
+    try {
+      saved = readEmbedded();
+      if (!saved) throw new Error('this page carries no diff');
+    } catch (err) {
+      this.fail('The diff saved in this page could not be read', err);
+      return;
+    }
+    if (seq !== this.seq) return;
+    const up = parseUpAxis(params.get('up')) ?? saved.view?.up ?? null;
+    if (up) this.setUp(up);
+    this.base = { mesh: saved.base.mesh, name: saved.base.name, bytes: saved.base.bytes, origin: 'embedded' };
+    this.target = { mesh: saved.target.mesh, name: saved.target.name, bytes: saved.target.bytes, origin: 'embedded' };
+    this.source = 'embedded';
+    this.markDrop('base', 'ok');
+    this.markDrop('target', 'ok');
+    this.engineLog = [`[polymerge] diff saved in this page by ${saved.generator}`];
+    this.renderMeshes();
+    await this.showResult(saved.result, seq);
   }
 
   // -------------------------------------------------------------------------
@@ -669,19 +704,46 @@ export class App {
       this.fail('Export failed', err);
       return;
     }
+    saveFile(new Blob([json], { type: 'application/json' }), `${this.fileStem()}.polymerge.json`);
+  }
+
+  /** "base__target", for the files the viewer saves. */
+  private fileStem(): string {
     const stem = (m: ILoadedMesh | null) => (m?.name ?? 'mesh').replace(/\.[^.]+$/, '');
-    const a = h('a', {
-      href: URL.createObjectURL(new Blob([json], { type: 'application/json' })),
-      download: `${stem(this.base)}__${stem(this.target)}.polymerge.json`,
-    });
-    document.body.append(a);
-    a.click();
-    a.remove();
-    setTimeout(() => URL.revokeObjectURL(a.href), 10_000);
+    return `${stem(this.base)}__${stem(this.target)}`;
+  }
+
+  /** One HTML file with this diff and the viewer, to open anywhere offline. */
+  private async saveHtml(): Promise<void> {
+    const { base, target, result } = this;
+    if (!base || !target || !result) return;
+    const button = this.el.saveHtml;
+    button.disabled = true;
+    button.textContent = 'Saving…';
+    try {
+      const version = typeof __POLYMERGE_VERSION__ === 'string' ? __POLYMERGE_VERSION__ : 'dev';
+      const html = await standalonePage(
+        {
+          generator: `polymerge ${version}`,
+          base: { name: base.name, bytes: base.bytes, mesh: base.mesh },
+          target: { name: target.name, bytes: target.bytes, mesh: target.mesh },
+          result,
+          view: { up: this.viewer.upAxis },
+        },
+        `${base.name} → ${target.name} · polymerge`,
+      );
+      saveFile(new Blob([html], { type: 'text/html' }), `${this.fileStem()}.html`);
+    } catch (err) {
+      this.fail('Could not save the page', err);
+    } finally {
+      button.disabled = !this.result;
+      button.textContent = 'Save as HTML';
+    }
   }
 
   private renderSummary(): void {
     this.el.download.disabled = !this.result;
+    this.el.saveHtml.disabled = !this.result;
     if (this.result) setChildren(this.el.summary, renderSummary(this.result));
     else {
       const only = this.base ? { label: 'Base', m: this.base } : this.target ? { label: 'Target', m: this.target } : null;
@@ -863,7 +925,7 @@ export class App {
       hook.attempts = r.attempts;
       hook.base = r.base;
       hook.target = r.target;
-      hook.engine = this.engine.mode;
+      if (this.source !== 'embedded') hook.engine = this.engine.mode; // a saved page computed nothing
       if (this.engine.lastWindow) hook.diffWindow = this.engine.lastWindow;
       hook.parts = r.parts?.length ?? 0;
       if (r.metrics) hook.metrics = r.metrics;
@@ -884,7 +946,7 @@ export class App {
     // An up axis the user chose stays in the address, so a shared link opens the same way.
     if (this.upExplicit) search.set('up', this.viewer.upAxis);
     url.search = search.toString();
-    if (url.href !== window.location.href) history.replaceState(null, '', url);
+    if (url.href !== window.location.href) replaceUrl(url);
   }
 }
 
@@ -896,6 +958,15 @@ class SideError extends Error {
     super(`${SIDE_LABEL[side]}: ${errorMessage(inner)}`);
     this.name = 'SideError';
   }
+}
+
+/** Offer a file for download. */
+function saveFile(blob: Blob, name: string): void {
+  const a = h('a', { href: URL.createObjectURL(blob), download: name });
+  document.body.append(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 10_000);
 }
 
 function errorMessage(err: unknown): string {

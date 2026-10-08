@@ -109,5 +109,14 @@ export function setUrlParam(key: string, value: string | null): void {
   const url = new URL(window.location.href);
   if (value === null) url.searchParams.delete(key);
   else url.searchParams.set(key, value);
-  if (url.href !== window.location.href) history.replaceState(null, '', url);
+  if (url.href !== window.location.href) replaceUrl(url);
+}
+
+/** Change the address without reloading; a no-op where the browser refuses (a file:// page). */
+export function replaceUrl(url: URL): void {
+  try {
+    history.replaceState(null, '', url);
+  } catch {
+    // file:// pages have an opaque origin: their address cannot be rewritten
+  }
 }
