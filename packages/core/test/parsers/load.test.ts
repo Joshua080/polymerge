@@ -91,7 +91,7 @@ describe('loadMesh — options and errors', () => {
       [binaryStl(cubeTriangles()), { format: 'gltf', fileName: 'x.gltf' }, /invalid glTF JSON/],
       [binaryStl(cubeTriangles()), { weldEpsilon: -1 }, /weldEpsilon/],
       [binaryStl(cubeTriangles()), { weldEpsilon: Number.NaN }, /weldEpsilon/],
-      [binaryStl(cubeTriangles()), { format: 'ply' as SourceFormat }, /unsupported format "ply"/],
+      [binaryStl(cubeTriangles()), { format: 'fbx' as SourceFormat }, /unsupported format "fbx"/],
     ];
     for (const [bytes, options, message] of cases) {
       const err = await loadMesh(bytes, options).then(

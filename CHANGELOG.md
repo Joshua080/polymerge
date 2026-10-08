@@ -9,6 +9,19 @@ How to add an entry and how releases are made: [CONTRIBUTING.md](CONTRIBUTING.md
 ## Unreleased
 
 ### Added
+- **3MF and PLY**: read (3MF build items, components, units and colours; PLY ASCII and binary, polygons and face colours) and written as merge output. `init` sets PLY up for diff and merge, and 3MF for diff (a 3MF is merged only when you ask, because the merged file keeps the geometry but not the slicer project).
+- **Geometry in every report**: size, volume (closed models only; an open one says why) and surface area, before and after, in the CLI, the viewer and the pull-request comment ("volume +2.3 cm³ (+4%)"). 3MF and STEP are in mm, glTF in metres; STL, OBJ and PLY in the file's own units.
+- **Face-aware STEP diff**: CAD faces are recognised as planes, cylinders, cones and spheres and compared as surfaces: "hole Ø8 moved 5 mm (+5, 0, 0)", "hole Ø8 → Ø9", "new hole Ø6". Re-triangulation of an unchanged face no longer reads as a change. In `diff`, `info`, the viewer (a CAD faces panel) and the Action's comment.
+- **Everything from a terminal**:
+  - `polymerge section`: cut with a plane, list the outlines and holes, compare two versions' cuts, draw them as SVG;
+  - `polymerge measure`: the distance between two points of the surface;
+  - `diff` lists where the model changed (connected regions, with their size and largest move);
+  - `info --json`, per-part sizes and volumes, and the CAD faces of a STEP file;
+  - `resolve --dry-run`;
+  - `--ascii`, automatic in the classic Windows console.
+- **Review tools in the viewer**: a section plane (S), a distance measure (M) and a before / after slider (C).
+- **Self-contained HTML**: `polymerge export old new` and the viewer's **Save as HTML** write one file with the viewer and the diff, which opens in any browser from disk, offline, with nothing to install.
+- **A light theme** (the default) and a neutral dark one, switched in the viewer's header; the Inter typeface is bundled.
 - **STEP files** (`.step`, `.stp`) in `diff`, `info`, `view`, `git-diff`, the pull-request Action and the hosted viewer. They are read with OpenCascade (`occt-import-js`, LGPL-2.1), an optional download that polymerge never installs by itself. Merging STEP is refused.
 - **Z-up view** for CAD and 3D-printing models:
   - a menu in the viewer and `?up=z` in its address;
@@ -26,6 +39,9 @@ How to add an entry and how releases are made: [CONTRIBUTING.md](CONTRIBUTING.md
 
 ### Changed
 - `polymerge git-setup` points to `polymerge init`, and both write the same lines.
+- **Million-triangle models**: faster spatial indexes make a million-triangle diff take seconds (about 1.5 s for Tier 1, 10 s for a re-meshed model). The Action renders models up to 2 million triangles and 150 MB by default (was 200,000 and 50 MB).
+- The pull-request images are light, to match the viewer.
+- Changes smaller than float rounding (1e-7 of a value) are reported as no change.
 
 ## 0.2.0 - 2026-10-05
 

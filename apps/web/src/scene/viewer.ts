@@ -7,6 +7,10 @@
  * face, an outline of the selected conflict region and ghost previews of its versions.
  * World space == the MERGED frame.
  *
+ * Review tools (diff only): a section plane that cuts the model away on one side, with the cut
+ * drawn on it; the measure line; and the before / after split, the base on the left of a divider
+ * and the target on the right, drawn in two scissored passes of the same camera.
+ *
  * "Model space" below is that target (or merged) space. Scene world space equals it when Y is up;
  * with Z up (CAD, 3D printing) the content is turned −90° about X around the model's centre, so
  * every point or box coming in or going out is converted (toWorld / toModel).
@@ -15,8 +19,8 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { FaceStatus, type FaceStatusCode, type IDiffResult, type IMesh, type Vec3 } from 'polymerge-core';
 import { diffColors, type UpAxis } from '../view-options.js';
+import { onThemeChange, sceneTheme } from '../theme.js';
 import {
-  BASE_ACCENT,
   alignPositions,
   boxOf,
   buildDisplacementVectors,
@@ -68,6 +72,24 @@ export interface IPickHit {
   layer: 'target' | 'removed' | 'ghost' | 'preview' | 'merged' | 'base';
   /** Hit point, target (or merged) space. */
   point: Vec3;
+  /** Where the click was, in CSS pixels from the canvas's top left. */
+  screen: [number, number];
+}
+
+/** A section plane, model space: axis = value. The half above it (larger values) is cut away. */
+export interface ISectionPlane {
+  axis: 'x' | 'y' | 'z';
+  value: number;
+  /** Cut away the half below the plane instead. */
+  flip: boolean;
+}
+
+/** A cut drawn on the section plane, model space. */
+export interface ISectionDrawing {
+  /** Triangles of the cut face (where the plane passes through material): xyz per corner. */
+  fill: Float32Array;
+  /** Outline segments: two xyz points each. */
+  lines: Float32Array;
 }
 
 /** Merge review layers. */
@@ -112,7 +134,7 @@ interface IPickable {
   status: Uint8Array | null;
 }
 
-const BACKGROUND = '#0f141d';
+const AXIS_INDEX = { x: 0, y: 1, z: 2 } as const;
 
 /** Default view direction, from the look-at point towards the camera: a 3/4 view from above. */
 export const DEFAULT_VIEW: Vec3 = [0.9, 0.62, 1.25];
@@ -177,6 +199,22 @@ export class DiffViewer {
   private pointerDown: { x: number; y: number; id: number } | null = null;
   private readonly raycaster = new THREE.Raycaster();
   private readonly resizeObserver: ResizeObserver;
+  private readonly stopThemeWatch: () => void;
+  /** Called after every frame drawn (labels that follow the model). */
+  onAfterRender: (() => void) | null = null;
+
+  // Review tools.
+  private section: ISectionPlane | null = null;
+  /** `section` in world space (what the materials clip against). */
+  private readonly clipPlane = new THREE.Plane();
+  private sectionData: { target: ISectionDrawing | null; base: ISectionDrawing | null } = { target: null, base: null };
+  private sectionObjects: { targetFill?: THREE.Mesh; targetLines?: THREE.LineSegments; baseFill?: THREE.Mesh; baseLines?: THREE.LineSegments } = {};
+  private measurePoints: Vec3[] = [];
+  /** Before / after divider, 0..1 of the width; null = off. */
+  private compareSplit: number | null = null;
+  private compareObjects: { layer?: IFaceLayer; mesh?: THREE.Mesh; wire?: THREE.Mesh; pickable?: IPickable } = {};
+  /** What showDiff shows (for the before / after split). */
+  private diffData: { base: IMesh; alignedBase: Float64Array; result: IDiffResult } | null = null;
 
   private readonly materials = {
     target: new THREE.MeshLambertMaterial({
@@ -198,28 +236,28 @@ export class DiffViewer {
       polygonOffsetUnits: 2,
     }),
     ghost: new THREE.MeshLambertMaterial({
-      color: BASE_ACCENT,
+      color: sceneTheme().baseAccent,
       flatShading: true,
       side: THREE.DoubleSide,
       transparent: true,
-      opacity: 0.16,
+      opacity: sceneTheme().ghostOpacity,
       depthWrite: false,
       polygonOffset: true,
       polygonOffsetFactor: 3,
       polygonOffsetUnits: 3,
     }),
     ghostWire: new THREE.MeshBasicMaterial({
-      color: BASE_ACCENT,
+      color: sceneTheme().baseAccent,
       wireframe: true,
       transparent: true,
       opacity: 0.28,
       depthWrite: false,
     }),
     wire: new THREE.MeshBasicMaterial({
-      color: '#0b0f17',
+      color: sceneTheme().wire,
       wireframe: true,
       transparent: true,
-      opacity: 0.5,
+      opacity: sceneTheme().wireOpacity,
       depthWrite: false,
     }),
     markers: withDepthBias(
@@ -248,12 +286,30 @@ export class DiffViewer {
       size: 18,
       sizeAttenuation: false,
       map: makeRingTexture(),
-      color: BASE_ACCENT,
+      color: sceneTheme().baseAccent,
       transparent: true,
       depthTest: false,
     }),
-    selLine: new THREE.LineBasicMaterial({ color: '#ffffff', depthTest: false, transparent: true }),
-    highlight: new THREE.MeshBasicMaterial({ color: '#ffffff', wireframe: true, transparent: true, opacity: 0.85, depthTest: false }),
+    selLine: new THREE.LineBasicMaterial({ color: sceneTheme().outline, depthTest: false, transparent: true }),
+    highlight: new THREE.MeshBasicMaterial({ color: sceneTheme().outline, wireframe: true, transparent: true, opacity: 0.85, depthTest: false }),
+    cap: new THREE.MeshBasicMaterial({ color: sceneTheme().cap, side: THREE.DoubleSide }),
+    cut: new THREE.LineBasicMaterial({ color: sceneTheme().ink }),
+    cutBase: new THREE.LineDashedMaterial({ color: sceneTheme().baseAccent, dashSize: 1, gapSize: 0.6 }),
+    measurePoints: new THREE.PointsMaterial({
+      size: 13,
+      sizeAttenuation: false,
+      map: makeDotTexture(),
+      color: sceneTheme().measure,
+      alphaTest: 0.5,
+      depthTest: false,
+      transparent: true,
+    }),
+    measureLine: new THREE.LineBasicMaterial({ color: sceneTheme().measure, depthTest: false, transparent: true }),
+  };
+
+  private readonly measure = {
+    points: new THREE.Points(new THREE.BufferGeometry(), this.materials.measurePoints),
+    line: new THREE.Line(new THREE.BufferGeometry(), this.materials.measureLine),
   };
   private readonly ghostMaterials = new Map<string, { fill: THREE.Material; wire: THREE.Material }>();
 
@@ -267,7 +323,8 @@ export class DiffViewer {
     this.container = container;
     this.renderer = new THREE.WebGLRenderer({ antialias: true });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
-    this.renderer.setClearColor(BACKGROUND, 1);
+    this.renderer.setClearColor(sceneTheme().background, 1);
+    this.renderer.localClippingEnabled = true;
     this.renderer.domElement.classList.add('viewer-canvas');
     container.appendChild(this.renderer.domElement);
 
@@ -291,6 +348,12 @@ export class DiffViewer {
       this.overlay.add(o);
     }
     this.selection.line.renderOrder = 29;
+    for (const o of [this.measure.line, this.measure.points]) {
+      o.renderOrder = 31;
+      o.visible = false;
+      o.frustumCulled = false;
+      this.overlay.add(o);
+    }
 
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
     this.controls.enableDamping = true;
@@ -318,8 +381,31 @@ export class DiffViewer {
 
     this.resizeObserver = new ResizeObserver(() => this.resize());
     this.resizeObserver.observe(container);
+    this.stopThemeWatch = onThemeChange(() => this.applyTheme());
     this.resize();
     this.loop();
+  }
+
+  /** Repaint in the current theme (theme.ts): background, edges, outlines, the base accent. */
+  private applyTheme(): void {
+    const t = sceneTheme();
+    const m = this.materials;
+    this.renderer.setClearColor(t.background, 1);
+    m.wire.color.set(t.wire);
+    m.wire.opacity = t.wireOpacity;
+    m.ghost.color.set(t.baseAccent);
+    m.ghost.opacity = t.ghostOpacity;
+    m.ghostWire.color.set(t.baseAccent);
+    m.selFrom.color.set(t.baseAccent);
+    m.selLine.color.set(t.outline);
+    m.highlight.color.set(t.outline);
+    m.cap.color.set(t.cap);
+    m.cut.color.set(t.ink);
+    m.cutBase.color.set(t.baseAccent);
+    m.measurePoints.color.set(t.measure);
+    m.measureLine.color.set(t.measure);
+    // The displacement vectors carry the base accent in their vertex colours: rebuild them.
+    this.refreshColors();
   }
 
   // -------------------------------------------------------------------------
@@ -413,6 +499,8 @@ export class DiffViewer {
       },
     ];
     this.applyLayers();
+    this.diffData = { base, alignedBase, result };
+    if (this.compareSplit !== null) this.ensureCompareLayer();
 
     const box = boxOf(target.positions).union(boxOf(alignedBase));
     this.fit(box);
@@ -551,6 +639,14 @@ export class DiffViewer {
       }
     }
     this.clearMergeObjects(geometries);
+    const cmp = this.compareObjects;
+    for (const obj of [cmp.mesh, cmp.wire]) {
+      if (!obj) continue;
+      this.content.remove(obj);
+      geometries.add(obj.geometry);
+    }
+    this.compareObjects = {};
+    this.diffData = null;
     for (const g of geometries) g.dispose();
     this.objects = {};
     this.pickables = [];
@@ -747,15 +843,25 @@ export class DiffViewer {
       -((clientY - rect.top) / rect.height) * 2 + 1,
     );
     this.raycaster.setFromCamera(ndc, this.camera);
-    const visible = this.pickables.filter((p) => p.object.visible);
-    const hits = this.raycaster.intersectObjects(
-      visible.map((p) => p.object),
-      false,
-    );
+    const screen: [number, number] = [clientX - rect.left, clientY - rect.top];
+    const cmp = this.compareObjects;
+    let candidates: IPickable[];
+    if (this.compareSplit !== null && cmp.pickable) {
+      // Before / after: the side of the divider the click is on.
+      candidates = screen[0] < this.compareSplit * rect.width ? [cmp.pickable] : this.pickables.filter((p) => p.layer === 'target');
+    } else candidates = this.pickables.filter((p) => p.object.visible);
+    const section = this.section;
+    const hits = this.raycaster
+      .intersectObjects(
+        candidates.map((p) => p.object),
+        false,
+      )
+      // What the section plane cuts away cannot be picked.
+      .filter((h) => !section || this.clipPlane.distanceToPoint(h.point) >= 0);
     // Prefer real surfaces; the translucent ghost only when nothing else was hit.
-    const hit = hits.find((h) => this.pickableOf(h.object)?.layer !== 'ghost') ?? hits[0];
+    const hit = hits.find((h) => this.pickableOf(h.object, candidates)?.layer !== 'ghost') ?? hits[0];
     if (!hit || hit.faceIndex == null) return null;
-    const p = this.pickableOf(hit.object)!;
+    const p = this.pickableOf(hit.object, candidates)!;
     const face = p.faceMap ? p.faceMap[hit.faceIndex] : hit.faceIndex;
     const point: Vec3 = this.toModel(hit.point);
     let best = -1;
@@ -779,11 +885,203 @@ export class DiffViewer {
       faceStatus: p.status ? p.status[face] : null,
       layer: p.layer,
       point,
+      screen,
     };
   }
 
-  private pickableOf(obj: THREE.Object3D): IPickable | undefined {
-    return this.pickables.find((p) => p.object === obj);
+  private pickableOf(obj: THREE.Object3D, among: IPickable[] = this.pickables): IPickable | undefined {
+    return among.find((p) => p.object === obj);
+  }
+
+  // -------------------------------------------------------------------------
+  // Review tools
+  // -------------------------------------------------------------------------
+
+  /** The materials the section plane cuts (everything of the diff; not the overlays). */
+  private clippable(): THREE.Material[] {
+    const m = this.materials;
+    return [m.target, m.removed, m.ghost, m.ghostWire, m.wire, m.markers, m.vectors];
+  }
+
+  /** Cut the model with a plane (model space); null shows it whole again. */
+  setSection(plane: ISectionPlane | null): void {
+    const toggled = !!plane !== !!this.section;
+    this.section = plane ? { ...plane } : null;
+    if (toggled) {
+      for (const mat of this.clippable()) {
+        mat.clippingPlanes = plane ? [this.clipPlane] : null;
+        mat.needsUpdate = true;
+      }
+    }
+    this.updateClipPlane();
+    this.rebuildSectionObjects();
+  }
+
+  get sectionPlane(): ISectionPlane | null {
+    return this.section ? { ...this.section } : null;
+  }
+
+  /** `section` → the world-space plane: keeps value ≥ p[axis] (≤ when flipped). */
+  private updateClipPlane(): void {
+    const s = this.section;
+    if (!s) return;
+    const normal = new THREE.Vector3();
+    normal.setComponent(AXIS_INDEX[s.axis], s.flip ? 1 : -1);
+    this.clipPlane.set(normal, s.flip ? -s.value : s.value).applyMatrix4(this.modelToWorld());
+  }
+
+  /** The cut drawn on the plane: the target's (filled, outlined) and the base's (dashed outline). */
+  setSectionDrawing(target: ISectionDrawing | null, base: ISectionDrawing | null): void {
+    this.sectionData = { target, base };
+    this.rebuildSectionObjects();
+  }
+
+  private rebuildSectionObjects(): void {
+    for (const o of Object.values(this.sectionObjects)) {
+      if (!o) continue;
+      this.content.remove(o);
+      o.geometry.dispose();
+    }
+    this.sectionObjects = {};
+    const s = this.section;
+    const { target, base } = this.sectionData;
+    if (s) {
+      // Lifted a hair off the plane into the half that is cut away, so the drawings never
+      // z-fight with the cut model or with each other.
+      const lift = new THREE.Vector3();
+      lift.setComponent(AXIS_INDEX[s.axis], (s.flip ? -1 : 1) * this.sceneRadius * 2e-4);
+      const geometry = (data: Float32Array, steps: number) => {
+        const pos = new Float32Array(data.length);
+        for (let i = 0; i < data.length; i += 3) {
+          pos[i] = data[i] - this.origin.x + lift.x * steps;
+          pos[i + 1] = data[i + 1] - this.origin.y + lift.y * steps;
+          pos[i + 2] = data[i + 2] - this.origin.z + lift.z * steps;
+        }
+        const g = new THREE.BufferGeometry();
+        g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+        return g;
+      };
+      const o = this.sectionObjects;
+      if (target) {
+        o.targetFill = new THREE.Mesh(geometry(target.fill, 1), this.materials.cap);
+        o.targetLines = new THREE.LineSegments(geometry(target.lines, 2), this.materials.cut);
+      }
+      if (base) {
+        o.baseFill = new THREE.Mesh(geometry(base.fill, 1), this.materials.cap);
+        o.baseLines = new THREE.LineSegments(geometry(base.lines, 3), this.materials.cutBase);
+        o.baseLines.computeLineDistances();
+        this.materials.cutBase.dashSize = this.sceneRadius * 0.025;
+        this.materials.cutBase.gapSize = this.sceneRadius * 0.015;
+      }
+      for (const obj of Object.values(o)) {
+        if (!obj) continue;
+        obj.renderOrder = obj instanceof THREE.Mesh ? 15 : 16;
+        obj.frustumCulled = false;
+        this.content.add(obj);
+      }
+    }
+    this.showSectionFor('both');
+    this.dirty = true;
+  }
+
+  /** Which cut drawings a pass shows: both (normal view), or one side of the before / after split. */
+  private showSectionFor(pass: 'both' | 'base' | 'target'): void {
+    const o = this.sectionObjects;
+    if (o.targetFill) o.targetFill.visible = pass !== 'base';
+    if (o.targetLines) o.targetLines.visible = pass !== 'base';
+    if (o.baseFill) o.baseFill.visible = pass === 'base';
+    if (o.baseLines) o.baseLines.visible = pass !== 'target';
+  }
+
+  /** The measure tool's points (model space): a dot for each, a line between the first two. */
+  setMeasure(points: Vec3[]): void {
+    this.measurePoints = points.map((p) => [...p] as Vec3);
+    const local = points.map((p) => new THREE.Vector3(p[0], p[1], p[2]).sub(this.origin));
+    // New geometries each time: a buffer cannot grow in place.
+    for (const [obj, pts] of [
+      [this.measure.points, local],
+      [this.measure.line, local.slice(0, 2)],
+    ] as const) {
+      obj.geometry.dispose();
+      obj.geometry = new THREE.BufferGeometry().setFromPoints(pts);
+    }
+    this.measure.points.visible = local.length > 0;
+    this.measure.line.visible = local.length >= 2;
+    this.dirty = true;
+  }
+
+  /** Before / after: the base left of `split` (0..1 of the width), the target right of it; null ends it. */
+  setCompare(split: number | null): void {
+    this.compareSplit = split === null ? null : Math.min(1, Math.max(0, split));
+    if (this.compareSplit !== null) this.ensureCompareLayer();
+    this.dirty = true;
+  }
+
+  /** The before / after split is possible (a diff is shown). */
+  get canCompare(): boolean {
+    return this.diffData !== null;
+  }
+
+  private ensureCompareLayer(): void {
+    if (this.compareObjects.mesh || !this.diffData) return;
+    const { base, alignedBase, result } = this.diffData;
+    const layer = buildFaceLayer(base, alignedBase, result.baseFaceStatus, this.origin);
+    const mesh = new THREE.Mesh(layer.geometry, this.materials.target);
+    const wire = new THREE.Mesh(layer.geometry, this.materials.wire);
+    mesh.visible = wire.visible = false;
+    this.content.add(mesh, wire);
+    this.compareObjects = {
+      layer,
+      mesh,
+      wire,
+      pickable: { object: mesh, layer: 'base', side: 'base', mesh: base, positions: alignedBase, faceMap: layer.faceMap, status: result.baseFaceStatus },
+    };
+  }
+
+  /** After the origin changed (new content): redraw what the tools show, in the new frame. */
+  private restoreOverlays(): void {
+    this.updateClipPlane();
+    this.rebuildSectionObjects();
+    this.setMeasure(this.measurePoints);
+  }
+
+  /** One frame: the normal view, or the before / after split in two scissored passes. */
+  private draw(): void {
+    if (this.section) this.updateClipPlane();
+    const split = this.compareSplit;
+    const cmp = this.compareObjects;
+    if (split === null || !cmp.mesh || !cmp.wire || !cmp.layer) {
+      this.showSectionFor('both');
+      this.renderer.render(this.scene, this.camera);
+    } else {
+      const size = this.renderer.getSize(new THREE.Vector2());
+      const x = Math.round(size.x * split);
+      const o = this.objects;
+      const diff = [o.target, o.targetWire, o.removed, o.removedWire, o.ghost, o.ghostWire, o.markers, o.vectors];
+      const saved = diff.map((obj) => obj?.visible ?? false);
+      const L = this.layers;
+      cmp.layer.geometry.setDrawRange(0, (L.unchanged ? cmp.layer.faceMap.length : cmp.layer.changedFaces) * 3);
+      this.renderer.setScissorTest(true);
+      // Before: the base (aligned into target space), coloured by its own status.
+      for (const obj of diff) if (obj) obj.visible = false;
+      cmp.mesh.visible = true;
+      cmp.wire.visible = L.wireframe;
+      this.showSectionFor('base');
+      this.renderer.setScissor(0, 0, x, size.y);
+      this.renderer.render(this.scene, this.camera);
+      // After: the target.
+      cmp.mesh.visible = cmp.wire.visible = false;
+      if (o.target) o.target.visible = true;
+      if (o.targetWire) o.targetWire.visible = L.wireframe;
+      this.showSectionFor('target');
+      this.renderer.setScissor(x, 0, size.x - x, size.y);
+      this.renderer.render(this.scene, this.camera);
+      this.renderer.setScissorTest(false);
+      diff.forEach((obj, i) => {
+        if (obj) obj.visible = saved[i];
+      });
+    }
+    this.onAfterRender?.();
   }
 
   // -------------------------------------------------------------------------
@@ -823,6 +1121,8 @@ export class DiffViewer {
     this.controls.maxDistance = distance * 20;
     this.controls.minDistance = radius * 1e-4;
     if (!this.holdCamera) this.resetView();
+    // New content or a new up axis: the tools' drawings follow (they depend on origin and radius).
+    this.restoreOverlays();
   }
 
   resetView(): void {
@@ -874,7 +1174,7 @@ export class DiffViewer {
     const moved = this.controls.update();
     if (moved || this.dirty) {
       this.dirty = false;
-      this.renderer.render(this.scene, this.camera);
+      this.draw();
       const waiters = this.renderWaiters;
       this.renderWaiters = [];
       for (const w of waiters) w();
@@ -894,6 +1194,7 @@ export class DiffViewer {
   dispose(): void {
     cancelAnimationFrame(this.raf);
     this.resizeObserver.disconnect();
+    this.stopThemeWatch();
     this.clear();
     this.controls.dispose();
     this.renderer.dispose();

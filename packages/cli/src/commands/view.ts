@@ -20,6 +20,8 @@ const MODEL_TYPES: Record<string, string> = {
   '.glb': 'model/gltf-binary',
   '.step': 'model/step',
   '.stp': 'model/step',
+  '.3mf': 'model/3mf',
+  '.ply': 'application/octet-stream',
 };
 
 /**

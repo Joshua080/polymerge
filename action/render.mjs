@@ -20,7 +20,7 @@
  *   GITHUB_EVENT_PATH                 the pull_request event (number, base and head commits)
  *   GITHUB_WORKSPACE + POLYMERGE_PATH the checkout to diff
  *   POLYMERGE_OUT                     output directory
- *   POLYMERGE_MAX_FILES (10) · POLYMERGE_MAX_TRIANGLES (200000) · POLYMERGE_MAX_FILE_MB (50)
+ *   POLYMERGE_MAX_FILES (10) · POLYMERGE_MAX_TRIANGLES (2000000) · POLYMERGE_MAX_FILE_MB (150)
  *   POLYMERGE_UP_AXIS (auto | y | z) · POLYMERGE_PALETTE (standard | colorblind)
  */
 import { spawnSync } from 'node:child_process';
@@ -205,8 +205,8 @@ async function main() {
   const view = { upAxis: choiceInput('POLYMERGE_UP_AXIS', UP_AXES, 'auto'), palette: choiceInput('POLYMERGE_PALETTE', PALETTES, 'standard') };
   const limits = {
     maxFiles: intInput('POLYMERGE_MAX_FILES', 10),
-    maxFaces: intInput('POLYMERGE_MAX_TRIANGLES', 200_000),
-    maxBytes: intInput('POLYMERGE_MAX_FILE_MB', 50) * 1024 * 1024,
+    maxFaces: intInput('POLYMERGE_MAX_TRIANGLES', 2_000_000),
+    maxBytes: intInput('POLYMERGE_MAX_FILE_MB', 150) * 1024 * 1024,
   };
 
   const base = mergeBase(repo, baseTip(repo, baseSha, headSha), headSha);

@@ -50,19 +50,38 @@ function reviver(_key: string, value: unknown): unknown {
   return value;
 }
 
+/** One number as the replacer would write it (JSON text). */
+function numberJson(x: number): string {
+  return Number.isFinite(x) && !Object.is(x, -0) ? String(x) : JSON.stringify(replacer('', x));
+}
+
+/** A typed array as JSON array text, built directly: JSON.stringify with a replacer would call it per element. */
+function arrayJson(arr: ArrayLike<number>, integers: boolean): string {
+  const n = arr.length;
+  if (n === 0) return '[]';
+  const parts = new Array<string>(n);
+  if (integers) for (let i = 0; i < n; i++) parts[i] = String(arr[i]);
+  else for (let i = 0; i < n; i++) parts[i] = numberJson(arr[i]);
+  return `[${parts.join(',')}]`;
+}
+
 /** JSON-safe serialisation (typed arrays → plain arrays). */
 export function serializeDiff(result: IDiffResult): string {
+  // Everything but the big per-vertex / per-face arrays goes through JSON.stringify with the
+  // replacer; those arrays are written directly (a replacer would be called once per element)
+  // and appended as the object's last members.
   const plain: Record<string, unknown> = { ...result };
-  for (const key of Object.keys(TYPED_FIELDS)) {
-    const arr = (result as unknown as Record<string, ArrayLike<number>>)[key];
-    plain[key] = Array.from(arr);
-  }
+  for (const key of Object.keys(TYPED_FIELDS)) delete plain[key];
   plain.parts = (result.parts ?? []).map((p) => ({
     ...p,
     baseVertices: Array.from(p.baseVertices),
     targetVertices: Array.from(p.targetVertices),
   }));
-  return JSON.stringify(plain, replacer);
+  const rest = JSON.stringify(plain, replacer);
+  const arrays = Object.entries(TYPED_FIELDS)
+    .map(([key, Ctor]) => `${JSON.stringify(key)}:${arrayJson((result as unknown as Record<string, ArrayLike<number>>)[key], Ctor !== Float32Array)}`)
+    .join(',');
+  return rest === '{}' ? `{${arrays}}` : `${rest.slice(0, -1)},${arrays}}`;
 }
 
 /** Inverse of serializeDiff (plain arrays → typed arrays). Throws on malformed input. */

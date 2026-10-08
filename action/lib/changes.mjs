@@ -3,7 +3,7 @@
  * the head. Pure functions (no git, no fs), unit-tested in action/test/changes.test.ts.
  */
 
-export const MODEL_EXTENSIONS = ['stl', 'obj', 'gltf', 'glb', 'step', 'stp'];
+export const MODEL_EXTENSIONS = ['stl', 'obj', 'gltf', 'glb', '3mf', 'ply', 'step', 'stp'];
 
 const SYMLINK = '120000';
 const GITLINK = '160000';
@@ -12,13 +12,13 @@ const NONE = '000000';
 /**
  * The model format a path's extension names (case-insensitive), or null. `.stp` is STEP too.
  * @param {string | null | undefined} path
- * @returns {'stl' | 'obj' | 'gltf' | 'glb' | 'step' | null}
+ * @returns {'stl' | 'obj' | 'gltf' | 'glb' | '3mf' | 'ply' | 'step' | null}
  */
 export function modelFormat(path) {
   const m = /\.([A-Za-z0-9]+)$/.exec(path ?? '');
   const ext = m ? m[1].toLowerCase() : '';
   if (!MODEL_EXTENSIONS.includes(ext)) return null;
-  return ext === 'stp' ? 'step' : /** @type {'stl' | 'obj' | 'gltf' | 'glb' | 'step'} */ (ext);
+  return ext === 'stp' ? 'step' : /** @type {'stl' | 'obj' | 'gltf' | 'glb' | '3mf' | 'ply' | 'step'} */ (ext);
 }
 
 /**

@@ -59,6 +59,8 @@ export interface TrianglePart {
    * null when the part has no such set. Only kept when `WeldInput.appearance` is given.
    */
   uvs?: readonly (ArrayLike<number> | null)[] | null;
+  /** Optional integer tag per source triangle (STEP: its CAD face), carried to the kept faces. */
+  faceTags?: ArrayLike<number> | null;
 }
 
 export interface WeldInput {
@@ -83,6 +85,11 @@ export interface WeldInput {
   appearance?: { materials: readonly IMaterialDefinition[]; images: readonly ITextureImage[] };
   /** Output, when given: filled with the index into `parts` of each group of the result, in group order. */
   groupParts?: number[];
+  /**
+   * Output, when given: `tags` is set to the `faceTags` of every kept face, in face order (-1 for
+   * faces of parts without tags).
+   */
+  faceTagsOut?: { tags?: Int32Array };
 }
 
 // ---------------------------------------------------------------------------
@@ -463,6 +470,7 @@ export function buildWeldedMesh(input: WeldInput): IMesh {
   const welder: Welder = eps > 0 ? new EpsilonWelder(eps, expectedVertices) : new ExactWelder(expectedVertices);
   const faces = new Uint32Array(totalTris * 3);
   const faceMat = new Int32Array(totalTris);
+  const faceTag = input.faceTagsOut ? new Int32Array(totalTris).fill(-1) : null;
   // Global source-vertex index of each kept corner (only needed to resolve vertex ids).
   const cornerSrc = hasIds ? new Int32Array(totalTris * 3) : null;
   // Per-corner UVs of the kept triangles (NaN where a part lacks the set).
@@ -535,6 +543,7 @@ export function buildWeldedMesh(input: WeldInput): IMesh {
         cornerSrc[o + 2] = srcBase + src[2];
       }
       faceMat[nf] = perFace ? (perFace[t] ?? -1) : partMat;
+      if (faceTag && part.faceTags) faceTag[nf] = part.faceTags[t] ?? -1;
       if (partUvs) {
         for (let k = 0; k < partUvs.length; k++) {
           const uv = partUvs[k];
@@ -617,6 +626,7 @@ export function buildWeldedMesh(input: WeldInput): IMesh {
   }
 
   if (input.groupParts) for (const r of ranges) input.groupParts.push(r.part);
+  if (input.faceTagsOut && faceTag) input.faceTagsOut.tags = nf === faceTag.length ? faceTag : faceTag.slice(0, nf);
   const groups: IMeshGroup[] = ranges.map((r) => {
     const g: IMeshGroup = { name: r.name, faceStart: r.start, faceCount: r.count };
     if (anyMaterial) {

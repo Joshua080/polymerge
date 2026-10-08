@@ -3,7 +3,8 @@
  * snapshot of the viewer state, and `document.body.dataset.state` mirrors `state`
  * so tests can simply wait for `body[data-state="ready"]`.
  */
-import type { IDiffStats, IMergeStats, IMeshSummary, ITierAttempt, IVertexChange, MatchTier, MergeResolution, Vec3 } from 'polymerge-core';
+import type { IDiffStats, IMergeStats, IMeshSummary, IMetricsComparison, ITierAttempt, IVertexChange, MatchTier, MergeResolution, Vec3 } from 'polymerge-core';
+import type { IReviewHookState } from './tools.js';
 
 export type ViewerState = 'idle' | 'loading' | 'ready' | 'error';
 
@@ -82,12 +83,18 @@ export interface IPolymergeHook {
   engine?: 'worker' | 'main';
   /** Number of reported part motions in the result. */
   parts?: number;
+  /** Geometry metrics of both versions (size, area, volume) and their change. */
+  metrics?: IMetricsComparison;
   /** When the last diff computed, epoch ms [start, end] (for responsiveness checks). */
   diffWindow?: [number, number];
   /** The vertex currently shown in the inspector, if any. */
   selection?: ISelectionSnapshot;
-  /** How the models are shown: which axis is up, and the colour palette. */
-  view?: { up: 'y' | 'z'; palette: 'standard' | 'colorblind' };
+  /** The review tools: section plane and its cut, the measurement, the before / after split. */
+  review?: IReviewHookState;
+  /** Face-aware STEP: the CAD faces that changed, in words, and how many did not. */
+  cad?: { unchanged: number; changes: { kind: string; text: string; focus: Vec3 }[] };
+  /** How the models are shown: which axis is up, the colour palette and the page theme. */
+  view?: { up: 'y' | 'z'; palette: 'standard' | 'colorblind'; theme?: 'light' | 'dark' };
 }
 
 declare global {

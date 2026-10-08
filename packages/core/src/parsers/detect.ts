@@ -3,8 +3,9 @@
  */
 import { MeshLoadError, type SourceFormat } from '../types.js';
 import { decodeUtf8, namePrefix, readU32LE, toBytes } from './bytes.js';
+import { looksLikeThreeMf } from './threemf.js';
 
-const EXTENSIONS: Record<string, SourceFormat> = { stl: 'stl', obj: 'obj', gltf: 'gltf', glb: 'glb', step: 'step', stp: 'step' };
+const EXTENSIONS: Record<string, SourceFormat> = { stl: 'stl', obj: 'obj', gltf: 'gltf', glb: 'glb', step: 'step', stp: 'step', ply: 'ply', '3mf': '3mf' };
 
 /** How much of the file is decoded as text for sniffing. */
 const SNIFF_BYTES = 64 * 1024;
@@ -34,10 +35,11 @@ function hasObjFaceLine(bytes: Uint8Array, from: number): boolean {
 }
 
 /**
- * Guess the format from the bytes alone. Order: GLB magic → exact binary-STL size
- * (84 + 50 × triangleCount, which is checked before any text heuristic because many
- * binary STL headers start with "solid") → JSON `{` → STEP `ISO-10303-21;` → ASCII
- * `solid … facet` → OBJ `v x y z` + `f …` lines. Returns undefined if nothing matches.
+ * Guess the format from the bytes alone. Order: GLB magic → ZIP magic holding a `.model` part
+ * (3MF) → exact binary-STL size (84 + 50 × triangleCount, which is checked before any text
+ * heuristic because many binary STL headers start with "solid") → `ply` line → JSON `{` →
+ * STEP `ISO-10303-21;` → ASCII `solid … facet` → OBJ `v x y z` + `f …` lines. Returns
+ * undefined if nothing matches.
  */
 export function sniffFormat(data: ArrayBuffer | Uint8Array): SourceFormat | undefined {
   const bytes = toBytes(data);
@@ -45,7 +47,10 @@ export function sniffFormat(data: ArrayBuffer | Uint8Array): SourceFormat | unde
   if (n === 0) return undefined;
   // "glTF" little-endian magic.
   if (n >= 12 && bytes[0] === 0x67 && bytes[1] === 0x6c && bytes[2] === 0x54 && bytes[3] === 0x46) return 'glb';
+  if (looksLikeThreeMf(bytes)) return '3mf';
   if (n >= 84 && 84 + 50 * readU32LE(bytes, 80) === n) return 'stl';
+  // "ply" then a line break (the PLY magic line).
+  if (n >= 4 && bytes[0] === 0x70 && bytes[1] === 0x6c && bytes[2] === 0x79 && (bytes[3] === 0x0a || bytes[3] === 0x0d)) return 'ply';
 
   const head = decodeUtf8(bytes.subarray(0, Math.min(n, SNIFF_BYTES)));
   const text = head.trimStart();
@@ -69,6 +74,6 @@ export function detectFormat(data: ArrayBuffer | Uint8Array, fileName?: string):
   const sniffed = sniffFormat(bytes);
   if (sniffed) return sniffed;
   throw new MeshLoadError(
-    `${namePrefix(fileName)}unknown mesh format: expected STL (ASCII or binary), OBJ, glTF (.gltf JSON), GLB or STEP`,
+    `${namePrefix(fileName)}unknown mesh format: expected STL (ASCII or binary), OBJ, glTF (.gltf JSON), GLB, STEP, PLY or 3MF`,
   );
 }

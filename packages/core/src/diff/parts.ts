@@ -122,8 +122,36 @@ interface ISub {
   surf: IAlignSurface;
 }
 
-/** A component as a standalone surface (positions optionally transformed, faces re-indexed). */
-function subSurface(mesh: IMesh, cc: IComponents, c: number, g: IRigid | null, local: Int32Array): ISub {
+/** True when g leaves every point exactly where it is. */
+function isIdentityRigid(g: IRigid): boolean {
+  const r = g.r;
+  return g.s === 1 && g.t[0] === 0 && g.t[1] === 0 && g.t[2] === 0 && r[0] === 1 && r[4] === 1 && r[8] === 1 && r[1] === 0 && r[2] === 0 && r[3] === 0 && r[5] === 0 && r[6] === 0 && r[7] === 0;
+}
+
+/**
+ * A component as a standalone surface (positions optionally transformed, faces re-indexed).
+ * When the component is the whole mesh and is not moved, that IS the mesh: the context's kd-tree
+ * and BVH are reused (Tier 3 needs them anyway) instead of building copies, which for a
+ * million-triangle model costs seconds.
+ */
+function subSurface(ctx: DiffContext, side: 'base' | 'target', c: number, g: IRigid | null, local: Int32Array): ISub {
+  const mesh = side === 'base' ? ctx.base : ctx.target;
+  const cc = side === 'base' ? ctx.baseComponents : ctx.targetComponents;
+  const all = componentVertices(cc, c);
+  if (all.length === mesh.vertexCount && (g === null || isIdentityRigid(g))) {
+    // Component vertices are ascending, so the whole mesh maps onto itself.
+    for (let i = 0; i < all.length; i++) local[all[i]] = i;
+    return {
+      verts: all,
+      surf: {
+        positions: mesh.positions,
+        faces: mesh.faces,
+        bounds: side === 'base' ? ctx.baseBounds : ctx.targetBounds,
+        kd: side === 'base' ? ctx.baseKd : ctx.targetKd,
+        bvh: mesh.faceCount > 0 ? (side === 'base' ? ctx.baseBvh : ctx.targetBvh) : null,
+      },
+    };
+  }
   const verts = componentVertices(cc, c);
   const pos = new Float64Array(verts.length * 3);
   const q = new Float64Array(3);
@@ -169,8 +197,8 @@ interface IRegistration {
 }
 
 function register(ctx: DiffContext, A: IRigid, cB: number, cT: number, localB: Int32Array, localT: Int32Array): IRegistration {
-  const src = subSurface(ctx.base, ctx.baseComponents, cB, A, localB);
-  const dst = subSurface(ctx.target, ctx.targetComponents, cT, null, localT);
+  const src = subSurface(ctx, 'base', cB, A, localB);
+  const dst = subSurface(ctx, 'target', cT, null, localT);
   const diag = (b: IAlignSurface['bounds']): number => Math.hypot(b.max[0] - b.min[0], b.max[1] - b.min[1], b.max[2] - b.min[2]);
   const est = estimateAlignment(src.surf, dst.surf, {
     moveEpsilon: ctx.options.moveEpsilon,
@@ -330,7 +358,8 @@ export function recoverPartsTopological(ctx: DiffContext, A: IRigid, b2t: Int32A
       applyRigid(reg.g, reg.src.surf.positions[i * 3], reg.src.surf.positions[i * 3 + 1], reg.src.surf.positions[i * 3 + 2], q);
       moved.set(q, i * 3);
     }
-    const kdMoved = new KdTree(moved);
+    // An unmoved part needs no second tree: its own is the same points.
+    const kdMoved = isIdentityRigid(reg.g) ? reg.src.surf.kd : new KdTree(moved);
     const kdT = reg.dst.surf.kd;
     const takenB = new Uint8Array(vB.length);
     const takenT = new Uint8Array(vT.length);

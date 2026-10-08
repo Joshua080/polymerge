@@ -22,11 +22,19 @@ import path from 'node:path';
  * @typedef {{ vertices: number, faces: number }} MeshCounts
  * @typedef {{ name: string | null, rotationDeg: number, distance: number }} PartSummary
  * @typedef {{ units: { from: string, to: string, factor: number } | null, scale: number, rotationDeg: number, distance: number }} TransformSummary
+ * @typedef {{ before: number, after: number }} BeforeAfter
+ * @typedef {{
+ *   unit: 'mm' | 'm' | null, size: { before: number[], after: number[] }, area: BeforeAfter,
+ *   volume: BeforeAfter | null, closed: { before: boolean, after: boolean }
+ * }} GeometrySummary
+ * @typedef {{ kind: string, text: string }} CadChange
+ * @typedef {{ faces: number, unchanged: number, changes: CadChange[], changesTotal: number }} CadSummary
  * @typedef {{
  *   tier: number,
  *   vertices: { before: number, after: number, unchanged: number, moved: number, added: number, removed: number },
  *   faces: { before: number, after: number, unchanged: number, modified: number, added: number, removed: number },
- *   maxDisplacement: number, parts: PartSummary[], partsTotal: number, transform: TransformSummary | null
+ *   maxDisplacement: number, parts: PartSummary[], partsTotal: number, transform: TransformSummary | null,
+ *   geometry: GeometrySummary | null, cad: CadSummary | null
  * }} DiffSummary
  * @typedef {{
  *   path: string, oldPath: string | null, change: string, status: string, image: string | null,
@@ -109,6 +117,58 @@ function meshCounts(v, where) {
   return { vertices: count(v.vertices, `${where}.vertices`), faces: count(v.faces, `${where}.faces`) };
 }
 
+function measure(v, where) {
+  const x = real(v, where);
+  if (x < 0) fail(`${where} must not be negative`);
+  return x;
+}
+
+/** @returns {GeometrySummary | null} */
+function geometrySummary(v, where) {
+  if (v === null || v === undefined) return null;
+  if (!isObject(v) || !isObject(v.size) || !isObject(v.area) || !isObject(v.closed)) fail(`${where} must be a geometry summary`);
+  const triple = (a, w) => {
+    if (!Array.isArray(a) || a.length !== 3) fail(`${w} must be three numbers`);
+    return a.map((x, i) => measure(x, `${w}[${i}]`));
+  };
+  const pair = (o, w) => {
+    if (!isObject(o)) fail(`${w} must be an object`);
+    return { before: measure(o.before, `${w}.before`), after: measure(o.after, `${w}.after`) };
+  };
+  return {
+    unit: /** @type {'mm' | 'm' | null} */ (v.unit === null || v.unit === undefined ? null : oneOf(v.unit, ['mm', 'm'], `${where}.unit`)),
+    size: { before: triple(v.size.before, `${where}.size.before`), after: triple(v.size.after, `${where}.size.after`) },
+    area: pair(v.area, `${where}.area`),
+    volume: v.volume === null || v.volume === undefined ? null : pair(v.volume, `${where}.volume`),
+    closed: { before: v.closed.before === true, after: v.closed.after === true },
+  };
+}
+
+export const CAD_KINDS = ['reshaped', 'moved', 'resized', 'added', 'removed'];
+
+/**
+ * The words polymerge writes for a CAD-face change: letters, digits, spaces and a few signs.
+ * Nothing in that set can open markdown or HTML (no `*_[]<>#|\` or backtick), so a change that
+ * passes is safe to show as text.
+ */
+const CAD_TEXT = /^[A-Za-z0-9 .,:()+\u2212\u00d8\u00b0\u00b2\u00b3\u2192-]{1,160}$/u;
+
+/** @returns {CadSummary | null} */
+function cadSummary(v, where) {
+  if (v === null || v === undefined) return null;
+  if (!isObject(v) || !Array.isArray(v.changes) || v.changes.length > 20) fail(`${where} must be a CAD summary with at most 20 changes`);
+  return {
+    faces: count(v.faces, `${where}.faces`),
+    unchanged: count(v.unchanged, `${where}.unchanged`),
+    changes: v.changes.map((c, i) => {
+      if (!isObject(c)) fail(`${where}.changes[${i}] must be an object`);
+      if (typeof c.text !== 'string' || !CAD_TEXT.test(c.text)) fail(`${where}.changes[${i}].text has characters a CAD change never has`);
+      return { kind: oneOf(c.kind, CAD_KINDS, `${where}.changes[${i}].kind`), text: c.text };
+    }),
+    changesTotal: count(v.changesTotal, `${where}.changesTotal`),
+  };
+}
+
 function diffSummary(v, where) {
   if (v === null || v === undefined) return null;
   if (!isObject(v) || !isObject(v.vertices) || !isObject(v.faces)) fail(`${where} must be a diff summary`);
@@ -138,6 +198,8 @@ function diffSummary(v, where) {
     }),
     partsTotal: count(v.partsTotal, `${where}.partsTotal`),
     transform,
+    geometry: geometrySummary(v.geometry, `${where}.geometry`),
+    cad: cadSummary(v.cad, `${where}.cad`),
   };
 }
 

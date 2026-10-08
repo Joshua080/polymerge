@@ -256,7 +256,7 @@ The prefix check catches all of these today. But it is path arithmetic on attack
 
 **Models:**
 - They are served from memory by exact path.
-- Content types are limited to the model types (STL, OBJ, glTF, GLB, STEP); anything else is `application/octet-stream`.
+- Content types are limited to the model types (STL, OBJ, glTF, GLB, 3MF, STEP); anything else, PLY included, is `application/octet-stream`.
   - Before: a path ending in `.html` (`view a.html b.html`, or `--name x.html`) would have been served as `text/html` on the viewer's origin, i.e. script running on the origin that holds the token (A6).
   - All responses also send `X-Content-Type-Options: nosniff`.
 - **Model URLs carry a random per-session segment:** `/models/<random>/<side>/<name>`.

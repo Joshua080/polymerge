@@ -162,10 +162,58 @@ describe('buildComment', () => {
   it('says so when a later push removes every model change', () => {
     const body = buildNoChangesComment(HEAD);
     expect(body.startsWith(`${MARKER}\n`)).toBe(true);
-    expect(body).toContain('no longer changes any STL, OBJ, glTF or GLB files (as of `9f8e7d6`)');
+    expect(body).toContain('no longer changes any 3D model files (as of `9f8e7d6`)');
   });
 
   it('uses the engine’s tier names', () => {
     for (const t of [1, 2, 3] as const) expect(TIER_NAMES[t]).toBe(`Tier ${t} · ${TIER_LABELS[t]}`);
+  });
+});
+
+describe('geometry in the comment', () => {
+  const geometry = (extra: Record<string, unknown> = {}) => ({
+    unit: 'mm',
+    size: { before: [100, 60, 10], after: [100, 60, 12] },
+    area: { before: 18_920, after: 19_500 },
+    volume: { before: 52_345.6, after: 55_100 },
+    closed: { before: true, after: true },
+    ...extra,
+  });
+
+  it('a line per model with volume, size and surface, and the volume change in the table', () => {
+    const body = buildComment(result([file('a.3mf', { image: '0.png', diff: { ...diff, geometry: geometry() } }), file('b.stl', { image: '1.png' })]));
+    expect(body).toContain('- **Geometry** volume 52.35 cm³ → 55.1 cm³ (+5.3%) · size 100 × 60 × 10 mm → 100 × 60 × 12 mm · surface +5.8 cm² (+3.1%)');
+    expect(body).toMatch(/\| `a\.3mf` \| .* · volume \+2\.754 cm³ \(\+5\.3%\) \|/);
+  });
+
+  it('says which version is not closed, and when the unit is unknown', () => {
+    const open = geometry({ unit: null, volume: null, closed: { before: true, after: false } });
+    const body = buildComment(result([file('a.stl', { image: '0.png', diff: { ...diff, geometry: open } })]));
+    expect(body).toContain('no volume (the after version is not a closed surface)');
+    expect(body).toContain('(in the file’s own units)');
+  });
+
+  it('rejects malformed geometry', () => {
+    expect(() => result([file('a.stl', { image: '0.png', diff: { ...diff, geometry: geometry({ unit: 'furlong' }) } })])).toThrow(/geometry\.unit/);
+    expect(() => result([file('a.stl', { image: '0.png', diff: { ...diff, geometry: geometry({ size: { before: [1, 2], after: [1, 2, 3] } }) } })])).toThrow(/size\.before/);
+    expect(() => result([file('a.stl', { image: '0.png', diff: { ...diff, geometry: geometry({ area: { before: -1, after: 2 } }) } })])).toThrow(/negative/);
+  });
+});
+
+describe('CAD faces in the comment (STEP)', () => {
+  const cad = { faces: 12, unchanged: 9, changes: [{ kind: 'moved', text: 'hole Ø8 moved 5 mm (+5, 0, 0)' }, { kind: 'reshaped', text: 'flat face facing −Z: outline changed' }, { kind: 'reshaped', text: 'flat face facing +Z: outline changed, area 5878.29 → 5850.29 mm²' }], changesTotal: 3 };
+
+  it('lists the face changes in words, and uses them as the table summary', () => {
+    const body = buildComment(result([file('plate.step', { image: '0.png', diff: { ...diff, cad } }), file('b.stl', { image: '1.png' })]));
+    expect(body).toContain('- **CAD faces** 9 of 12 unchanged; re-triangulation is not counted as a change');
+    expect(body).toContain('  - 🟨 hole Ø8 moved 5 mm (+5, 0, 0)');
+    expect(body).toMatch(/\| `plate\.step` \| 🟨 hole Ø8 moved 5 mm \(\+5, 0, 0\) · flat face facing −Z: outline changed · 1 more face change \|/);
+  });
+
+  it('rejects change text with anything markdown or HTML could use', () => {
+    for (const text of ['<img src=x>', 'a *b*', '[l](x)', 'x | y', 'a `b`', 'line\nbreak']) {
+      expect(() => result([file('p.step', { image: '0.png', diff: { ...diff, cad: { ...cad, changes: [{ kind: 'moved', text }] } } })])).toThrow(/characters a CAD change never has/);
+    }
+    expect(() => result([file('p.step', { image: '0.png', diff: { ...diff, cad: { ...cad, changes: [{ kind: 'exploded', text: 'x' }] } } })])).toThrow(/kind/);
   });
 });

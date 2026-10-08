@@ -1,7 +1,7 @@
 /**
  * The part of a diff that a pull-request comment shows, as plain JSON (no typed arrays): tier,
- * vertex / face counts, moved parts and a whole-model transform (unit or scale change). Pure;
- * unit-tested in action/test/summary.test.ts.
+ * vertex / face counts, moved parts, a whole-model transform (unit or scale change) and the
+ * geometry metrics (size, area, volume). Pure; unit-tested in action/test/summary.test.ts.
  */
 
 /** How many moved parts are described one by one. */
@@ -18,6 +18,40 @@ export function rotationDeg(m, scale = 1) {
   const sin = Math.hypot(r(2, 1) - r(1, 2), r(0, 2) - r(2, 0), r(1, 0) - r(0, 1)) / 2;
   const cos = (r(0, 0) + r(1, 1) + r(2, 2) - 1) / 2;
   return (Math.atan2(sin, cos) * 180) / Math.PI;
+}
+
+/**
+ * Size, surface area and volume before and after, from IDiffResult.metrics (null when absent).
+ * The unit is the one the formats state (STEP and 3MF: mm, glTF: m), null when unknown or when
+ * the two versions disagree; volume is null unless both versions are closed.
+ */
+export function summarizeGeometry(metrics) {
+  if (!metrics) return null;
+  const unit = metrics.unitsDiffer ? null : (metrics.base.unit ?? metrics.target.unit ?? null);
+  return {
+    unit,
+    size: { before: [...metrics.base.size], after: [...metrics.target.size] },
+    area: { before: metrics.base.surfaceArea, after: metrics.target.surfaceArea },
+    volume: metrics.volume ? { before: metrics.volume.base, after: metrics.volume.target } : null,
+    closed: { before: metrics.base.volume !== null, after: metrics.target.volume !== null },
+  };
+}
+
+/** How many CAD-face changes a comment lists one by one. */
+export const MAX_CAD_CHANGES = 6;
+
+/**
+ * STEP: the CAD-face comparison (IDiffResult.brep), as counts and the first few changes in words.
+ * The words are polymerge's own (numbers and fixed terms, never names from the file).
+ */
+export function summarizeCad(brep) {
+  if (!brep) return null;
+  return {
+    faces: brep.targetFaces,
+    unchanged: brep.unchanged,
+    changes: brep.changes.slice(0, MAX_CAD_CHANGES).map((c) => ({ kind: c.kind, text: c.description })),
+    changesTotal: brep.changes.length,
+  };
 }
 
 /**
@@ -64,6 +98,8 @@ export function summarizeDiff(result, { named = false } = {}) {
     })),
     partsTotal: parts.length,
     transform,
+    geometry: summarizeGeometry(result.metrics),
+    cad: summarizeCad(result.brep),
   };
 }
 

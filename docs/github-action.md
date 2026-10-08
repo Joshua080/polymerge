@@ -1,6 +1,6 @@
 # polymerge in pull requests (GitHub Action)
 
-When a pull request changes an STL, OBJ, glTF, GLB or STEP file, this action posts **one comment** on it:
+When a pull request changes an STL, OBJ, glTF, GLB, 3MF, PLY or STEP file, this action posts **one comment** on it:
 a before / after image of every changed model, rendered from the same camera and coloured by what
 changed, with a short structural summary. The comment is updated in place on every push.
 
@@ -146,8 +146,8 @@ reported as a parse error.
 | `github-token` | `${{ github.token }}` | Token for the image branch and the comment, and in `post` mode for downloading the artifact. |
 | `path` | `.` | The repository checkout to diff, relative to the workspace. |
 | `max-files` | `10` | At most this many changed models are diffed and rendered; the rest are listed. |
-| `max-triangles` | `200000` | Models with more triangles (either version) are listed, not rendered. |
-| `max-file-size` | `50` | Models larger than this many MB are listed, not rendered. |
+| `max-triangles` | `2000000` | Models with more triangles (either version) are listed, not rendered. A million-triangle model takes about 20 s to diff and render. |
+| `max-file-size` | `150` | Models larger than this many MB are listed, not rendered. |
 | `up-axis` | `auto` | Which model axis points up in the images. `auto`: Z for STEP files, Y for the rest. `z`: Z for every model (most CAD and 3D-printing STL exports are Z up). `y`: Y for every model. |
 | `palette` | `standard` | `colorblind`: blue added, orange removed, yellow moved, in the images and the comment's status squares (🟦 🟧 🟨), for readers with red-green colour blindness. |
 | `image-branch` | `polymerge-images` | Branch of your repository the images are committed to (created on first use). |
@@ -175,7 +175,8 @@ PNGs, in `all` / `render` mode) and `comment-url`.
    is drawn in the head's frame (aligned when the model was moved or rescaled as a whole), and
    the view turns to face the side of the model where the changes are. The card is 800 CSS px
    wide, the width of a GitHub comment, captured at 2× so it stays sharp on high-density screens
-   and still reads on a phone; its dark background suits both light and dark themes. The
+   and still reads on a phone; its light card with a soft grey 3D view sits well in both of
+   GitHub's themes. The
    rendering code is shared with the README images (`scripts/viewer-capture.mjs`).
 4. **Publish.** The PNGs are committed to the image branch and the comment links them by
    commit-pinned URLs (below). The comment is found by a hidden marker on its first line and
@@ -254,8 +255,8 @@ account and a secret).
 ## Limits
 
 - The action targets Linux runners (`ubuntu-latest`); macOS and Windows runners are untested.
-- At most `max-files` models are rendered per comment (10), each up to `max-triangles` (200,000)
-  and `max-file-size` (50 MB); the rest are listed. A comment is kept under GitHub's 65,536
+- At most `max-files` models are rendered per comment (10), each up to `max-triangles` (2,000,000)
+  and `max-file-size` (150 MB); the rest are listed. A comment is kept under GitHub's 65,536
   character limit by dropping per-file details first.
 - The diff's own limits apply (README, "What v1 does and doesn't handle"), including `.gltf`
   files with external buffers, which cannot be read.

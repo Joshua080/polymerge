@@ -20,6 +20,8 @@
  *  3. Tiers 1/2: matched-part analysis — parts already matched that moved rigidly are reported.
  */
 import { computeBounds, summarizeMesh } from '../mesh.js';
+import { stepInfo } from '../parsers/step.js';
+import { compareMetrics, computeMetrics } from '../metrics.js';
 import {
   TIER_NAMES,
   type DiffMeshesFn,
@@ -30,6 +32,7 @@ import {
   type ITierAttempt,
   type MatchTier,
 } from '../types.js';
+import { refineByBrepFaces } from './brep.js';
 import { classify } from './classify.js';
 import { DiffContext, pct, resolveOptions, type ITierOutcome } from './context.js';
 import { detectGlobalTransform } from './global.js';
@@ -203,6 +206,16 @@ export const diffMeshes: DiffMeshesFn = (base: IMesh, target: IMesh, options: ID
   }
 
   const cls = classify(ctx, result);
+  // STEP: compare the CAD faces as surfaces, so re-triangulated faces read as unchanged.
+  let brep: IDiffResult['brep'];
+  if (options.brepFaces !== false && base.brep && target.brep) {
+    const deflection = stepInfo(target)?.deflection ?? stepInfo(base)?.deflection ?? 0;
+    brep = refineByBrepFaces({ base, target, alignment: result.alignment, deflection }, cls);
+    logger.info(
+      `[polymerge] ↳ CAD faces: ${brep.unchanged} of ${brep.targetFaces} unchanged, ${brep.changes.length} changed; ` +
+        `${brep.retriangulated.target + brep.retriangulated.base} re-triangulated triangle(s) count as unchanged`,
+    );
+  }
 
   return {
     schemaVersion: 1,
@@ -223,6 +236,8 @@ export const diffMeshes: DiffMeshesFn = (base: IMesh, target: IMesh, options: ID
     targetFaceStatus: cls.targetFaceStatus,
     stats: cls.stats,
     parts,
+    ...(options.metrics === false ? {} : { metrics: compareMetrics(computeMetrics(base), computeMetrics(target)) }),
+    ...(brep ? { brep } : {}),
     durationMs: now() - t0,
   };
 };

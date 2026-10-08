@@ -3,14 +3,16 @@
 [![CI](https://github.com/Joshua080/polymerge/actions/workflows/ci.yml/badge.svg)](https://github.com/Joshua080/polymerge/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/npm/v/@joshuahurley/polymerge)](https://www.npmjs.com/package/@joshuahurley/polymerge)
 
-**Diff and three-way merge for 3D models (STL, OBJ, glTF/GLB), with a visual review in the browser and drivers for git. CAD files in STEP can be diffed and viewed too.**
+**Diff and three-way merge for 3D models (STL, OBJ, glTF/GLB, 3MF, PLY), with a visual review in the browser, everything also in the terminal, and drivers for git. CAD files in STEP can be diffed and viewed too, CAD face by CAD face.**
 
 > **Try it in your browser, no install:** open the [polymerge viewer](https://joshua080.github.io/polymerge/) and drop two versions of a model on it, or [open an example diff](https://joshua080.github.io/polymerge/?base=https://raw.githubusercontent.com/Joshua080/polymerge/v0.2.0/examples/plate/base.stl&target=https://raw.githubusercontent.com/Joshua080/polymerge/v0.2.0/examples/plate/ours.stl). It runs in your browser; your files are not uploaded.
 
 Most 3D "diff" tools paint a heatmap of how far two surfaces are apart. polymerge works out which vertex in the old model *became* which vertex in the new one, even when the file was re-exported, re-ordered, converted from inches to millimetres, or had a part moved. On top of that correspondence it can:
 - tell you exactly what changed;
 - merge two people's edits to the same model the way git merges text: independent changes are combined, and real conflicts are shown to you to decide;
-- comment on pull requests with a before/after render of every changed model ([GitHub Action](#use-it-in-pull-requests)).
+- comment on pull requests with a before/after render of every changed model ([GitHub Action](#use-it-in-pull-requests));
+- measure what changed: size, volume and surface area, cross-sections, distances;
+- save a diff as [one HTML file](#share-a-diff-as-one-file) that anyone can open offline, with nothing to install.
 
 ![Merge review: the conflict is orange; hover previews each side; clicking Theirs resolves it](docs/images/merge-review.gif)
 
@@ -59,11 +61,27 @@ Vertices  unchanged 161  moved 4  added 4  removed 4
 Faces     unchanged 254  modified 16  added 6  removed 18
 Displacement  max 0.2500  mean 0.2500
 
+Where it changed (3 regions):
+  1. 18 faces removed around (8.5, 8.5, 0), 3 × 3 × 0
+  2. 16 modified faces around (2.5, 2.5, 0.125), 3 × 3 × 0.25, largest move 0.25
+  3. 6 added faces around (12, 5.5, 0.5), 0 × 3 × 1
+
+Geometry        base               target                                            change
+  size          12 × 12 × 0        12 × 12 × 1                                       z +1
+  volume        —                  —
+  surface area  144                138.2                                             −5.755 (−4.0%)
+  closed        no: 48 open edges  no: 62 open edges, 3 edges between flipped faces
+  In the files' own units (STL, OBJ and PLY do not state one).
+
 Largest vertex moves (3 of 4):
   base #29 → target #77  Δ (0, 0, 0.2500)  |Δ| 0.2500
   base #28 → target #78  Δ (0, 0, 0.2500)  |Δ| 0.2500
   base #41 → target #83  Δ (0, 0, 0.2500)  |Δ| 0.2500
 ```
+
+How to read it:
+- **Where it changed** groups the changed faces into connected regions, largest first, with their centre, size and largest move.
+- **Geometry** compares size, volume and surface area. Volume needs a closed surface; this sheet is open, so there is none, and it says why. STL, OBJ and PLY don't state a unit, so the numbers are in the file's own units; 3MF and STEP are in mm, glTF in metres.
 
 A model re-exported in other units reads as one unit conversion, not as every vertex moving. Here the part was also rotated and its file re-ordered:
 
@@ -87,9 +105,54 @@ Moved parts (1):
 ```
 
 Useful options:
-- `--json out.json` (or `--json -`) writes the full result: every vertex correspondence and status;
+- `--json out.json` (or `--json -`) writes the full result: every vertex correspondence and status, the regions and the geometry;
 - `--exit-code` exits 1 when the models differ, like `git diff --exit-code`;
+- `--regions N` lists more (or, with 0, no) regions of change;
 - `-q` prints no report.
+
+### Inspect a model from the terminal
+
+Everything the viewer shows has a command that prints it as text. `--json` gives the same as JSON, for scripts.
+
+```console
+$ polymerge info examples/step-plate/ours.step
+ours.step
+  format        STEP
+  vertices      188 welded (396 from loader, weld ε=0)
+  faces         380 (380 from loader, 0 degenerate dropped)
+  …
+  size          100 × 60 × 10 mm
+  surface area  153.7 cm²
+  volume        58.78 cm³  (closed)
+  parts         1
+  STEP          1 solid(s), 12 B-rep face(s), in mm
+  CAD faces     6 × flat face, 4 × outer round r5, 2 × hole Ø8
+
+$ polymerge section examples/step-plate/base.step examples/step-plate/ours.step --z 5
+polymerge section  z = 5
+
+base.step  z = 5
+  outline 1  100 × 60 mm            at (0, 0)             perimeter 311.4 mm   area 59.78 cm²
+  hole 1     circle Ø7.977 mm       at (30.0117, 0)       perimeter 25.08 mm   area 49.87 mm²
+  hole 2     circle Ø7.977 mm       at (-29.9883, 0)      perimeter 25.08 mm   area 49.87 mm²
+  material in the cut 58.78 cm²
+
+ours.step  z = 5
+  outline 1  100 × 60 mm            at (0, 0)             perimeter 311.4 mm   area 59.78 cm²
+  hole 1     circle Ø7.977 mm       at (35.0117, 0)       perimeter 25.08 mm   area 49.87 mm²
+  …
+Change  material unchanged · loops 3 → 3
+
+$ polymerge measure examples/step-plate/ours.step 0,0,20 0,0,-20
+polymerge measure  ours.step
+  from  (0, 0, 10) on the surface, 10 mm from (0, 0, 20)
+  to    (0, 0, 0) on the surface, 20 mm from (0, 0, -20)
+  distance 10 mm   Δx 0  Δy 0  Δz -10
+```
+
+- `section` cuts with a plane: `--x`, `--y` or `--z`, a number or a percentage of the model's size (`--z 50%` is the default). Give two files to see how the cut changed; `--svg cut.svg` draws it. The hole reads Ø7.977 rather than Ø8 because the cut goes through the triangles, which sit inside the true circle.
+- `measure` snaps each point to the nearest point of the surface (`--no-snap` keeps them as given). A point is `x,y,z`, or `v:123` for vertex 123.
+- In the classic Windows console, symbols such as `×`, `Ø` and `→` would come out garbled, so polymerge prints plain ASCII there by itself (`x`, `D`, `->`). `--ascii` forces that anywhere, `--unicode` turns it off, and so does `POLYMERGE_ASCII=0`. Windows Terminal and VS Code show the symbols.
 
 ### Look at a diff in 3D
 
@@ -105,9 +168,26 @@ Colours:
 
 Click any vertex to read its correspondence, e.g. *base #29 → target #77, Δ (0, 0, 0.25)*. The two files can be different formats.
 
+**Review tools** sit over the 3D view (keys in brackets):
+- **Section** (`S`): cuts the model with a plane along X, Y or Z and draws the cut face. The card lists its outlines and holes (with their diameters when they are round) and the area of material. With two versions, the old cut is drawn dashed and the card says how the area changed.
+- **Measure** (`M`): click two points for the distance between them and Δx / Δy / Δz. A point snaps to a nearby corner.
+- **Before / after** (`C`): a divider you drag across the view, the old model on the left and the new one on the right, from the same camera. Measuring works across it, from old to new geometry.
+
+The panel also shows **Geometry** (size, volume, surface area, before and after) and, for STEP, the **CAD faces** that changed, each with a **Show** button that turns the view to it. The sun / moon button at the top switches between the light and the dark theme.
+
 Two menus under the models change how they are shown:
 - **Colours → Colour-blind safe** swaps red and green, which red-green colour blindness can't tell apart, for orange and blue: blue added, orange removed, yellow moved. Your browser remembers the choice. On the command line: `--palette colorblind`.
 - **Up axis → Z up** is for CAD and 3D-printing files, which are usually Z up and otherwise open lying on their side. STEP files open Z up on their own. On the command line: `--up z`.
+
+### Share a diff as one file
+
+```console
+$ polymerge export examples/step-plate/base.step examples/step-plate/ours.step
+Wrote base__ours.html (1.1 MB): base.step → ours.step, Tier 2, vertices 50 moved, 8 added, 8 removed.
+It opens in any browser, offline, with nothing to install: email it or attach it to a ticket.
+```
+
+The file holds the viewer and the diff: both models and the result, already computed. It opens from disk in any browser, with every review tool, and fetches nothing, so it suits private models: nothing is uploaded anywhere. A STEP diff needs no OpenCascade on the other end. `-o name.html` names the file, `--up z` opens it Z up. In the viewer, **Save as HTML** (under the result) writes the same file.
 
 ### Three-way merge
 
@@ -207,14 +287,18 @@ What it writes (`polymerge git-setup` prints the same, to copy by hand):
 *.obj  diff=polymerge merge=polymerge
 *.gltf diff=polymerge merge=polymerge
 *.glb  diff=polymerge merge=polymerge
+*.ply  diff=polymerge merge=polymerge
 *.step diff=polymerge merge=binary      # STEP: diff only (see "STEP files" below)
 *.stp  diff=polymerge merge=binary
+*.3mf  diff=polymerge merge=binary      # 3MF: merged only when you ask (see below)
 
 git config diff.polymerge.command "polymerge git-diff"
 git config difftool.polymerge.cmd 'polymerge view "$LOCAL" "$REMOTE" --name "$MERGED"'
 git config merge.polymerge.name "polymerge three-way 3D merge"
 git config merge.polymerge.driver "polymerge git-merge %O %A %B %P"
 ```
+
+A 3MF file is usually a slicer project: settings and plates besides the model. A merged 3MF keeps the geometry and colours but not the project, so git never writes one on its own: a conflicting 3MF is marked conflicted, and `polymerge resolve part.3mf` merges it when you ask.
 
 Then:
 
@@ -229,7 +313,7 @@ git commit                                        # after saving; or: polymerge 
 
 ### Use it in pull requests
 
-A GitHub Action comments on pull requests that change STL, OBJ, glTF, GLB or STEP files. For each changed model it shows a before/after image from the same camera, coloured by what changed, plus a short structural summary. There is one comment per pull request, updated on every push.
+A GitHub Action comments on pull requests that change STL, OBJ, glTF, GLB, 3MF, PLY or STEP files. For each changed model it shows a before/after image from the same camera, coloured by what changed, plus a short summary: what moved, the change in volume and size, and for STEP the CAD faces that changed ("hole Ø8 moved 5 mm"). Models up to 2 million triangles and 150 MB are rendered by default. There is one comment per pull request, updated on every push.
 
 ![Before/after card from the GitHub Action](docs/images/action-card.png)
 
@@ -275,7 +359,7 @@ https://joshua080.github.io/polymerge/?base=https://raw.githubusercontent.com/Jo
 
 STEP (`.step`, `.stp`) is what most CAD tools export. polymerge can **diff and view** STEP files: `diff`, `view`, `info`, the git diff driver, the pull-request Action and the hosted viewer all take them. It does not merge them (see below).
 
-STEP stores exact surfaces, not triangles, so it has to be tessellated first. That needs OpenCascade, a CAD kernel, from the [`occt-import-js`](https://github.com/kovacsv/occt-import-js) package (about 8 MB). It is an **optional download** that polymerge does not install by itself:
+STEP stores exact surfaces, not triangles, so it has to be tessellated first; polymerge keeps track of which triangles came from which CAD face, and compares the faces themselves. That needs OpenCascade, a CAD kernel, from the [`occt-import-js`](https://github.com/kovacsv/occt-import-js) package (about 8 MB). It is an **optional download** that polymerge does not install by itself:
 
 ```bash
 npm install -g occt-import-js@0.0.23        # next to a global polymerge
@@ -289,23 +373,31 @@ $ polymerge diff examples/step-plate/base.step examples/step-plate/ours.step --t
 polymerge diff
   base   base.step  STEP  188 vertices · 380 faces
   target ours.step  STEP  188 vertices · 380 faces
-  STEP   tessellated by OpenCascade (deflection 0.05 mm for both); a flat face re-triangulated around an edit counts as modified
+  STEP   tessellated by OpenCascade (deflection 0.05 mm for both), compared CAD face by CAD face: re-triangulation is not a change
 
 Correspondence: Tier 2 · topological (geometric + adjacency)
 …
 Vertices  unchanged 130  moved 50  added 8  removed 8
-Faces     unchanged 234  modified 100  added 46  removed 46
+Faces     unchanged 284  modified 58  added 38  removed 18
 Displacement  max 5.0000  mean 4.2364
 
-Largest vertex moves (2 of 50):
-  base #51 → target #24  Δ (5.0000, 0, 0)  |Δ| 5.0000
-  base #72 → target #43  Δ (5.0000, 0, 0)  |Δ| 5.0000
+CAD faces  9 of 12 unchanged · 3 changes (120 re-triangulated triangles ignored)
+  ~ hole Ø8 moved 5 mm (+5, 0, 0) at (35, 0, 5)
+  ~ flat face facing −Z: outline changed at (7.0491, 0, 0)
+  ~ flat face facing +Z: outline changed at (7.0491, 0, 10)
+
+Geometry        base              target            change
+  size          100 × 60 × 10 mm  100 × 60 × 10 mm  no change
+  volume        58.78 cm³         58.78 cm³         no change
+  surface area  153.7 cm²         153.7 cm²         no change
+  closed        yes               yes
+…
 ```
 
 How to read it:
 - **Both versions are tessellated with the same tolerance**, the largest gap allowed between a triangle and the true surface. It comes from the old version's size (1/2000 of its diagonal, rounded down to 1, 2 or 5 × 10ⁿ mm); otherwise surfaces that didn't change would get different triangles. STEP is always read in millimetres, whatever unit the file uses.
-- **The hole's edge moved exactly 5 mm**, which is the real edit.
-- **The counts also include re-triangulation.** OpenCascade re-triangulates a whole flat face when a hole in it moves, so the top and bottom faces read as modified, added and removed, although their shape didn't change. Reading changes per CAD face instead is possible future work; it is not built.
+- **CAD faces** is the change in CAD terms. Each face is recognised as a plane, cylinder, cone or sphere and compared by its surface: the hole is the same Ø8 cylinder, 5 mm further along X. The top and bottom faces are the same planes with a different outline, because the hole in them moved. Other edits read as "hole Ø8 → Ø9", "new hole Ø6", "hole Ø8 removed" or "flat face facing +Z moved 2 mm".
+- **Re-triangulation is not a change.** OpenCascade re-triangulates a whole flat face when a hole in it moves. Triangles on a CAD face whose surface and outline didn't change count as unchanged (120 here), so the colours in the viewer show only the real edit.
 - Each solid becomes a part named as in the file (a part used twice gets "#2"), and colours become materials.
 
 The hosted viewer reads STEP too. It **asks first**, then downloads OpenCascade from jsDelivr. The version is pinned and checked against its SHA-256 before it runs, and nothing is uploaded. `polymerge view` serves your own installed copy instead, so nothing is fetched from elsewhere.
@@ -339,26 +431,34 @@ The engine logs every decision to the console (`[polymerge] …`). Pass `logger:
 ## Command reference
 
 ```
-polymerge diff <base> <target> [--json out.json|-] [--force-tier 1|2|3] [--exit-code] [--top N] [-q]
+polymerge diff <base> <target> [--json out.json|-] [--force-tier 1|2|3] [--exit-code] [--top N] [--regions N] [-q]
+polymerge info <file> [--json]                   format, counts, size, volume, surface, parts; STEP: CAD faces
+polymerge section <file> [<file2>] [--x|--y|--z <value|N%>] [--svg cut.svg] [--json]
+                                                 cut with a plane: outlines, holes, areas; two files: the change
+polymerge measure <file> <point> <point> [--no-snap] [--json]
+                                                 distance between two points of the surface (x,y,z or v:<vertex>)
 polymerge view <base> <target> [--up y|z] [--palette standard|colorblind] [--port N] [--no-open]
 polymerge view <base> <ours> <theirs>            merge review: see conflicts, resolve by clicking
-polymerge merge <base> <ours> <theirs> [-o out.stl|obj|glb|gltf] [--resolve ours|theirs|base] [--pick id=side]
+polymerge export <base> <target> [-o page.html] [--up y|z]
+                                                 the diff and the viewer in one HTML file, to open anywhere offline
+polymerge merge <base> <ours> <theirs> [-o out.stl|obj|glb|gltf|ply|3mf] [--resolve ours|theirs|base] [--pick id=side]
                 [--report x.json] [--no-collision-check]
 polymerge review <path>                          merge review of a conflicted git merge; saves and stages <path>
-polymerge resolve <path> --pick <id>=<side>      finish a conflicted git merge of a model
+polymerge resolve <path> [--pick <id>=<side> | --resolve <side>] [--dry-run]
+                                                 finish a conflicted git merge of a model (--dry-run: list the conflicts)
 polymerge demo [example]                         the viewer on a built-in example
-polymerge info <file>                            the normalised mesh summary
 polymerge init [--global] [--dry-run]            set git up: .gitattributes and the drivers
 polymerge git-diff | git-merge | git-setup       git drivers, and the config to use them
+--ascii / --unicode                              plain ASCII output (automatic in the classic Windows console), or not
 ```
 
-STEP files work with `diff`, `view`, `info` and `git-diff`, given the optional reader ([STEP files](#step-files-cad)).
+STEP files work with `diff`, `view`, `export`, `info`, `section`, `measure` and `git-diff`, given the optional reader ([STEP files](#step-files-cad)).
 
 `polymerge --help` lists every option.
 
 ## How it works
 
-1. **Normalise.** STL, OBJ and glTF/GLB are loaded with the three.js loaders, and STEP is tessellated by OpenCascade. All of them are converted into one mesh form:
+1. **Normalise.** STL, OBJ and glTF/GLB are loaded with the three.js loaders, 3MF and PLY with polymerge's own readers, and STEP is tessellated by OpenCascade. All of them are converted into one mesh form:
    - vertices are welded;
    - glTF node transforms are baked in, and the scene (nodes, transforms, meshes) is recorded alongside, so glTF output can rebuild it.
 
@@ -379,8 +479,8 @@ STEP files work with `diff`, `view`, `info` and `git-diff`, given the optional r
 
 **Handles**
 - **Formats.**
-  - Input: STL (ASCII and binary), OBJ, GLB, and `.gltf` with embedded buffers. STEP for diff and view, with the optional OpenCascade reader.
-  - Output for merges: STL, OBJ (keeps groups), GLB and self-contained `.gltf` (keep the base's nodes, names, transforms and meshes; positions round-trip bit for bit).
+  - Input: STL (ASCII and binary), OBJ, GLB, `.gltf` with embedded buffers, 3MF (build items, components, units, colours) and PLY (ASCII and binary, polygons, face colours). STEP for diff and view, with the optional OpenCascade reader.
+  - Output for merges: STL, OBJ (keeps groups), GLB and self-contained `.gltf` (keep the base's nodes, names, transforms and meshes; positions round-trip bit for bit), binary PLY and 3MF (geometry and colours, in mm).
 - **Diff.**
   - Direct vertex edits, re-ordered files, and local topology edits (holes, new patches, re-triangulated areas).
   - Whole-model moves, rotations and unit conversions (mm, cm, m, in, ft).
@@ -392,9 +492,10 @@ STEP files work with `diff`, `view`, `info` and `git-diff`, given the optional r
   - Collisions are detected: combined edits that make surfaces cross or fold.
   - **Materials, face materials, UVs and texture references of glTF/GLB files** are merged too: material properties one by one, face materials face by face, UVs as whole islands, and textures by their bytes. The merged appearance is written into the GLB / `.gltf` output.
   - git diff and merge drivers, including for glTF/GLB.
-- **Scale.** Tested up to about 100k vertices:
-  - a diff takes about 0.3 s (Tier 1) to 2.5 s (Tier 3);
-  - a 100k-vertex merge takes about 1.2 s, of which the collision check is about 25%.
+- **Scale.** Tested up to a million triangles (on one core of a CI machine):
+  - a diff takes about 1.5 s (Tier 1), 4.5 s (Tier 2) or 10 s (Tier 3, a re-meshed model);
+  - a merge takes about 4 s;
+  - the viewer shows a million-triangle diff in 6 s (Tier 1) to 17 s (Tier 3), and the pull-request Action renders one in about 18 s.
 
 **Doesn't handle (yet), by design or by scope.** These are deliberate limits, not surprises.
 - **The collision check detects damage, not design judgement** (design doc §4.1). It does not flag:
@@ -403,7 +504,9 @@ STEP files work with `diff`, `view`, `info` and `git-diff`, given the optional r
   - anything else that needs design intent.
 
   A merge can be free of collisions and still be wrong for your part. Review it.
-- **STEP is diffed as triangles, and never merged** ([STEP files](#step-files-cad)). A flat face re-triangulated around an edit reads as modified. Parameter changes (a hole Ø8 → Ø8.1) read as moved vertices. IGES, STEP-XML and compressed `.stpZ` are not read.
+- **STEP is compared face by face, and never merged** ([STEP files](#step-files-cad)). Planes, cylinders, cones and spheres are recognised; other surfaces (B-splines, tori) are compared by their shape only, so an edit there reads as "reshaped" without numbers. Faces are recognised from the triangles, so sizes are as exact as the tessellation (Ø7.98 for Ø8 in a section). IGES, STEP-XML and compressed `.stpZ` are not read.
+- **A saved HTML page is a snapshot.** It shows the diff as it was when it was saved, and it is about 1 MB plus the models. Merge reviews can't be saved as a page yet.
+- **3MF**: the slicer settings and plates of a project file are not merged, and textures and multi-material properties beyond colours are not read.
 - **Re-meshed sides can't be merged vertex by vertex.** If one side re-tessellated the model, the merge reports a whole-model `lineage` conflict: you pick one side's whole mesh. Transferring edits between tessellations is future work.
 - **A side that splits a part and moves half of it** is seen as local moves, not a part motion. The other side's edits on that half then conflict.
 - **Appearance merges for glTF/GLB only** ([rules](docs/appearance-merge-design.md)). STL and OBJ have no materials or UVs to merge (OBJ `vt` / `.mtl` and STL colours are not merged). Limits:
@@ -428,7 +531,8 @@ STEP files work with `diff`, `view`, `info` and `git-diff`, given the optional r
   - A regular lattice shifted by exactly one period can be mis-matched.
   - A region dragged far from its connected neighbours is followed only within about 3 edge lengths.
 - **Viewer:**
-  - Y is up unless the model is STEP; a Z-up STL or OBJ (most CAD and 3D-printing exports) needs **Up axis → Z up**, or `--up z`. The viewer doesn't guess it from the shape.
+  - Y is up unless the model is STEP; a Z-up STL, OBJ, 3MF or PLY (most CAD and 3D-printing exports) needs **Up axis → Z up**, or `--up z`. The viewer doesn't guess it from the shape.
+  - The section tool cuts along X, Y or Z only, not at an angle.
   - Saving into the repository works only from `polymerge review` (a conflicted `git merge`), for that one file, and only while the server listens on 127.0.0.1. `view` with three files and `demo` stay read-only: download the result or use `polymerge merge -o`.
   - The viewer's server answers only requests addressed to `localhost` or an IP address. Reaching it through another host name (a reverse proxy, `myhost.local`) is refused.
 
@@ -485,3 +589,5 @@ Bug reports (especially models polymerge gets wrong), ideas and pull requests ar
 ## License
 
 [MIT](LICENSE) © Joshua Hurley
+
+The viewer bundles the [Inter](https://rsms.me/inter) typeface, under the SIL Open Font License 1.1 ([its licence](apps/web/public/licenses/Inter-OFL.txt)).

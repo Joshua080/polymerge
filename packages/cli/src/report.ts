@@ -1,12 +1,20 @@
 import {
+  changeRegions,
   describeVertexChange,
+  displayUnit,
+  formatChange,
+  formatMeasure,
   stepInfo,
   VertexStatus,
+  volumeNote,
   type IDiffLogger,
   type IDiffResult,
   type IMesh,
+  type IMeshMetrics,
   type IMeshSummary,
+  type IMetricsComparison,
   type Mat4,
+  type MetricUnit,
 } from 'polymerge-core';
 
 const useColor = (stream: NodeJS.WriteStream) => stream.isTTY === true && !process.env.NO_COLOR;
@@ -50,6 +58,20 @@ export function fmt(n: number, digits = 4): string {
   return a >= 1e5 || a < 1e-3 ? n.toExponential(3) : n.toFixed(digits);
 }
 
+/** A coordinate for people: up to 4 decimals, no trailing zeros, float noise (|x| < 1e-9) as 0. */
+export function coord(x: number): string {
+  if (!Number.isFinite(x)) return String(x);
+  if (Math.abs(x) < 1e-9) return '0';
+  const a = Math.abs(x);
+  if (a >= 1e6 || a < 1e-4) return x.toExponential(3);
+  return String(Number(x.toFixed(4)));
+}
+
+/** "(1.5, 0, −2)". */
+export function point(p: ArrayLike<number>): string {
+  return `(${Array.from(p, coord).join(', ')})`;
+}
+
 function describeMesh(label: string, s: IMeshSummary, name: string): string {
   return `  ${label.padEnd(6)} ${name}  ${s.format.toUpperCase()}  ${s.vertexCount} vertices · ${s.faceCount} faces`;
 }
@@ -81,14 +103,118 @@ export interface ReportOptions {
   targetName: string;
   /** How many individual vertex moves to list. */
   topMoves: number;
+  /** How many regions of change to list (default 5). */
+  regions?: number;
 }
 
 /** How STEP models were tessellated, and what that means for the counts. */
-export function stepNote(base: IMesh, target: IMesh): string | null {
+export function stepNote(base: IMesh, target: IMesh, faceAware = false): string | null {
   const [b, t] = [stepInfo(base), stepInfo(target)];
   if (!b && !t) return null;
   const tol = !b || !t ? `${(b ?? t)!.deflection} mm` : b.deflection === t.deflection ? `${b.deflection} mm for both` : `${b.deflection} / ${t.deflection} mm`;
-  return `  STEP   tessellated by OpenCascade (deflection ${tol}); a flat face re-triangulated around an edit counts as modified`;
+  return faceAware
+    ? `  STEP   tessellated by OpenCascade (deflection ${tol}), compared CAD face by CAD face: re-triangulation is not a change`
+    : `  STEP   tessellated by OpenCascade (deflection ${tol}); a flat face re-triangulated around an edit counts as modified`;
+}
+
+const CHANGE_MARK: Record<string, string> = { moved: '~', resized: '~', reshaped: '~', added: '+', removed: '−' };
+
+/** The CAD-face section of a STEP diff: what changed, face by face, in words. */
+export function formatBrepSection(result: IDiffResult, target: IMesh, base: IMesh, c: Palette, limit = 20): string[] {
+  const brep = result.brep;
+  if (!brep) return [];
+  const retri = brep.retriangulated.base + brep.retriangulated.target;
+  const out = [
+    `${c.bold('CAD faces')}  ${brep.unchanged} of ${brep.targetFaces} unchanged · ${brep.changes.length} change${brep.changes.length === 1 ? '' : 's'}` +
+      (retri > 0 ? c.dim(` (${retri} re-triangulated triangle${retri === 1 ? '' : 's'} ignored)`) : ''),
+  ];
+  // Name the solid only in assemblies, where it tells parts apart.
+  const several = target.groups.length > 1 || base.groups.length > 1;
+  for (const ch of brep.changes.slice(0, limit)) {
+    const color = ch.kind === 'added' ? c.added : ch.kind === 'removed' ? c.removed : c.modified;
+    const groups = ch.targetFaces.length > 0 ? target.groups : base.groups;
+    const solid = several && groups[ch.group] ? c.dim(`  [${groups[ch.group].name}]`) : '';
+    out.push(`  ${color(CHANGE_MARK[ch.kind] ?? '·')} ${ch.description}${c.dim(` at ${point(ch.focus)}`)}${solid}`);
+  }
+  if (brep.changes.length > limit) out.push(c.dim(`  … ${brep.changes.length - limit} more (--json has them all)`));
+  return out;
+}
+
+/** "100 × 60 × 10 mm" (or bare numbers when the unit is unknown). */
+export function formatSize(size: readonly number[], unit: MetricUnit | undefined): string {
+  const magnitude = Math.max(...size.map(Math.abs));
+  const parts = size.map((v) => formatMeasure(v, 1, unit, magnitude));
+  // Keep the unit once, at the end: "100 × 60 × 10 mm".
+  const suffix = unit ? ` ${parts[0].split(' ')[1]}` : '';
+  return parts.map((p) => (unit ? p.split(' ')[0] : p)).join(' × ') + suffix;
+}
+
+/** Volume, or why there is none. */
+function volumeText(m: IMeshMetrics, unit: MetricUnit | undefined): string {
+  return m.volume !== null ? formatMeasure(m.volume, 3, unit) : '—';
+}
+
+/** Metric lines of one model (polymerge info). */
+export function formatMetricsLines(m: IMeshMetrics, label = (s: string) => s): string[] {
+  const unit = m.unit;
+  const note = volumeNote(m);
+  return [
+    `  ${label('size')}          ${formatSize(m.size, unit)}${unit ? '' : '  (in the file\'s units)'}`,
+    `  ${label('surface area')}  ${formatMeasure(m.surfaceArea, 2, unit)}`,
+    `  ${label('volume')}        ${volumeText(m, unit)}${note ? `  (${note})` : '  (closed)'}`,
+    `  ${label('parts')}         ${m.parts}`,
+  ];
+}
+
+/** The "Geometry" table of a diff: base, target and the change, per metric. */
+export function formatMetricsTable(cmp: IMetricsComparison, c: Palette): string[] {
+  const unit = displayUnit(cmp);
+  const rows: [string, string, string, string][] = [];
+  const sizeChanges = (['x', 'y', 'z'] as const)
+    .map((axis, i) => (cmp.size[i].delta !== 0 ? `${axis} ${formatChange(cmp.size[i], 1, unit).replace(/ \(.*\)$/, '')}` : ''))
+    .filter(Boolean);
+  rows.push(['size', formatSize(cmp.base.size, unit), formatSize(cmp.target.size, unit), sizeChanges.join(', ') || 'no change']);
+  rows.push(['volume', volumeText(cmp.base, unit), volumeText(cmp.target, unit), cmp.volume ? formatChange(cmp.volume, 3, unit) : '']);
+  rows.push(['surface area', formatMeasure(cmp.surfaceArea.base, 2, unit), formatMeasure(cmp.surfaceArea.target, 2, unit), formatChange(cmp.surfaceArea, 2, unit)]);
+  if (cmp.base.parts !== cmp.target.parts || cmp.base.parts > 1) {
+    const d = cmp.target.parts - cmp.base.parts;
+    rows.push(['parts', String(cmp.base.parts), String(cmp.target.parts), d === 0 ? 'no change' : `${d > 0 ? '+' : '−'}${Math.abs(d)}`]);
+  }
+  const closed = (m: IMeshMetrics) => (m.volume !== null ? 'yes' : (volumeNote(m) ?? 'no').replace(/^not closed: /, 'no: '));
+  rows.push(['closed', closed(cmp.base), closed(cmp.target), '']);
+  const w = [Math.max(...rows.map((r) => r[0].length)) + 2, Math.max(4, ...rows.map((r) => r[1].length)), Math.max(6, ...rows.map((r) => r[2].length))];
+  const out = [`${c.bold('Geometry'.padEnd(w[0] + 2))}${c.dim('base'.padEnd(w[1] + 2))}${c.dim('target'.padEnd(w[2] + 2))}${c.dim('change')}`];
+  for (const [name, b, t, d] of rows) {
+    const changed = d !== '' && d !== 'no change';
+    out.push(`  ${name.padEnd(w[0])}${b.padEnd(w[1] + 2)}${t.padEnd(w[2] + 2)}${changed ? c.modified(d) : c.dim(d)}`.trimEnd());
+  }
+  if (cmp.unitsDiffer) out.push(c.dim(`  The files state different units (${cmp.base.unit} and ${cmp.target.unit}); the numbers are each in their own.`));
+  else if (!unit) out.push(c.dim('  In the files\' own units (STL, OBJ and PLY do not state one).'));
+  return out;
+}
+
+/** "Where it changed": the largest connected regions of change, in words. */
+export function formatRegions(result: IDiffResult, base: IMesh, target: IMesh, c: Palette, limit = 5): string[] {
+  if (limit <= 0) return [];
+  const regions = changeRegions(result, base, target);
+  if (regions.length === 0) return [];
+  const unit = result.metrics ? displayUnit(result.metrics) : undefined;
+  const len = (x: number) => formatMeasure(x, 1, unit);
+  const several = target.groups.length > 1 || base.groups.length > 1;
+  const out = [c.bold(`Where it changed (${regions.length} region${regions.length === 1 ? '' : 's'}):`)];
+  regions.slice(0, limit).forEach((r, i) => {
+    const what =
+      r.side === 'base'
+        ? c.removed(`${r.removed} face${r.removed === 1 ? '' : 's'} removed`)
+        : [r.modified > 0 ? c.modified(`${r.modified} modified`) : '', r.added > 0 ? c.added(`${r.added} added`) : ''].filter(Boolean).join(', ') + ` face${r.faces === 1 ? '' : 's'}`;
+    const size = formatSize(r.size, unit);
+    const moved = r.maxDisplacement > 0 ? `, largest move ${len(r.maxDisplacement)}` : '';
+    const groups = r.side === 'base' ? base.groups : target.groups;
+    const part = several && groups[r.group] ? c.dim(` [${groups[r.group].name}]`) : '';
+    out.push(`  ${i + 1}. ${what} around ${point(r.center)}, ${size}${moved}${part}`);
+  });
+  if (regions.length > limit) out.push(c.dim(`  … ${regions.length - limit} smaller region(s)`));
+  return out;
 }
 
 export function formatDiffReport(result: IDiffResult, base: IMesh, target: IMesh, opts: ReportOptions): string {
@@ -97,7 +223,7 @@ export function formatDiffReport(result: IDiffResult, base: IMesh, target: IMesh
   out.push(c.bold('polymerge diff'));
   out.push(describeMesh('base', result.base, opts.baseName));
   out.push(describeMesh('target', result.target, opts.targetName));
-  const step = stepNote(base, target);
+  const step = stepNote(base, target, result.brep !== undefined);
   if (step) out.push(c.dim(step));
   out.push('');
   out.push(`${c.bold('Correspondence:')} ${result.tierName}`);
@@ -144,6 +270,17 @@ export function formatDiffReport(result: IDiffResult, base: IMesh, target: IMesh
           `${p.deformedVertices > 0 ? `, ${p.deformedVertices} vertex(es) also edited` : ''} ${c.dim(`[${how}]`)}`,
       );
     }
+  }
+  if (result.brep) {
+    out.push('');
+    out.push(...formatBrepSection(result, target, base, c));
+  } else {
+    const where = formatRegions(result, base, target, c, opts.regions ?? 5);
+    if (where.length > 0) out.push('', ...where);
+  }
+  if (result.metrics) {
+    out.push('');
+    out.push(...formatMetricsTable(result.metrics, c));
   }
   if (opts.topMoves > 0 && v.moved > 0) {
     const moved: number[] = [];

@@ -3,11 +3,19 @@ import * as THREE from 'three';
 import {
   FaceStatus,
   VertexStatus,
+  displayUnit,
+  formatChange,
+  formatMeasure,
   stepInfo,
+  volumeNote,
+  type IBrepDiff,
   type IDiffResult,
   type IMesh,
+  type IMeshMetrics,
+  type IMetricsComparison,
   type ITierAttempt,
   type IVertexChange,
+  type MetricUnit,
   type Vec3,
 } from 'polymerge-core';
 import { h, swatch } from './dom.js';
@@ -88,8 +96,117 @@ export function renderSummary(result: IDiffResult): HTMLElement[] {
       ['Move ε / surface tol.', `${fmtNum(result.moveEpsilon)} / ${fmtNum(result.surfaceTolerance)}`],
     ]),
   ];
+  if (result.metrics) out.push(h('h3', null, 'Geometry'), renderGeometry(result.metrics));
   if (!result.alignment.isIdentity) out.push(renderAlignment(result));
   if ((result.parts ?? []).length > 0) out.push(renderParts(result));
+  return out;
+}
+
+/** "100 × 60 × 10 mm", or bare numbers when the unit is unknown. */
+export function fmtSize(size: readonly number[], unit: MetricUnit | undefined): string {
+  const magnitude = Math.max(...size.map(Math.abs));
+  const parts = size.map((v) => formatMeasure(v, 1, unit, magnitude));
+  return unit ? `${parts.map((p) => p.split(' ')[0]).join(' × ')} ${parts[0].split(' ')[1]}` : parts.join(' × ');
+}
+
+const volumeOf = (m: IMeshMetrics, unit: MetricUnit | undefined) => (m.volume !== null ? formatMeasure(m.volume, 3, unit) : '—');
+
+/** Size, volume and surface of both versions and their change (or of one model). */
+export function renderGeometry(cmp: IMetricsComparison): HTMLElement {
+  const unit = displayUnit(cmp);
+  const change = (text: string) => h('td', { class: text === 'no change' || text === '' ? 'num muted' : 'num changed' }, text);
+  const sizeChange = (['x', 'y', 'z'] as const)
+    .map((axis, i) => (cmp.size[i].delta !== 0 ? `${axis} ${formatChange(cmp.size[i], 1, unit).replace(/ \(.*\)$/, '')}` : ''))
+    .filter(Boolean)
+    .join(', ');
+  const rows: [string, string, string, string, string?][] = [
+    ['Size', fmtSize(cmp.base.size, unit), fmtSize(cmp.target.size, unit), sizeChange || 'no change'],
+    ['Volume', volumeOf(cmp.base, unit), volumeOf(cmp.target, unit), cmp.volume ? formatChange(cmp.volume, 3, unit) : '', 'Enclosed volume; only for closed surfaces'],
+    ['Surface', formatMeasure(cmp.surfaceArea.base, 2, unit), formatMeasure(cmp.surfaceArea.target, 2, unit), formatChange(cmp.surfaceArea, 2, unit)],
+  ];
+  if (cmp.base.parts > 1 || cmp.target.parts > 1) rows.push(['Pieces', String(cmp.base.parts), String(cmp.target.parts), cmp.base.parts === cmp.target.parts ? 'no change' : `${cmp.target.parts > cmp.base.parts ? '+' : '−'}${Math.abs(cmp.target.parts - cmp.base.parts)}`]);
+  const notes = [
+    ...[['Base', cmp.base] as const, ['Target', cmp.target] as const].flatMap(([side, m]) => {
+      const n = volumeNote(m);
+      return n ? [`${side}: ${n}.`] : [];
+    }),
+    cmp.unitsDiffer ? `The files state different units (${cmp.base.unit}, ${cmp.target.unit}); each number is in its own.` : !unit ? 'In the files’ own units: STL, OBJ and PLY do not state one.' : '',
+  ].filter(Boolean);
+  return h(
+    'div',
+    { class: 'geometry' },
+    h(
+      'table',
+      { class: 'metrics' },
+      h('thead', null, h('tr', null, h('th', null, ''), h('th', null, 'Base'), h('th', null, 'Target'), h('th', null, 'Change'))),
+      h(
+        'tbody',
+        null,
+        rows.map(([label, b, t, c, hint]) => h('tr', { title: hint ?? '' }, h('th', null, label), h('td', { class: 'num' }, b), h('td', { class: 'num' }, t), change(c))),
+      ),
+    ),
+    notes.length > 0 ? h('ul', { class: 'notes' }, notes.map((n) => h('li', null, n))) : null,
+  );
+}
+
+/** Size, volume and surface of one model (before the second one is loaded). */
+export function renderSingleGeometry(m: IMeshMetrics, label: string): HTMLElement {
+  const unit = m.unit;
+  const note = volumeNote(m);
+  return h(
+    'div',
+    { class: 'geometry' },
+    kv([
+      [`${label} size`, fmtSize(m.size, unit)],
+      ['Volume', volumeOf(m, unit)],
+      ['Surface', formatMeasure(m.surfaceArea, 2, unit)],
+      ...(m.parts > 1 ? ([['Pieces', String(m.parts)]] as [string, string][]) : []),
+    ]),
+    note || !unit ? h('ul', { class: 'notes' }, note ? h('li', null, `${note}.`) : null, !unit ? h('li', null, 'In the file’s own units.') : null) : null,
+  );
+}
+
+const CAD_MARK: Record<string, [mark: string, color: string, label: string]> = {
+  moved: ['~', DIFF_CSS.modified, 'Moved'],
+  resized: ['~', DIFF_CSS.modified, 'Resized'],
+  reshaped: ['~', DIFF_CSS.modified, 'Reshaped'],
+  added: ['+', DIFF_CSS.added, 'Added'],
+  removed: ['−', DIFF_CSS.removed, 'Removed'],
+};
+
+/**
+ * Face-aware STEP: what changed, CAD face by CAD face ("hole Ø8 moved 5 mm"), each one a button
+ * that turns the view to it. `solids` names the solids when the model has several.
+ */
+export function renderCadFaces(brep: IBrepDiff, solids: string[], actions: { focus(p: Vec3, i: number): void }): HTMLElement[] {
+  const changed = brep.changes.length;
+  const out: HTMLElement[] = [
+    h(
+      'p',
+      { class: 'muted small', style: { margin: '0 0 6px' } },
+      `${brep.unchanged} of ${brep.targetFaces} CAD face${brep.targetFaces === 1 ? '' : 's'} unchanged` +
+        (changed > 0 ? ` · ${changed} change${changed === 1 ? '' : 's'}` : ' · no change to any surface') +
+        (brep.retriangulated.target + brep.retriangulated.base > 0 ? ` · ${fmtInt(brep.retriangulated.target + brep.retriangulated.base)} re-tessellated triangles ignored` : ''),
+    ),
+  ];
+  if (changed === 0) return out;
+  out.push(
+    h(
+      'ul',
+      { class: 'cad-list' },
+      brep.changes.map((c, i) => {
+        const [mark, color, label] = CAD_MARK[c.kind] ?? ['·', DIFF_CSS.unchanged, c.kind];
+        const solid = solids.length > 1 ? solids[c.group] : undefined;
+        return h(
+          'li',
+          { dataset: { kind: c.kind } },
+          h('span', { class: 'cad-mark', style: { background: color }, title: label }, mark),
+          h('span', { class: 'cad-text' }, c.description, solid ? h('span', { class: 'muted' }, solid) : null),
+          h('button', { type: 'button', class: 'small', title: 'Turn the view to it', onclick: () => actions.focus(c.focus, i) }, 'Show'),
+        );
+      }),
+    ),
+  );
   return out;
 }
 

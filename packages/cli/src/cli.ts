@@ -1,84 +1,118 @@
 #!/usr/bin/env node
 /**
- * polymerge CLI — vertex-level correspondence diff for 3D models.
+ * polymerge CLI — structural diff and three-way merge for 3D models, all of it usable from a
+ * terminal (plain-text reports, --json for machines, --ascii for old consoles).
  *
  *   polymerge diff <base> <target> [--json <file|->] [--force-tier 1|2|3] ...
  *   polymerge view <base> <target> [--port N] [--no-open]
  *   polymerge view <base> <ours> <theirs> [--port N] [--no-open]
  *   polymerge review <path>              (merge review of a conflicted git merge)
+ *   polymerge export <base> <target> [-o page.html]   (the diff and the viewer in one HTML file)
  *   polymerge demo [example]             (the viewer on a built-in example)
- *   polymerge info <file>
- *   polymerge merge <base> <ours> <theirs> [-o merged.stl|obj|glb|gltf] [--resolve ours|theirs|base] [--pick id=side]
+ *   polymerge info <file> [--json]
+ *   polymerge section <file> [<file2>] [--x|--y|--z <value>] [--svg out.svg] [--json]
+ *   polymerge measure <file> <point> <point> [--no-snap] [--json]
+ *   polymerge merge <base> <ours> <theirs> [-o merged.stl|obj|glb|gltf|ply|3mf] [--resolve ours|theirs|base] [--pick id=side]
  *   polymerge git-diff <git external-diff args...>
  *   polymerge git-merge %O %A %B %P
  *   polymerge git-setup
  *   polymerge init [--global] [--dry-run]
  */
 import { parseArgs } from 'node:util';
+import { installAsciiOutput, wantsAscii } from './ascii.js';
 import { runDiff } from './commands/diff.js';
+import { runExport } from './commands/export.js';
 import { gitSetupText, runGitDiff } from './commands/git.js';
 import { runInfo } from './commands/info.js';
 import { runInit } from './commands/init.js';
+import { runMeasure } from './commands/measure.js';
+import { runSection } from './commands/section.js';
 import { runGitMerge, runGitResolve, runMerge } from './commands/merge.js';
 import { createRequire } from 'node:module';
 import { MERGE_DEMOS, runDemo, runReview, runView } from './commands/view.js';
 
 const VERSION: string = (createRequire(import.meta.url)('../package.json') as { version: string }).version;
 
-const HELP = `polymerge ${VERSION} — structural (vertex-correspondence) diff for STL, OBJ, glTF/GLB and STEP
+const HELP = `polymerge ${VERSION} — structural diff and three-way merge for 3D models
+STL, OBJ, glTF/GLB, 3MF, PLY and STEP. Everything works in a terminal; "view" opens a browser.
 
-Usage:
-  polymerge diff <base> <target> [options]   Diff two models and print a report
-      --json <file|->        Also write the full diff result as JSON ("-" = stdout)
+Compare two versions
+  polymerge diff <old> <new> [options]       What changed: correspondence, counts, where it changed,
+                                             size / volume / area, and for STEP each CAD face
+      --top <n>              How many individual vertex moves to list (default 10)
+      --regions <n>          How many regions of change to list (default 5)
+      --json <file|->        Also write the full result as JSON ("-" = stdout)
+      --exit-code            Exit 1 when the models differ (like git diff --exit-code)
       --force-tier <1|2|3>   Run only this correspondence tier
       --move-eps <n>         Displacement above which a vertex counts as moved
       --surface-tol <n>      Tier 3 surface distance above which geometry is added/removed
-      --top <n>              How many individual vertex moves to list (default 10)
-      --exit-code            Exit 1 when the models differ (like git diff --exit-code)
       -q, --quiet            No report or engine log (useful with --json)
       -v, --verbose          Include engine debug logging
-  polymerge view <base> <target> [options]   Open the interactive 3D diff in the browser
-  polymerge view <base> <ours> <theirs> [options]
-                                             Open the three-way merge review: see conflicts, resolve by clicking
-      --port <n>             Port (default 5178, falls back to a free port)
-      --host <addr>          Bind address (default 127.0.0.1)
-      --name <file>          Display name for every side (git difftool passes $MERGED)
-      --no-open              Do not launch a browser, just print the URL
-      --up <y|z>             Which axis of the model points up (default: Z for STEP, else Y;
-                             CAD and 3D-printing STL files are usually Z up)
-      --palette <name>       standard, or colorblind (blue / orange / yellow); also a menu in the viewer
-      --web-dist <dir>       Path to a built viewer (default: the one bundled with polymerge)
+
+Inspect one model
+  polymerge info <file> [--json]             Format, counts, size, surface area, volume, parts,
+                                             materials; STEP: its CAD faces
+  polymerge section <file> [<file2>] [--x <v> | --y <v> | --z <v>] [--svg <out.svg>] [--json]
+                                             Cut with a plane (default: z at the middle; "25%"
+                                             works too): outlines, holes, perimeters, areas;
+                                             with two files, how the cut changed
+  polymerge measure <file> <point> <point> [--no-snap] [--json]
+                                             Distance between two points, each snapped to the
+                                             nearest point of the surface; a point is x,y,z or
+                                             v:<vertex number>
+
+Merge three versions
   polymerge merge <base> <ours> <theirs> [options]   Three-way merge (exit 1 = unresolved conflicts)
-      -o, --output <file>    Write the merged model: .stl, .obj, .glb or .gltf (glTF keeps the nodes)
+      -o, --output <file>    Write the result: .stl .obj .glb .gltf .ply .3mf
       --resolve <side>       Resolve every conflict with ours | theirs | base
       --pick <id>=<side>     Resolve one conflict (repeatable), e.g. --pick 0=theirs
       --report <file>        Write the conflicts and statistics as JSON
       --no-collision-check   Don't check the combined edits for surfaces passing through each other
       -q, --quiet            No report
-                             glTF/GLB inputs also merge materials, UVs and texture references; their
-                             conflicts are numbered after the geometry ones and resolved the same way
-  polymerge review <path> [--port N] [--no-open]
-                                             Open the merge review on a conflicted git merge of <path>;
-                                             "Save to repository" writes <path> and stages it (git add)
-  polymerge resolve <path> --pick <id>=<side> | --resolve <side>
-                                             Finish a conflicted git merge of <path> (reads git's index stages)
-  polymerge demo [example] [--port N] [--no-open]
-                                             Open the viewer on a built-in example, no files needed
+                             glTF/GLB inputs also merge materials, UVs and texture references
+  polymerge resolve <path> [--pick <id>=<side> | --resolve <side>] [--dry-run]
+                                             Finish a conflicted git merge of <path> from git's
+                                             index stages; --dry-run lists the conflicts only
+
+See it in the browser
+  polymerge view <old> <new> [options]       The interactive 3D diff
+  polymerge view <base> <ours> <theirs>      The merge review: see conflicts, resolve by clicking
+  polymerge review <path>                    The merge review of a conflicted git merge of <path>;
+                                             "Save to repository" writes <path> and stages it
+  polymerge export <old> <new> [-o <page.html>] [--up y|z]
+                                             The diff and the viewer in ONE HTML file: it opens in
+                                             any browser, offline, nothing to install (email it,
+                                             attach it to a ticket). Default name: <old>__<new>.html
+  polymerge demo [example]                   The viewer on a built-in example, no files needed
                                              Merge review: ${MERGE_DEMOS.join(', ')} (default ${MERGE_DEMOS[0]})
-                                             Diff: e.g. moved-part, grid-bump, units-inch-to-mm, mixed-topology-edit
-  polymerge info <file>                      Print the normalised mesh summary
-  polymerge init [--global] [--dry-run]      Set git up for polymerge: .gitattributes and the drivers
-                                             (this repository; --global: all your repositories)
+                                             Diff: e.g. moved-part, grid-bump, units-inch-to-mm
+      --port <n>             Port (default 5178, falls back to a free port)
+      --host <addr>          Bind address (default 127.0.0.1)
+      --name <file>          Display name for every side (git difftool passes $MERGED)
+      --no-open              Do not launch a browser, just print the URL
+      --up <y|z>             Which axis points up (default: Z for STEP, else Y)
+      --palette <name>       standard, or colorblind (blue / orange / yellow)
+      --web-dist <dir>       Path to a built viewer (default: the one bundled with polymerge)
+
+Git
+  polymerge init [--global] [--dry-run]      Set git up for polymerge: .gitattributes and drivers
+  polymerge git-setup                        Print the git configuration instead
   polymerge git-diff <7 git args>            git external diff driver (diff.<name>.command)
   polymerge git-merge %O %A %B %P            git merge driver (merge.<name>.driver)
-  polymerge git-setup                        Print the git configuration snippet
+
+Everywhere
+  --ascii / --unicode        Plain ASCII output (automatic in the classic Windows console), or not
   polymerge --version | --help
 
-STEP (.step, .stp) works with diff, view, info and git-diff, not with merge. It needs OpenCascade,
-an optional download: npm install -g occt-import-js@0.0.23 (LGPL-2.1, about 8 MB).
+STEP (.step, .stp) works with diff, view, export, info, section, measure and git-diff, not merge. It
+needs OpenCascade, an optional download: npm install -g occt-import-js@0.0.23 (LGPL-2.1, ~8 MB).
 `;
 
-async function main(argv: string[]): Promise<number> {
+async function main(args: string[]): Promise<number> {
+  // Output flags valid before or after any command.
+  const flags = { ascii: args.includes('--ascii'), unicode: args.includes('--unicode') };
+  const argv = args.filter((a) => a !== '--ascii' && a !== '--unicode');
+  if (wantsAscii(flags)) installAsciiOutput();
   const [command, ...rest] = argv;
   switch (command) {
     case undefined:
@@ -101,6 +135,7 @@ async function main(argv: string[]): Promise<number> {
           'move-eps': { type: 'string' },
           'surface-tol': { type: 'string' },
           top: { type: 'string' },
+          regions: { type: 'string' },
           'exit-code': { type: 'boolean' },
           quiet: { type: 'boolean', short: 'q' },
           verbose: { type: 'boolean', short: 'v' },
@@ -113,6 +148,7 @@ async function main(argv: string[]): Promise<number> {
         moveEpsilon: values['move-eps'],
         surfaceTolerance: values['surface-tol'],
         top: values.top,
+        regions: values.regions,
         exitCode: values['exit-code'],
         quiet: values.quiet,
         verbose: values.verbose,
@@ -161,10 +197,57 @@ async function main(argv: string[]): Promise<number> {
       if (positionals.length > 1) throw new UsageError(`polymerge demo: expected at most 1 example name, got ${positionals.length}`);
       return runDemo(positionals[0], { port: values.port, host: values.host, open: !values['no-open'], webDist: values['web-dist'], up: values.up, palette: values.palette });
     }
+    case 'export': {
+      const { values, positionals } = parseArgs({
+        args: rest,
+        allowPositionals: true,
+        options: {
+          output: { type: 'string', short: 'o' },
+          up: { type: 'string' },
+          'web-dist': { type: 'string' },
+          'force-tier': { type: 'string' },
+          'move-eps': { type: 'string' },
+          'surface-tol': { type: 'string' },
+          quiet: { type: 'boolean', short: 'q' },
+          verbose: { type: 'boolean', short: 'v' },
+        },
+      });
+      requirePositionals('export', positionals, 2);
+      return runExport(positionals[0], positionals[1], {
+        output: values.output,
+        up: values.up,
+        webDist: values['web-dist'],
+        forceTier: values['force-tier'],
+        moveEpsilon: values['move-eps'],
+        surfaceTolerance: values['surface-tol'],
+        quiet: values.quiet,
+        verbose: values.verbose,
+        version: VERSION,
+      });
+    }
     case 'info': {
-      const { positionals } = parseArgs({ args: rest, allowPositionals: true, options: {} });
+      const { values, positionals } = parseArgs({ args: rest, allowPositionals: true, options: { json: { type: 'boolean' } } });
       requirePositionals('info', positionals, 1);
-      return runInfo(positionals[0]);
+      return runInfo(positionals[0], { json: values.json });
+    }
+    case 'section': {
+      const { values, positionals } = parseArgs({
+        args: hideNegatives(rest),
+        allowPositionals: true,
+        options: { x: { type: 'string' }, y: { type: 'string' }, z: { type: 'string' }, svg: { type: 'string' }, json: { type: 'boolean' } },
+      });
+      if (positionals.length !== 1 && positionals.length !== 2) throw new UsageError(`polymerge section: expected 1 file (or 2 to compare), got ${positionals.length}`);
+      return runSection(positionals.map((f) => unhide(f)), { ...values, x: unhide(values.x), y: unhide(values.y), z: unhide(values.z) });
+    }
+    case 'measure': {
+      const { values, positionals } = parseArgs({
+        args: hideNegatives(rest),
+        allowPositionals: true,
+        options: { 'no-snap': { type: 'boolean' }, json: { type: 'boolean' } },
+      });
+      if (positionals.length !== 3) throw new UsageError(`polymerge measure: expected a file and two points (x,y,z or v:<vertex>), got ${positionals.length} argument(s)`);
+      const [file, a, b] = positionals.map((x) => unhide(x));
+      return runMeasure(file, a, b, { snap: !values['no-snap'], json: values.json });
     }
     case 'merge': {
       const { values, positionals } = parseArgs({
@@ -217,6 +300,7 @@ async function main(argv: string[]): Promise<number> {
           format: { type: 'string' },
           quiet: { type: 'boolean', short: 'q' },
           'no-collision-check': { type: 'boolean' },
+          'dry-run': { type: 'boolean' },
         },
       });
       requirePositionals('resolve', positionals, 1);
@@ -226,6 +310,7 @@ async function main(argv: string[]): Promise<number> {
         format: values.format,
         quiet: values.quiet,
         collisionCheck: !values['no-collision-check'],
+        dryRun: values['dry-run'],
       });
     }
     case 'git-diff':
@@ -254,6 +339,18 @@ async function main(argv: string[]): Promise<number> {
       process.stderr.write(`polymerge: unknown command "${command}"\n\n${HELP}`);
       return 2;
   }
+}
+
+/**
+ * Negative numbers ("-5", "-5,0,2", "-12.5%") are values, not options: hide their dash from
+ * parseArgs (which would reject them as unknown options), then `unhide` what it returns.
+ */
+const NEGATIVE = '\u0000';
+const hideNegatives = (args: string[]): string[] => args.map((a) => (/^-\.?\d/.test(a) ? NEGATIVE + a : a));
+function unhide(s: string): string;
+function unhide(s: string | undefined): string | undefined;
+function unhide(s: string | undefined): string | undefined {
+  return s?.startsWith(NEGATIVE) ? s.slice(1) : s;
 }
 
 function requirePositionals(cmd: string, positionals: string[], n: number): void {

@@ -67,7 +67,7 @@ describe('STEP detection', () => {
   });
 
   it('names STEP in the unknown-format message', () => {
-    expect(() => detectFormat(utf8('hello'))).toThrow(/GLB or STEP/);
+    expect(() => detectFormat(utf8('hello'))).toThrow(/GLB, STEP, PLY or 3MF/);
   });
 });
 

@@ -2,7 +2,9 @@ import './style.css';
 import { App } from './app.js';
 import { CaptureApp } from './capture.js';
 import { publish } from './hook.js';
+import { isStandalonePage } from './standalone.js';
 import { MergeApp } from './merge-app.js';
+import { applyTheme, initialTheme } from './theme.js';
 import { applyPalette, initialPalette } from './view-options.js';
 
 const root = document.getElementById('app');
@@ -12,12 +14,16 @@ try {
   const params = new URLSearchParams(window.location.search);
   // ?palette= or this browser's last choice; set before any viewer builds its colours.
   applyPalette(initialPalette(params));
+  // ?theme= or this browser's last choice (light by default).
+  applyTheme(initialTheme(params));
   // ?mode=merge (or three models: base + ours + theirs) opens the three-way merge review;
   // ?capture=1 the fixed before / after card used for pull-request images.
   const merge = params.get('mode') === 'merge' || (params.has('ours') && params.has('theirs'));
   const capture = !merge && params.has('capture') && params.get('capture') !== '0';
   const app = merge ? new MergeApp(root) : capture ? new CaptureApp(root) : new App(root);
-  void app.start(params);
+  // A self-contained page (polymerge export, "Save as HTML") shows the diff it carries.
+  if (app instanceof App && isStandalonePage()) void app.startEmbedded(params);
+  else void app.start(params);
 } catch (err) {
   // e.g. WebGL unavailable: surface it instead of leaving a blank page.
   const message = err instanceof Error ? err.message : String(err);

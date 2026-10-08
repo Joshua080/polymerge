@@ -2,6 +2,7 @@
 import {
   MeshLoadError,
   TIER_NAMES,
+  computeMetrics,
   describeVertexChange,
   getPosition,
   serializeDiff,
@@ -18,14 +19,16 @@ import { DiffEngine } from './engine.js';
 import { patch, publish, setViewProvider, snapshot, type IPolymergeHook } from './hook.js';
 import {
   renderAttempts,
+  renderCadFaces,
   renderInspector,
   renderMeshes,
+  renderSingleGeometry,
   renderSummary,
   stripTierPrefix,
   type IInspectorModel,
 } from './panels.js';
 import { DEFAULT_LAYERS, DiffViewer, type ILayerCounts, type ILayerVisibility, type IPickHit } from './scene/viewer.js';
-import { BASE_ACCENT } from './scene/layers.js';
+import { brandHeader } from './brand.js';
 import {
   ACCEPTED_EXTENSIONS,
   SourceError,
@@ -38,8 +41,11 @@ import {
   type Loader,
   pairLoads,
 } from './sources.js';
+import { ReviewTools } from './tools.js';
 import { viewControls } from './view-controls.js';
-import { applyPalette, defaultUpAxis, DIFF_CSS, paletteName, parseUpAxis, rememberPalette, setUrlParam, type UpAxis } from './view-options.js';
+import { themeName } from './theme.js';
+import { isStandalonePage, readEmbedded, standalonePage } from './standalone.js';
+import { applyPalette, defaultUpAxis, DIFF_CSS, paletteName, parseUpAxis, rememberPalette, replaceUrl, setUrlParam, type UpAxis } from './view-options.js';
 
 type Side = 'base' | 'target';
 const SIDE_LABEL: Record<Side, string> = { base: 'Base (old)', target: 'Target (new)' };
@@ -53,15 +59,16 @@ const AUTO_LIMITS: Partial<Record<keyof ILayerVisibility, (c: ILayerCounts) => b
 const LAYER_DEFS: { key: keyof ILayerVisibility; label: string; color?: string; hint: string }[] = [
   { key: 'target', label: 'Target (diff-coloured)', color: DIFF_CSS.modified, hint: 'New mesh, faces coloured by status' },
   { key: 'removed', label: 'Removed geometry', color: DIFF_CSS.removed, hint: 'Base faces that no longer exist' },
-  { key: 'ghost', label: 'Base ghost', color: BASE_ACCENT, hint: 'Whole old mesh, translucent, in target space' },
+  { key: 'ghost', label: 'Base ghost', color: 'var(--pm-base)', hint: 'Whole old mesh, translucent, in target space' },
   { key: 'unchanged', label: 'Show unchanged faces', color: DIFF_CSS.unchanged, hint: 'Grey faces of the target' },
   { key: 'markers', label: 'Vertex markers', hint: 'Dots on moved, added and removed vertices, in their status colours' },
-  { key: 'vectors', label: 'Displacement vectors', hint: 'Old (light blue) → new (moved colour) position of moved vertices' },
+  { key: 'vectors', label: 'Displacement vectors', hint: 'Old (blue) → new (moved colour) position of moved vertices' },
   { key: 'wireframe', label: 'Wireframe overlay', hint: 'Triangle edges' },
 ];
 
 export class App {
   private readonly viewer: DiffViewer;
+  private readonly tools: ReviewTools;
   private base: ILoadedMesh | null = null;
   private target: ILoadedMesh | null = null;
   private result: IDiffResult | null = null;
@@ -70,7 +77,7 @@ export class App {
   private seq = 0;
   private engineLog: string[] = [];
   /** Runs diffMeshes in a Web Worker (main-thread fallback). */
-  private readonly engine = new DiffEngine(new URLSearchParams(location.search).get('worker') !== '0');
+  private readonly engine = new DiffEngine(new URLSearchParams(location.search).get('worker') !== '0' && !isStandalonePage());
   private manifest: Promise<IManifestInfo | null>;
   private currentCase: IFixtureCase | null = null;
   private touchedLayers = new Set<keyof ILayerVisibility>();
@@ -103,7 +110,13 @@ export class App {
     rerun: h('button', { id: 'rerun', disabled: true }, 'Re-run diff'),
     reset: h('button', { id: 'reset-view' }, 'Reset view'),
     download: h('button', { id: 'download-json', class: 'small', disabled: true, title: 'serializeDiff(result) as a .json file' }, 'Download diff JSON'),
+    saveHtml: h(
+      'button',
+      { id: 'save-html', class: 'small', disabled: true, title: 'One HTML file with this diff and the viewer: it opens in any browser, offline, with nothing to install' },
+      'Save as HTML',
+    ),
     summary: h('div', { class: 'summary' }),
+    cad: h('section', { class: 'sec hidden', id: 'cad-faces' }),
     attempts: h('div', { class: 'attempts-wrap' }),
     engineLog: h('pre', { class: 'engine-log' }),
     layers: h('div', { class: 'layers' }),
@@ -122,15 +135,29 @@ export class App {
   constructor(root: HTMLElement) {
     this.buildLayout(root);
     this.viewer = new DiffViewer(this.el.viewport);
+    this.tools = new ReviewTools(
+      this.viewer,
+      this.el.viewport.parentElement!,
+      () => ({ base: this.base?.mesh ?? null, target: this.target?.mesh ?? null, result: this.result }),
+      () => patch({ review: this.tools.state() }),
+    );
+    // Top left: the tier, the tools, their cards, stacked; the measure label and the divider over the view.
+    const stack = h('div', { class: 'hud-stack' });
+    this.el.hudTier.before(stack);
+    stack.append(this.el.hudTier, this.tools.toolbar, this.tools.cards);
+    this.el.viewport.after(...this.tools.overlays);
     this.viewer.onPick = (hit) => {
+      if (this.tools.pick(hit)) return;
       if (hit && hit.side !== 'merged') this.inspect(hit.side, hit.vertex, hit);
       else this.clearSelection();
     };
     this.renderLayers();
     this.renderEmpty();
-    this.manifest = loadManifest();
-    void this.populateExamples();
-    setViewProvider(() => ({ up: this.viewer.upAxis, palette: paletteName() }));
+    // A self-contained page has no examples next to it (and file:// pages cannot fetch).
+    this.manifest = isStandalonePage() ? Promise.resolve(null) : loadManifest();
+    if (isStandalonePage()) this.el.examples.parentElement?.classList.add('hidden');
+    else void this.populateExamples();
+    setViewProvider(() => ({ up: this.viewer.upAxis, palette: paletteName(), theme: themeName() }));
     publish({ state: 'idle' });
   }
 
@@ -198,6 +225,7 @@ export class App {
     el.rerun.addEventListener('click', () => void this.runDiff());
     el.reset.addEventListener('click', () => this.viewer.resetView());
     el.download.addEventListener('click', () => this.downloadJson());
+    el.saveHtml.addEventListener('click', () => void this.saveHtml());
 
     const inspectForm = h(
       'form',
@@ -228,13 +256,7 @@ export class App {
     const panel = h(
       'aside',
       { class: 'panel' },
-      h(
-        'header',
-        { class: 'brand' },
-        h('span', { class: 'logo' }, 'polymerge'),
-        h('span', { class: 'tagline' }, 'vertex-level 3D diff'),
-        h('a', { class: 'mode-link', href: '?mode=merge', title: 'Review a three-way merge (base, ours, theirs)' }, 'Merge →'),
-      ),
+      brandHeader('3D diff', h('a', { class: 'mode-link', href: '?mode=merge', title: 'Review a three-way merge (base, ours, theirs)' }, 'Merge review')),
       h(
         'section',
         { class: 'sec' },
@@ -246,7 +268,8 @@ export class App {
         this.view.root,
         h('div', { class: 'row buttons' }, el.rerun, el.reset),
       ),
-      h('section', { class: 'sec' }, h('h2', null, 'Result'), el.summary, h('div', { class: 'row' }, el.download)),
+      h('section', { class: 'sec' }, h('h2', null, 'Result'), el.summary, h('div', { class: 'row buttons' }, el.download, el.saveHtml)),
+      el.cad,
       h('section', { class: 'sec' }, h('h2', null, 'Layers'), el.layers),
       h(
         'section',
@@ -291,7 +314,7 @@ export class App {
       else if (files.length === 1) void this.loadFiles([[this.base && !this.target ? 'target' : 'base', files[0]]]);
     });
     window.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape') this.clearSelection();
+      if (e.key === 'Escape' && !this.tools?.escape()) this.clearSelection();
     });
 
     root.append(h('div', { class: 'app' }, panel, stage));
@@ -328,6 +351,32 @@ export class App {
       const side: Side = baseUrl ? 'base' : 'target';
       return this.loadSide(side, (o) => loadFromUrl((baseUrl ?? targetUrl)!, params.get(`${side}Name`) ?? undefined, o), 'url');
     }
+  }
+
+  /** A self-contained page: show the diff it carries (nothing to load, compute or download). */
+  async startEmbedded(params: URLSearchParams): Promise<void> {
+    const seq = ++this.seq;
+    this.setLoading('Opening the saved diff…');
+    await nextFrame();
+    let saved;
+    try {
+      saved = readEmbedded();
+      if (!saved) throw new Error('this page carries no diff');
+    } catch (err) {
+      this.fail('The diff saved in this page could not be read', err);
+      return;
+    }
+    if (seq !== this.seq) return;
+    const up = parseUpAxis(params.get('up')) ?? saved.view?.up ?? null;
+    if (up) this.setUp(up);
+    this.base = { mesh: saved.base.mesh, name: saved.base.name, bytes: saved.base.bytes, origin: 'embedded' };
+    this.target = { mesh: saved.target.mesh, name: saved.target.name, bytes: saved.target.bytes, origin: 'embedded' };
+    this.source = 'embedded';
+    this.markDrop('base', 'ok');
+    this.markDrop('target', 'ok');
+    this.engineLog = [`[polymerge] diff saved in this page by ${saved.generator}`];
+    this.renderMeshes();
+    await this.showResult(saved.result, seq);
   }
 
   // -------------------------------------------------------------------------
@@ -465,6 +514,8 @@ export class App {
     this.autoUp();
     if (only) this.viewer.showPreview(only.m.mesh, only.side);
     else this.viewer.clear();
+    this.tools.refresh();
+    this.renderCad();
     this.el.hudTier.classList.add('hidden');
     this.renderSummary();
     this.renderLayers();
@@ -551,6 +602,8 @@ export class App {
     this.clearSelection();
     this.autoUp();
     this.layerCounts = this.viewer.showDiff(base.mesh, target.mesh, result);
+    this.tools.refresh();
+    this.renderCad();
     // Adaptive defaults for dense layers, unless the user chose explicitly.
     for (const [key, ok] of Object.entries(AUTO_LIMITS) as [keyof ILayerVisibility, (c: ILayerCounts) => boolean][]) {
       if (!this.touchedLayers.has(key)) this.layers[key] = ok(this.layerCounts);
@@ -651,25 +704,76 @@ export class App {
       this.fail('Export failed', err);
       return;
     }
+    saveFile(new Blob([json], { type: 'application/json' }), `${this.fileStem()}.polymerge.json`);
+  }
+
+  /** "base__target", for the files the viewer saves. */
+  private fileStem(): string {
     const stem = (m: ILoadedMesh | null) => (m?.name ?? 'mesh').replace(/\.[^.]+$/, '');
-    const a = h('a', {
-      href: URL.createObjectURL(new Blob([json], { type: 'application/json' })),
-      download: `${stem(this.base)}__${stem(this.target)}.polymerge.json`,
-    });
-    document.body.append(a);
-    a.click();
-    a.remove();
-    setTimeout(() => URL.revokeObjectURL(a.href), 10_000);
+    return `${stem(this.base)}__${stem(this.target)}`;
+  }
+
+  /** One HTML file with this diff and the viewer, to open anywhere offline. */
+  private async saveHtml(): Promise<void> {
+    const { base, target, result } = this;
+    if (!base || !target || !result) return;
+    const button = this.el.saveHtml;
+    button.disabled = true;
+    button.textContent = 'Saving…';
+    try {
+      const version = typeof __POLYMERGE_VERSION__ === 'string' ? __POLYMERGE_VERSION__ : 'dev';
+      const html = await standalonePage(
+        {
+          generator: `polymerge ${version}`,
+          base: { name: base.name, bytes: base.bytes, mesh: base.mesh },
+          target: { name: target.name, bytes: target.bytes, mesh: target.mesh },
+          result,
+          view: { up: this.viewer.upAxis },
+        },
+        `${base.name} → ${target.name} · polymerge`,
+      );
+      saveFile(new Blob([html], { type: 'text/html' }), `${this.fileStem()}.html`);
+    } catch (err) {
+      this.fail('Could not save the page', err);
+    } finally {
+      button.disabled = !this.result;
+      button.textContent = 'Save as HTML';
+    }
   }
 
   private renderSummary(): void {
     this.el.download.disabled = !this.result;
+    this.el.saveHtml.disabled = !this.result;
     if (this.result) setChildren(this.el.summary, renderSummary(this.result));
-    else
+    else {
+      const only = this.base ? { label: 'Base', m: this.base } : this.target ? { label: 'Target', m: this.target } : null;
       setChildren(
         this.el.summary,
-        h('p', { class: 'muted' }, this.base || this.target ? 'Waiting for the second model…' : 'Load a Base and a Target model to compute a diff.'),
+        h('p', { class: 'muted' }, only ? 'Waiting for the second model…' : 'Load a Base and a Target model to compute a diff.'),
+        only ? renderSingleGeometry(computeMetrics(only.m.mesh), only.label) : null,
       );
+    }
+  }
+
+  /** The CAD faces section: shown for a face-aware STEP comparison. */
+  private renderCad(): void {
+    const brep = this.result?.brep;
+    this.el.cad.classList.toggle('hidden', !brep);
+    if (!brep) {
+      this.el.cad.replaceChildren();
+      return;
+    }
+    const solids = this.target?.mesh.groups.map((g) => g.name) ?? [];
+    setChildren(
+      this.el.cad,
+      h('h2', null, 'CAD faces'),
+      renderCadFaces(brep, solids, {
+        focus: (p) => {
+          this.viewer.focus(p);
+          this.viewer.setSelection({ to: p, from: null });
+        },
+      }),
+    );
   }
 
   private renderMeshes(): void {
@@ -733,7 +837,7 @@ export class App {
           def.key === 'markers'
             ? h('span', { class: 'swatch-group' }, swatch(DIFF_CSS.modified), swatch(DIFF_CSS.added), swatch(DIFF_CSS.removed))
             : def.key === 'vectors'
-              ? h('span', { class: 'swatch vector', style: { background: `linear-gradient(90deg, ${BASE_ACCENT}, ${DIFF_CSS.modified})` } })
+              ? h('span', { class: 'swatch vector', style: { background: `linear-gradient(90deg, var(--pm-base), ${DIFF_CSS.modified})` } })
               : def.key === 'wireframe'
                 ? h('span', { class: 'swatch wire' })
                 : swatch(def.color ?? DIFF_CSS.unchanged);
@@ -756,7 +860,7 @@ export class App {
       setChildren(
         this.el.empty,
         h('div', { class: 'empty-title' }, 'Drop two versions of a model here'),
-        h('div', null, 'first = Base (old), second = Target (new) · STL, OBJ, glTF, GLB'),
+        h('div', null, 'first = Base (old), second = Target (new) · STL, OBJ, glTF, GLB, 3MF, PLY, STEP'),
         h('div', { class: 'muted' }, 'or pick an example in the panel'),
       );
     }
@@ -821,15 +925,18 @@ export class App {
       hook.attempts = r.attempts;
       hook.base = r.base;
       hook.target = r.target;
-      hook.engine = this.engine.mode;
+      if (this.source !== 'embedded') hook.engine = this.engine.mode; // a saved page computed nothing
       if (this.engine.lastWindow) hook.diffWindow = this.engine.lastWindow;
       hook.parts = r.parts?.length ?? 0;
+      if (r.metrics) hook.metrics = r.metrics;
+      if (r.brep) hook.cad = { unchanged: r.brep.unchanged, changes: r.brep.changes.map((c) => ({ kind: c.kind, text: c.description, focus: c.focus })) };
     } else {
       if (this.base) hook.base = summarizeMesh(this.base.mesh);
       if (this.target) hook.target = summarizeMesh(this.target.mesh);
     }
     const sel = snapshot().selection;
     if (sel && this.selection && state === 'ready') hook.selection = sel;
+    hook.review = this.tools.state();
     publish(hook);
   }
 
@@ -839,7 +946,7 @@ export class App {
     // An up axis the user chose stays in the address, so a shared link opens the same way.
     if (this.upExplicit) search.set('up', this.viewer.upAxis);
     url.search = search.toString();
-    if (url.href !== window.location.href) history.replaceState(null, '', url);
+    if (url.href !== window.location.href) replaceUrl(url);
   }
 }
 
@@ -851,6 +958,15 @@ class SideError extends Error {
     super(`${SIDE_LABEL[side]}: ${errorMessage(inner)}`);
     this.name = 'SideError';
   }
+}
+
+/** Offer a file for download. */
+function saveFile(blob: Blob, name: string): void {
+  const a = h('a', { href: URL.createObjectURL(blob), download: name });
+  document.body.append(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 10_000);
 }
 
 function errorMessage(err: unknown): string {

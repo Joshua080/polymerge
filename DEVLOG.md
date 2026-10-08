@@ -4,6 +4,48 @@ A living log of milestones, architectural decisions, what works, what is stubbed
 
 ---
 
+## Session 12 — 2026-10-07 — new look, terminal for everything, metrics, 3MF / PLY, review tools, HTML export, face-aware STEP, million-triangle models
+
+The owner asked for: a cleaner, more professional look without the navy background; every feature usable from a terminal with plain-text output; geometry metrics; self-contained HTML; 3MF and PLY input; review tools in the viewer; the face-aware STEP diff; and million-triangle meshes. All are built.
+- **3MF and PLY**, read and written. 3MF: build items, components (and the Production extension's external parts), units converted to mm, base materials and colour groups; an unknown required extension warns, Secure Content refuses. PLY: ASCII and binary of both byte orders, polygons fanned like OBJ, triangle strips, face colours.
+- **Geometry metrics** in every report: size, surface area, volume (closed meshes only; an open one says why: open, non-manifold or flipped edges), pieces. The CLI prints a table, the viewer a panel, the Action a "Geometry" line and the volume change in the summary.
+- **Million-triangle meshes.** A 998,000-triangle ellipsoid: Tier 1 ≈ 1.5 s, Tier 2 ≈ 4.7 s, Tier 3 (re-meshed) ≈ 9 s; merge ≈ 4 s; the viewer ready in 6–17 s; the Action renders one in ≈ 18 s. The Action's caps went to 2 M triangles and 150 MB.
+- **Face-aware STEP.** The STEP loader keeps which triangles came from which B-rep face, fits each face as a plane, cylinder, cone or sphere, and the diff compares faces as surfaces: "hole Ø8 moved 5 mm (+5, 0, 0)", "hole Ø8 → Ø9", "new hole Ø6", "flat face facing +Z: outline changed". Triangles on an unchanged face count as unchanged (120 on the example plate), so re-triangulation is no longer reported as an edit.
+- **Terminal.** `section` (cut, outlines, holes, areas, compare two versions, `--svg`), `measure` (snapped to the surface), regions of change in `diff`, `info --json` with per-part metrics and STEP CAD faces, `resolve --dry-run`, `--ascii`; the help regrouped by task. Negative numbers are values, not options.
+- **New look.** A light theme by default (white panels, a soft grey 3D view, one blue accent) and a neutral charcoal dark theme, switched in the header and remembered per browser (`?theme=`). Inter is bundled; numbers use tabular figures instead of a monospace font; sentence-case headings; one set of control styles. The 3D scene, the merge review and the pull-request card follow it.
+- **Review tools.** Section (S), Measure (M), Before / after (C), stacked with the tier badge at the top left; a CAD faces panel with "Show" buttons.
+- **Self-contained HTML.** `polymerge export old new` and the viewer's **Save as HTML**: one file with the viewer and the diff that opens from disk, offline.
+
+**Decisions**
+
+| # | Decision | Why |
+|---|----------|-----|
+| D64 | **3MF and PLY have their own readers (no three.js loaders); 3MF is `merge=binary` in `.gitattributes`.** | three.js's 3MF loader needs `DOMParser`, which Node lacks, and its PLY loader handles polygons and strips differently from OBJ. A merged 3MF keeps geometry and colours but not the slicer project, so git should never write one silently; `polymerge resolve` merges it on request. |
+| D65 | **Volume only for closed, consistently oriented meshes; units from the format** (3MF and STEP mm, glTF m, STL / OBJ / PLY none). Differences below 1e-7 of a value are float rounding and read as "no change". | A signed volume of an open mesh is a number with no meaning. A part turned 30° and stored in float32 changes its computed volume by ~1e-9 of it; reporting "−3.28e-8" as a change was noise. |
+| D66 | **Spatial indexes are Morton-ordered binary radix trees split at the highest differing bit**, built bottom-up, with exact queries; the whole-mesh indexes are reused by the part refinement when a part is the whole unmoved mesh. | The first version (median splits) made Tier 3 slower (17.5 s → 42.6 s); highest-bit splits gave 9.8 s. Reuse removed rebuilds that dominated Tier 2 on big meshes. |
+| D67 | **CAD faces are recognised from the tessellation's points, not from OpenCascade's normals.** Normals only pick an axis and which side is inside; circles and spheres are fitted to points. | OCCT's normals are up to ~6° off, which made holes read as "other surface". Points are exact. |
+| D68 | **Every viewer feature has a text form, and plain ASCII is automatic only in the classic Windows console** (no Windows Terminal, VS Code or ConEmu, and a TTY). | The owner works in Command Prompt, where `×`, `Ø` and `→` come out garbled; everywhere else they work and read better. `--ascii` / `--unicode` / `POLYMERGE_ASCII` decide explicitly. |
+| D69 | **Light by default, Inter bundled (latin + latin-ext), tabular figures instead of monospace.** The theme is explicit (header button, `?theme=`), not the OS setting. | The owner disliked the navy look; a light default is what CAD tools use. System UI fonts differ per OS (the Action's Linux runner renders DejaVu), so the bundled font makes the app and the PR images look the same everywhere. Inter is OFL-1.1; its licence ships in `licenses/`. |
+| D70 | **The section tool clips with a local clipping plane and draws the cut from `sectionMesh` (CPU), not with stencil caps.** The before / after split renders the same camera twice with scissors. | Stencil caps need closed meshes and give no numbers; the CPU cut works for open sheets too and gives the readout (outlines, holes, Ø, area) the CLI prints. One camera in two passes keeps both halves pixel-aligned without a second renderer. |
+| D71 | **A saved page carries the computed result; it does not re-run the diff.** Models and result are one deflated blob (float32 positions when exact, else float64), base64 in the page; the viewer's script and style are inlined (the Latin font as a data URL). | A `file://` page can't start the module worker, STEP would need OpenCascade, and a million-triangle diff would take seconds on every open. The snapshot opens in under a second and matches `polymerge diff` exactly (checked in e2e). |
+
+**Checks**
+- `e2e-export`: OBJ and STEP pages opened from disk with every network request refused; same numbers as `polymerge diff --json`; the tools work; Save as HTML round-trips; also run from the packed npm install.
+- `e2e-view`: section on, divider dragged to 30%, a measurement by clicking model pixels, Esc clears it. `e2e-step`: the CAD faces panel and a cut of the plate (1 outline, 2 holes Ø7.98).
+- `e2e-action`: the pixel classifier now samples each panel's background (the card is light). A 1px panel gap made each panel 399.5 px wide and broke the "unchanged plate is pixel-identical" check (96.6%); the 2px gap restores whole-pixel panels (99.7%).
+- `perf.test.ts`: the million-triangle runs, all writers and binary readers at that size.
+- Found while testing: a cut exactly through a row of vertices came out as one piece per triangle (fixed: crossing points on a vertex are keyed by the vertex); the measure line didn't draw (a geometry buffer can't grow in place).
+
+**Next steps**
+- Save merge reviews as a page too.
+- A section plane at any angle (now X / Y / Z only).
+- Torus and B-spline faces in the CAD comparison (now "reshaped" without numbers).
+- Owner steps from session 11 still apply.
+
+Next decision number: **D72**.
+
+---
+
 ## Session 11 — 2026-10-06 — front door, release automation, Z-up, colour-blind palette, `polymerge init`, community files
 
 The owner asked for six things from the "make it more useful" list. All are built.

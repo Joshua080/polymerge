@@ -1,43 +1,172 @@
 /**
  * Spatial indices for the diff engine (pure TypeScript, no allocations per query):
  *
- *  - `KdTree`       — static kd-tree over points; exact nearest neighbour with an
- *                     optional radius cap and exclusion mask. Median splits on the axis
- *                     of largest extent, tight per-node AABBs for pruning.
+ *  - `KdTree`       — static tree over points; exact nearest neighbour with an optional
+ *                     radius cap and exclusion mask.
  *  - `TriangleBvh`  — static AABB bounding-volume hierarchy over triangles; exact
  *                     closest point on the surface (Ericson's point–triangle test).
  *
- * Both break distance ties on the lowest index, so query results are deterministic and
- * independent of traversal order.
+ * Both are built the same way, in O(n) after one radix sort, which matters for million-
+ * triangle meshes: the items are ordered along a Morton (Z-order) curve of their points /
+ * triangle centroids, the sorted range is split at its middle down to small leaves, and each
+ * node's tight bounding box is computed bottom-up from its children. The tree shape only
+ * affects speed: every query is exact and breaks distance ties on the lowest index, so
+ * results are deterministic and independent of the tree.
  */
 
-/** Wirth/Hoare quickselect on `order[lo, hi)` so that position k holds the k-th smallest key. */
-function selectByKey(order: Uint32Array, key: Float64Array, stride: number, axis: number, lo: number, hi: number, k: number): void {
-  let l = lo;
-  let r = hi - 1;
-  while (r > l) {
-    const m = (l + r) >>> 1;
-    const a = key[order[l] * stride + axis];
-    const b = key[order[m] * stride + axis];
-    const c = key[order[r] * stride + axis];
-    // Median of three as pivot value.
-    const pivot = a < b ? (b < c ? b : a < c ? c : a) : a < c ? a : b < c ? c : b;
-    let i = l;
-    let j = r;
-    while (i <= j) {
-      while (key[order[i] * stride + axis] < pivot) i++;
-      while (key[order[j] * stride + axis] > pivot) j--;
-      if (i <= j) {
-        const t = order[i];
-        order[i] = order[j];
-        order[j] = t;
-        i++;
-        j--;
-      }
+/** Spread the low 10 bits of v so that bit i lands at bit 3i. */
+function part1by2(v: number): number {
+  let x = v & 0x3ff;
+  x = (x | (x << 16)) & 0x030000ff;
+  x = (x | (x << 8)) & 0x0300f00f;
+  x = (x | (x << 4)) & 0x030c30c3;
+  x = (x | (x << 2)) & 0x09249249;
+  return x;
+}
+
+/**
+ * Indices 0..n−1 ordered by the 30-bit Morton code of `keys[i·stride + 0..2]`, each axis
+ * quantised to 1024 steps over its own extent, and the codes in that order. Stable (two 15-bit
+ * counting-sort passes), so items with equal codes keep their index order.
+ */
+function mortonOrder(keys: Float64Array, stride: number, n: number): { order: Uint32Array; codes: Uint32Array } {
+  let x0 = Infinity;
+  let y0 = Infinity;
+  let z0 = Infinity;
+  let x1 = -Infinity;
+  let y1 = -Infinity;
+  let z1 = -Infinity;
+  for (let i = 0; i < n; i++) {
+    const o = i * stride;
+    const x = keys[o];
+    const y = keys[o + 1];
+    const z = keys[o + 2];
+    if (x < x0) x0 = x;
+    if (x > x1) x1 = x;
+    if (y < y0) y0 = y;
+    if (y > y1) y1 = y;
+    if (z < z0) z0 = z;
+    if (z > z1) z1 = z;
+  }
+  const sx = x1 > x0 ? 1023 / (x1 - x0) : 0;
+  const sy = y1 > y0 ? 1023 / (y1 - y0) : 0;
+  const sz = z1 > z0 ? 1023 / (z1 - z0) : 0;
+  // NaN and out-of-range values clamp into 0..1023 (comparisons with NaN are false).
+  const q = (v: number): number => (v >= 0 ? (v < 1023 ? v | 0 : 1023) : 0);
+  const codes = new Uint32Array(n);
+  for (let i = 0; i < n; i++) {
+    const o = i * stride;
+    codes[i] = ((part1by2(q((keys[o] - x0) * sx)) << 2) | (part1by2(q((keys[o + 1] - y0) * sy)) << 1) | part1by2(q((keys[o + 2] - z0) * sz))) >>> 0;
+  }
+  let order = new Uint32Array(n);
+  for (let i = 0; i < n; i++) order[i] = i;
+  let next = new Uint32Array(n);
+  const count = new Uint32Array(1 << 15);
+  for (const shift of [0, 15]) {
+    count.fill(0);
+    for (let i = 0; i < n; i++) count[(codes[order[i]] >>> shift) & 0x7fff]++;
+    let sum = 0;
+    for (let b = 0; b < count.length; b++) {
+      const c = count[b];
+      count[b] = sum;
+      sum += c;
     }
-    if (k <= j) r = j;
-    else if (k >= i) l = i;
-    else break;
+    for (let i = 0; i < n; i++) {
+      const idx = order[i];
+      next[count[(codes[idx] >>> shift) & 0x7fff]++] = idx;
+    }
+    const t = order;
+    order = next;
+    next = t;
+  }
+  // Codes in sorted order (reusing the spare buffer).
+  for (let i = 0; i < n; i++) next[i] = codes[order[i]];
+  return { order, codes: next };
+}
+
+/** Binary tree over n Morton-sorted items: node ranges [start, end), children, depth. */
+interface ITopology {
+  count: number;
+  start: Uint32Array;
+  end: Uint32Array;
+  left: Int32Array;
+  right: Int32Array;
+  maxDepth: number;
+}
+
+/**
+ * A binary radix tree over Morton-sorted codes: a range is split where its highest differing
+ * code bit changes, so every node is a compact cell of the Z-order grid (an octree split into
+ * halves) and sibling boxes barely overlap; a range of equal codes is halved. Ranges of at most
+ * `leafSize` items are leaves. Nodes are numbered in pre-order, so every child has a larger
+ * number than its parent (bottom-up passes run from the last node to the first).
+ */
+function buildTopology(codes: Uint32Array, n: number, leafSize: number): ITopology {
+  let cap = Math.max(16, Math.ceil((4 * n) / Math.max(1, leafSize)));
+  let start = new Uint32Array(cap);
+  let end = new Uint32Array(cap);
+  let left = new Int32Array(cap);
+  let right = new Int32Array(cap);
+  let count = 0;
+  let maxDepth = 0;
+  const grow = (): void => {
+    cap *= 2;
+    const s2 = new Uint32Array(cap);
+    s2.set(start);
+    start = s2;
+    const e2 = new Uint32Array(cap);
+    e2.set(end);
+    end = e2;
+    const l2 = new Int32Array(cap);
+    l2.set(left);
+    left = l2;
+    const r2 = new Int32Array(cap);
+    r2.set(right);
+    right = r2;
+  };
+  const build = (s: number, e: number, depth: number): number => {
+    if (count === cap) grow();
+    const node = count++;
+    start[node] = s;
+    end[node] = e;
+    left[node] = -1;
+    right[node] = -1;
+    if (depth > maxDepth) maxDepth = depth;
+    if (e - s <= leafSize) return node;
+    const first = codes[s];
+    const last = codes[e - 1];
+    let mid: number;
+    if (first === last) mid = (s + e) >>> 1;
+    else {
+      // First index whose code has the highest differing bit set (codes are ascending).
+      const bit = 31 - Math.clz32(first ^ last);
+      let lo = s + 1;
+      let hi = e - 1;
+      while (lo < hi) {
+        const m = (lo + hi) >>> 1;
+        if ((codes[m] >>> bit) & 1) hi = m;
+        else lo = m + 1;
+      }
+      mid = lo;
+    }
+    const l = build(s, mid, depth + 1);
+    const r = build(mid, e, depth + 1);
+    left[node] = l;
+    right[node] = r;
+    return node;
+  };
+  if (n > 0) build(0, n, 0);
+  return { count, start: start.slice(0, count), end: end.slice(0, count), left: left.slice(0, count), right: right.slice(0, count), maxDepth };
+}
+
+/** Union of two child boxes into `node`'s box (6 values per node: min xyz, max xyz). */
+function unionBoxes(box: Float64Array, node: number, l: number, r: number): void {
+  const o = node * 6;
+  const a = l * 6;
+  const b = r * 6;
+  for (let k = 0; k < 3; k++) {
+    box[o + k] = box[a + k] < box[b + k] ? box[a + k] : box[b + k];
+    box[o + 3 + k] = box[a + 3 + k] > box[b + 3 + k] ? box[a + 3 + k] : box[b + 3 + k];
   }
 }
 
@@ -46,7 +175,8 @@ export class KdTree {
   /** Squared distance of the last successful `nearest` query (Infinity if none). */
   lastDist2 = Infinity;
 
-  private readonly pts: Float64Array;
+  /** Point coordinates in leaf order (rp[i] is point order[i]): leaves read contiguous memory. */
+  private readonly rp: Float64Array;
   private readonly order: Uint32Array;
   private readonly start: Uint32Array;
   private readonly end: Uint32Array;
@@ -59,33 +189,32 @@ export class KdTree {
   constructor(positions: Float64Array, leafSize = 10) {
     const n = Math.floor(positions.length / 3);
     this.count = n;
-    this.pts = positions;
-    const order = new Uint32Array(n);
-    for (let i = 0; i < n; i++) order[i] = i;
-    this.order = order;
-    const S: number[] = [];
-    const E: number[] = [];
-    const L: number[] = [];
-    const R: number[] = [];
-    const B: number[] = [];
-    let maxDepth = 0;
-    const build = (s: number, e: number, depth: number): number => {
-      const node = S.length;
-      S.push(s);
-      E.push(e);
-      L.push(-1);
-      R.push(-1);
+    const { order, codes } = mortonOrder(positions, 3, n);
+    const rp = new Float64Array(n * 3);
+    for (let i = 0; i < n; i++) {
+      const o = order[i] * 3;
+      rp[i * 3] = positions[o];
+      rp[i * 3 + 1] = positions[o + 1];
+      rp[i * 3 + 2] = positions[o + 2];
+    }
+    const t = buildTopology(codes, n, leafSize);
+    const box = new Float64Array(t.count * 6);
+    for (let node = t.count - 1; node >= 0; node--) {
+      const l = t.left[node];
+      if (l >= 0) {
+        unionBoxes(box, node, l, t.right[node]);
+        continue;
+      }
       let x0 = Infinity;
       let y0 = Infinity;
       let z0 = Infinity;
       let x1 = -Infinity;
       let y1 = -Infinity;
       let z1 = -Infinity;
-      for (let i = s; i < e; i++) {
-        const o = order[i] * 3;
-        const x = positions[o];
-        const y = positions[o + 1];
-        const z = positions[o + 2];
+      for (let i = t.start[node], e = t.end[node]; i < e; i++) {
+        const x = rp[i * 3];
+        const y = rp[i * 3 + 1];
+        const z = rp[i * 3 + 2];
         if (x < x0) x0 = x;
         if (x > x1) x1 = x;
         if (y < y0) y0 = y;
@@ -93,29 +222,23 @@ export class KdTree {
         if (z < z0) z0 = z;
         if (z > z1) z1 = z;
       }
-      B.push(x0, y0, z0, x1, y1, z1);
-      if (depth > maxDepth) maxDepth = depth;
-      const dx = x1 - x0;
-      const dy = y1 - y0;
-      const dz = z1 - z0;
-      if (e - s <= leafSize || !(dx > 0 || dy > 0 || dz > 0)) return node;
-      const axis = dx >= dy && dx >= dz ? 0 : dy >= dz ? 1 : 2;
-      const mid = (s + e) >>> 1;
-      selectByKey(order, positions, 3, axis, s, e, mid);
-      const l = build(s, mid, depth + 1);
-      const r = build(mid, e, depth + 1);
-      L[node] = l;
-      R[node] = r;
-      return node;
-    };
-    if (n > 0) build(0, n, 0);
-    this.start = Uint32Array.from(S);
-    this.end = Uint32Array.from(E);
-    this.left = Int32Array.from(L);
-    this.right = Int32Array.from(R);
-    this.box = Float64Array.from(B);
-    this.stack = new Int32Array(2 * maxDepth + 8);
-    this.stackD = new Float64Array(2 * maxDepth + 8);
+      const o = node * 6;
+      box[o] = x0;
+      box[o + 1] = y0;
+      box[o + 2] = z0;
+      box[o + 3] = x1;
+      box[o + 4] = y1;
+      box[o + 5] = z1;
+    }
+    this.rp = rp;
+    this.order = order;
+    this.start = t.start;
+    this.end = t.end;
+    this.left = t.left;
+    this.right = t.right;
+    this.box = box;
+    this.stack = new Int32Array(2 * t.maxDepth + 8);
+    this.stackD = new Float64Array(2 * t.maxDepth + 8);
   }
 
   private boxDist2(node: number, x: number, y: number, z: number): number {
@@ -150,7 +273,7 @@ export class KdTree {
   nearest(x: number, y: number, z: number, maxDist2 = Infinity, skip?: Uint8Array | null): number {
     this.lastDist2 = Infinity;
     if (this.count === 0) return -1;
-    const pts = this.pts;
+    const rp = this.rp;
     const order = this.order;
     const stack = this.stack;
     const stackD = this.stackD;
@@ -171,10 +294,10 @@ export class KdTree {
         for (let i = this.start[node]; i < e; i++) {
           const idx = order[i];
           if (skip && skip[idx]) continue;
-          const o = idx * 3;
-          const dx = pts[o] - x;
-          const dy = pts[o + 1] - y;
-          const dz = pts[o + 2] - z;
+          const o = i * 3;
+          const dx = rp[o] - x;
+          const dy = rp[o + 1] - y;
+          const dz = rp[o + 2] - z;
           const d2 = dx * dx + dy * dy + dz * dz;
           if (d2 < best || (d2 === best && (bestIdx < 0 || idx < bestIdx))) {
             best = d2;
@@ -214,8 +337,7 @@ export class KdTree {
   /** Number of points with squared distance ≤ maxDist2, counting stops at `limit`. */
   countWithin(x: number, y: number, z: number, maxDist2: number, limit = Infinity): number {
     if (this.count === 0) return 0;
-    const pts = this.pts;
-    const order = this.order;
+    const rp = this.rp;
     const stack = this.stack;
     let sp = 0;
     let n = 0;
@@ -227,10 +349,10 @@ export class KdTree {
       if (l < 0) {
         const e = this.end[node];
         for (let i = this.start[node]; i < e; i++) {
-          const o = order[i] * 3;
-          const dx = pts[o] - x;
-          const dy = pts[o + 1] - y;
-          const dz = pts[o + 2] - z;
+          const o = i * 3;
+          const dx = rp[o] - x;
+          const dy = rp[o + 1] - y;
+          const dz = rp[o + 2] - z;
           if (dx * dx + dy * dy + dz * dz <= maxDist2 && ++n >= limit) return n;
         }
         continue;
@@ -401,88 +523,16 @@ export class TriangleBvh {
     const F = Math.floor(faces.length / 3);
     this.faceCount = F;
     const cent = new Float64Array(F * 3);
-    const tbox = new Float64Array(F * 6);
     for (let f = 0; f < F; f++) {
       const a = faces[f * 3] * 3;
       const b = faces[f * 3 + 1] * 3;
       const c = faces[f * 3 + 2] * 3;
-      for (let k = 0; k < 3; k++) {
-        const va = positions[a + k];
-        const vb = positions[b + k];
-        const vc = positions[c + k];
-        cent[f * 3 + k] = (va + vb + vc) / 3;
-        tbox[f * 6 + k] = Math.min(va, vb, vc);
-        tbox[f * 6 + 3 + k] = Math.max(va, vb, vc);
-      }
+      cent[f * 3] = (positions[a] + positions[b] + positions[c]) / 3;
+      cent[f * 3 + 1] = (positions[a + 1] + positions[b + 1] + positions[c + 1]) / 3;
+      cent[f * 3 + 2] = (positions[a + 2] + positions[b + 2] + positions[c + 2]) / 3;
     }
-    const order = new Uint32Array(F);
-    for (let i = 0; i < F; i++) order[i] = i;
-    const S: number[] = [];
-    const E: number[] = [];
-    const L: number[] = [];
-    const R: number[] = [];
-    const B: number[] = [];
-    let maxDepth = 0;
-    const build = (s: number, e: number, depth: number): number => {
-      const node = S.length;
-      S.push(s);
-      E.push(e);
-      L.push(-1);
-      R.push(-1);
-      let x0 = Infinity;
-      let y0 = Infinity;
-      let z0 = Infinity;
-      let x1 = -Infinity;
-      let y1 = -Infinity;
-      let z1 = -Infinity;
-      let cx0 = Infinity;
-      let cy0 = Infinity;
-      let cz0 = Infinity;
-      let cx1 = -Infinity;
-      let cy1 = -Infinity;
-      let cz1 = -Infinity;
-      for (let i = s; i < e; i++) {
-        const f = order[i];
-        const o = f * 6;
-        if (tbox[o] < x0) x0 = tbox[o];
-        if (tbox[o + 1] < y0) y0 = tbox[o + 1];
-        if (tbox[o + 2] < z0) z0 = tbox[o + 2];
-        if (tbox[o + 3] > x1) x1 = tbox[o + 3];
-        if (tbox[o + 4] > y1) y1 = tbox[o + 4];
-        if (tbox[o + 5] > z1) z1 = tbox[o + 5];
-        const cx = cent[f * 3];
-        const cy = cent[f * 3 + 1];
-        const cz = cent[f * 3 + 2];
-        if (cx < cx0) cx0 = cx;
-        if (cx > cx1) cx1 = cx;
-        if (cy < cy0) cy0 = cy;
-        if (cy > cy1) cy1 = cy;
-        if (cz < cz0) cz0 = cz;
-        if (cz > cz1) cz1 = cz;
-      }
-      B.push(x0, y0, z0, x1, y1, z1);
-      if (depth > maxDepth) maxDepth = depth;
-      const dx = cx1 - cx0;
-      const dy = cy1 - cy0;
-      const dz = cz1 - cz0;
-      if (e - s <= leafSize || !(dx > 0 || dy > 0 || dz > 0)) return node;
-      const axis = dx >= dy && dx >= dz ? 0 : dy >= dz ? 1 : 2;
-      const mid = (s + e) >>> 1;
-      selectByKey(order, cent, 3, axis, s, e, mid);
-      const l = build(s, mid, depth + 1);
-      const r = build(mid, e, depth + 1);
-      L[node] = l;
-      R[node] = r;
-      return node;
-    };
-    if (F > 0) build(0, F, 0);
-    this.start = Uint32Array.from(S);
-    this.end = Uint32Array.from(E);
-    this.left = Int32Array.from(L);
-    this.right = Int32Array.from(R);
-    this.box = Float64Array.from(B);
-    this.stack = new Int32Array(2 * maxDepth + 8);
-    this.stackD = new Float64Array(2 * maxDepth + 8);
+    const { order, codes } = mortonOrder(cent, 3, F);
+    // Triangles in leaf order, 9 coordinates each.
     const tri = new Float64Array(F * 9);
     for (let i = 0; i < F; i++) {
       const f = order[i];
@@ -493,6 +543,46 @@ export class TriangleBvh {
         tri[i * 9 + c * 3 + 2] = positions[v + 2];
       }
     }
+    const t = buildTopology(codes, F, leafSize);
+    const box = new Float64Array(t.count * 6);
+    for (let node = t.count - 1; node >= 0; node--) {
+      const l = t.left[node];
+      if (l >= 0) {
+        unionBoxes(box, node, l, t.right[node]);
+        continue;
+      }
+      let x0 = Infinity;
+      let y0 = Infinity;
+      let z0 = Infinity;
+      let x1 = -Infinity;
+      let y1 = -Infinity;
+      let z1 = -Infinity;
+      for (let i = t.start[node] * 9, e = t.end[node] * 9; i < e; i += 3) {
+        const x = tri[i];
+        const y = tri[i + 1];
+        const z = tri[i + 2];
+        if (x < x0) x0 = x;
+        if (x > x1) x1 = x;
+        if (y < y0) y0 = y;
+        if (y > y1) y1 = y;
+        if (z < z0) z0 = z;
+        if (z > z1) z1 = z;
+      }
+      const o = node * 6;
+      box[o] = x0;
+      box[o + 1] = y0;
+      box[o + 2] = z0;
+      box[o + 3] = x1;
+      box[o + 4] = y1;
+      box[o + 5] = z1;
+    }
+    this.start = t.start;
+    this.end = t.end;
+    this.left = t.left;
+    this.right = t.right;
+    this.box = box;
+    this.stack = new Int32Array(2 * t.maxDepth + 8);
+    this.stackD = new Float64Array(2 * t.maxDepth + 8);
     this.tri = tri;
     this.triFace = order;
   }

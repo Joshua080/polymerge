@@ -90,6 +90,56 @@ describe('loading STEP', () => {
   });
 });
 
+describe('CAD faces (real OpenCascade)', () => {
+  const silent = { info: () => {}, warn: () => {} };
+  const pair = async (b: string, t: string) => {
+    const [base, target] = await loadMeshPair({ path: plate(b) }, { path: plate(t) });
+    return diffMeshes(base.mesh, target.mesh, { logger: silent });
+  };
+
+  it('every face of the plate is recognised: six flat faces, four rounds r5, two holes Ø8', async () => {
+    const { mesh } = await loadMeshFile(plate('base'));
+    const kinds = mesh.brep!.faces.map((f) => f.surface.type === 'cylinder' ? (f.surface.inward ? `hole r${f.surface.radius.toFixed(3)}` : `round r${f.surface.radius.toFixed(3)}`) : f.surface.type);
+    expect(kinds.filter((k) => k === 'plane')).toHaveLength(6);
+    expect(kinds.filter((k) => k === 'round r5.000')).toHaveLength(4);
+    expect(kinds.filter((k) => k === 'hole r4.000')).toHaveLength(2);
+  });
+
+  it('a moved hole reads as the move, not as re-triangulated flat faces', async () => {
+    const r = await pair('base', 'ours');
+    expect(r.brep!.changes.map((c) => `${c.kind}: ${c.description}`)).toEqual([
+      'moved: hole Ø8 moved 5 mm (+5, 0, 0)',
+      'reshaped: flat face facing −Z: outline changed',
+      'reshaped: flat face facing +Z: outline changed',
+    ]);
+    expect(r.brep!.unchanged).toBe(9);
+    expect(r.brep!.retriangulated.base + r.brep!.retriangulated.target).toBeGreaterThan(100);
+  });
+
+  it('an added hole reads as a new hole, and the flat faces lose its area', async () => {
+    const r = await pair('base', 'theirs');
+    expect(r.brep!.changes.map((c) => `${c.kind}: ${c.description}`)).toEqual([
+      'added: new hole Ø6',
+      'reshaped: flat face facing −Z: outline changed, area 5878.29 → 5850.29 mm²',
+      'reshaped: flat face facing +Z: outline changed, area 5878.29 → 5850.29 mm²',
+    ]);
+  });
+
+  it('the same assembly in mm and in inches has no CAD-face change', async () => {
+    const [mm, inch] = await loadMeshPair({ path: fixture('assembly-mm.step') }, { path: fixture('assembly-inch.step') });
+    const r = diffMeshes(mm.mesh, inch.mesh, { logger: silent });
+    expect(r.brep!.changes).toEqual([]);
+  });
+
+  it('polymerge diff lists the face changes', async () => {
+    capture();
+    await runDiff(plate('base'), plate('ours'), { top: '0' });
+    expect(stdout).toContain('compared CAD face by CAD face');
+    expect(stdout).toMatch(/CAD faces\s+9 of 12 unchanged · 3 changes/);
+    expect(stdout).toContain('~ hole Ø8 moved 5 mm (+5, 0, 0)');
+  });
+});
+
 describe('commands on STEP', () => {
   it('diff: the moved hole, with the tessellation noted', async () => {
     capture();

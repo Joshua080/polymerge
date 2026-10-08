@@ -9,7 +9,8 @@
  *
  * Conventions
  * -----------
- * - Units: whatever the source file uses (no unit conversion in v1), except STEP: always mm.
+ * - Units: whatever the source file uses (no unit conversion), except STEP and 3MF, which state
+ *   their units: always mm.
  * - Coordinates: right-handed, world space (glTF node transforms are baked in).
  * - Bulk data lives in typed arrays (interleaved xyz for positions, 3 indices per
  *   triangle for faces). Object-style views (IVertex, IFace) exist for reporting
@@ -35,11 +36,12 @@ export interface IBounds {
 /**
  * Formats accepted by the loaders. `gltf` = JSON glTF (embedded/data-URI buffers only in v1).
  * `step` = STEP (ISO 10303-21, `.step` / `.stp`): tessellated by an importer the caller passes in
- * (`ILoadOptions.step`); read only, never written.
+ * (`ILoadOptions.step`); read only, never written. `ply` = Stanford PLY (ASCII or binary).
+ * `3mf` = 3D Manufacturing Format (a ZIP package; geometry and colours, in mm).
  */
-export type SourceFormat = 'stl' | 'obj' | 'gltf' | 'glb' | 'step';
+export type SourceFormat = 'stl' | 'obj' | 'gltf' | 'glb' | 'step' | 'ply' | '3mf';
 
-export const SOURCE_FORMATS: readonly SourceFormat[] = ['stl', 'obj', 'gltf', 'glb', 'step'];
+export const SOURCE_FORMATS: readonly SourceFormat[] = ['stl', 'obj', 'gltf', 'glb', 'step', 'ply', '3mf'];
 
 // ---------------------------------------------------------------------------
 // Normalised mesh (the ONE internal representation every format is loaded into)
@@ -101,6 +103,11 @@ export interface IMesh {
    * came from). Absent for STL / OBJ. Positions stay baked in world space; see IMeshScene.
    */
   scene?: IMeshScene;
+  /**
+   * STEP only: the CAD (B-rep) face each triangle came from, and the surface each face lies on.
+   * Lets the diff compare CAD faces as surfaces instead of triangles (IDiffResult.brep).
+   */
+  brep?: IMeshBrep;
 }
 
 export interface IMeshGroup {
@@ -312,6 +319,155 @@ export interface IFace {
   vertices: [a: number, b: number, c: number];
   groupIndex: number;
   materialIndex?: number;
+}
+
+// ---------------------------------------------------------------------------
+// Geometry metrics  (implemented in src/metrics.ts)
+// ---------------------------------------------------------------------------
+
+/** Length units a format states: STEP and 3MF are loaded in millimetres, glTF is metres by specification. */
+export type MetricUnit = 'mm' | 'm';
+
+export interface IMeshMetrics {
+  vertices: number;
+  faces: number;
+  /** Connected pieces (vertices joined through faces). */
+  parts: number;
+  bounds: IBounds;
+  /** Bounding-box extent along x, y and z. */
+  size: Vec3;
+  /** Sum of the triangle areas. */
+  surfaceArea: number;
+  /** Enclosed volume, when the surface is closed and consistently oriented; otherwise null. */
+  volume: number | null;
+  /** Watertight: no open and no non-manifold edges. */
+  closed: boolean;
+  /** Edges used by one face only: the borders of holes and open sheets. */
+  openEdges: number;
+  /** Edges shared by more than two faces. */
+  nonManifoldEdges: number;
+  /** Edges whose two faces run the same way along them: one of the faces is flipped. */
+  flippedEdges: number;
+  /** A closed surface whose faces point inwards (its signed volume is negative). */
+  insideOut: boolean;
+  /** Centre of the volume when there is one, else the area-weighted centre of the surface. */
+  centroid: Vec3;
+  /** Units the format states (undefined for STL, OBJ and PLY, which do not say). */
+  unit?: MetricUnit;
+}
+
+/** One number before and after. `percent` is null when the base value is 0. */
+export interface IMetricChange {
+  base: number;
+  target: number;
+  delta: number;
+  percent: number | null;
+}
+
+export interface IMetricsComparison {
+  base: IMeshMetrics;
+  target: IMeshMetrics;
+  /** Null unless both versions have a volume. */
+  volume: IMetricChange | null;
+  surfaceArea: IMetricChange;
+  size: [x: IMetricChange, y: IMetricChange, z: IMetricChange];
+  /**
+   * True when the two versions state different units (e.g. a 3MF in mm against a glTF in
+   * metres): the numbers are then not comparable as they stand.
+   */
+  unitsDiffer: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// CAD (B-rep) faces of STEP models  (fitted in src/brep.ts, compared in src/diff/brep.ts)
+// ---------------------------------------------------------------------------
+
+/** The kind of surface a CAD face lies on, as fitted to its exact tessellation. */
+export type BrepSurfaceType = 'plane' | 'cylinder' | 'cone' | 'sphere' | 'other';
+
+/**
+ * The surface of a CAD face, in millimetres. Normals and axis directions are unit vectors; normals
+ * point out of the material, so `inward` marks a concave surface (a hole, a pocket's round).
+ *  - plane: the points x with normal · x = offset;
+ *  - cylinder: radius around the line through `origin` (its point nearest the coordinate origin)
+ *    along `axis`; `full` when the face goes all the way round;
+ *  - cone: half-angle between its surface lines and the axis, apex on the axis;
+ *  - sphere: centre and radius;
+ *  - other: anything else (B-spline, torus, ...), compared by shape only.
+ */
+export type IBrepSurface =
+  | { type: 'plane'; normal: Vec3; offset: number }
+  | { type: 'cylinder'; axis: Vec3; origin: Vec3; radius: number; inward: boolean; full: boolean }
+  | { type: 'cone'; axis: Vec3; apex: Vec3; halfAngleDeg: number; inward: boolean }
+  | { type: 'sphere'; center: Vec3; radius: number; inward: boolean }
+  | { type: 'other' };
+
+export interface IBrepFace {
+  /** The group (solid or shell) the face belongs to. */
+  group: number;
+  surface: IBrepSurface;
+  /** Number of triangles of the face. */
+  triangles: number;
+  /** Area (mm²) and area-weighted centre of the face. */
+  area: number;
+  centroid: Vec3;
+}
+
+/** IMesh.brep: the CAD faces of a STEP model. */
+export interface IMeshBrep {
+  /** CAD face of each triangle (index into `faces`; -1 = none). Length = faceCount. */
+  faceOf: Int32Array;
+  faces: IBrepFace[];
+}
+
+/**
+ * What happened to a CAD face:
+ *  - reshaped: same surface, different extent (an edge moved: a hole moved through it, a corner
+ *    rounded differently);
+ *  - moved: the same surface displaced (a hole moved, a face offset);
+ *  - resized: the same kind of surface with another size (a hole Ø8 → Ø8.1, a fillet r5 → r8);
+ *  - added / removed: a face with no counterpart.
+ */
+export type BrepChangeKind = 'reshaped' | 'moved' | 'resized' | 'added' | 'removed';
+
+export interface IBrepFaceChange {
+  kind: BrepChangeKind;
+  surface: BrepSurfaceType;
+  /** CAD faces involved (indices into each mesh's `brep.faces`; empty on the side without one). */
+  baseFaces: number[];
+  targetFaces: number[];
+  /** Group (solid) of the face, target side when there is one. */
+  group: number;
+  /**
+   * One line built from numbers only, never from names in the file: "hole Ø8 moved 5 mm
+   * (+5, 0, 0)". The solid's name is `group`'s name, for the caller to show (untrusted text).
+   */
+  description: string;
+  /** moved: how far the surface moved (target space, mm). */
+  offset?: Vec3;
+  /**
+   * resized: the size before and after: the diameter of a full cylinder or a sphere, the radius of
+   * a partial cylinder (a round), in mm; the full angle of a cone, in degrees.
+   */
+  size?: [before: number, after: number];
+  /** Area before and after, mm² (0 on the side without the face). */
+  area: [before: number, after: number];
+  /** A point to look at, in target space. */
+  focus: Vec3;
+}
+
+/** IDiffResult.brep: the CAD-face comparison of two STEP models. */
+export interface IBrepDiff {
+  baseFaces: number;
+  targetFaces: number;
+  /** CAD faces on the same surface with the same extent in both versions. */
+  unchanged: number;
+  changes: IBrepFaceChange[];
+  /**
+   * Triangles the triangle-level diff had marked changed that lie on an unchanged CAD surface:
+   * re-triangulation, not edits. They are reported as unchanged.
+   */
+  retriangulated: { base: number; target: number };
 }
 
 // ---------------------------------------------------------------------------
@@ -552,6 +708,14 @@ export interface IDiffOptions {
    * than Removed + Added, and report every part motion in `IDiffResult.parts`. Default true.
    */
   detectParts?: boolean;
+  /** Compute geometry metrics for both versions (`IDiffResult.metrics`). Default true; O(faces). */
+  metrics?: boolean;
+  /**
+   * STEP: compare the CAD faces as surfaces (`IDiffResult.brep`), so a face that was only
+   * re-triangulated reads as unchanged and real edits are named per face. Default true; used
+   * when both meshes carry `brep`.
+   */
+  brepFaces?: boolean;
   /**
    * Log sink. Defaults to `console`. Regardless of the sink, the engine ALWAYS
    * emits one info line per tier attempt and one line naming the accepted tier.
@@ -716,6 +880,16 @@ export interface IDiffResult {
   stats: IDiffStats;
   /** Parts that moved rigidly on their own (relative to `alignment`). Empty when none. */
   parts: IPartMotion[];
+  /**
+   * Size, surface area, volume and closedness of both versions and how they changed. Absent when
+   * `IDiffOptions.metrics` is false, and in results serialised before metrics existed.
+   */
+  metrics?: IMetricsComparison;
+  /**
+   * STEP models (both carry `IMesh.brep`): the CAD-face comparison. When present, the face and
+   * vertex statuses above are already the face-aware ones.
+   */
+  brep?: IBrepDiff;
   durationMs: number;
 }
 

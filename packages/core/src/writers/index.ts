@@ -1,6 +1,7 @@
 /**
  * Mesh WRITERS (used to save merge results): Wavefront OBJ (keeps groups), STL (binary or
- * ASCII), and glTF 2.0 as GLB or self-contained .gltf (keeps the source's node structure: gltf.ts).
+ * ASCII), glTF 2.0 as GLB or self-contained .gltf (keeps the source's node structure: gltf.ts),
+ * PLY (binary, ply.ts) and 3MF (geometry and colours, threemf.ts).
  * Isomorphic: they return bytes; the caller writes files.
  *
  * Numbers are written as the SHORTEST decimal that reads back to the same float32 — every
@@ -8,24 +9,19 @@
  */
 import type { IMesh, SourceFormat } from '../types.js';
 import { groupIndexOfFace } from '../mesh.js';
+import { formatFloat32 } from './float.js';
 import { writeGlb, writeGltf } from './gltf.js';
+import { writePly } from './ply.js';
+import { writeThreeMf } from './threemf.js';
+
+export { formatFloat32 } from './float.js';
+export { writePly } from './ply.js';
+export { writeThreeMf } from './threemf.js';
 
 export { buildGltfDocument, gltfMaterial, writeGlb, writeGltf, type IGltfDocument, type IGltfWriteOptions } from './gltf.js';
 
-export type WritableFormat = 'stl' | 'obj' | 'glb' | 'gltf';
-export const WRITABLE_FORMATS: readonly WritableFormat[] = ['stl', 'obj', 'glb', 'gltf'];
-
-/** Shortest decimal representation that round-trips through float32. */
-export function formatFloat32(x: number): string {
-  const f = Math.fround(x);
-  if (f === 0) return '0';
-  if (!Number.isFinite(f)) throw new RangeError(`cannot write non-finite coordinate ${x}`);
-  for (let p = 1; p <= 9; p++) {
-    const s = f.toPrecision(p);
-    if (Math.fround(Number(s)) === f) return String(Number(s));
-  }
-  return String(f);
-}
+export type WritableFormat = 'stl' | 'obj' | 'glb' | 'gltf' | 'ply' | '3mf';
+export const WRITABLE_FORMATS: readonly WritableFormat[] = ['stl', 'obj', 'glb', 'gltf', 'ply', '3mf'];
 
 export function writeObj(mesh: IMesh, opts: { comment?: string } = {}): Uint8Array {
   const lines: string[] = [];
@@ -106,6 +102,8 @@ export function writeMesh(mesh: IMesh, format: SourceFormat, opts: { name?: stri
   if (format === 'stl') return writeStl(mesh, { binary: !opts.asciiStl, name: opts.name });
   if (format === 'glb') return writeGlb(mesh);
   if (format === 'gltf') return writeGltf(mesh);
+  if (format === 'ply') return writePly(mesh, { name: opts.name });
+  if (format === '3mf') return writeThreeMf(mesh, { name: opts.name });
   // Unreachable for a SourceFormat; guards untyped callers.
   throw new Error(`writing ${String(format).toUpperCase()} is not supported (supported: ${WRITABLE_FORMATS.join(', ')})`);
 }

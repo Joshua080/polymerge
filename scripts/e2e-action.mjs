@@ -182,8 +182,9 @@ function decodePng(buf) {
   return { width, height, px };
 }
 
-/** Colour class of a pixel: the diff colours by hue, grey (the unchanged model), or background. */
-function classify(r, g, b) {
+/** Colour class of a pixel: the diff colours by hue, grey (the unchanged model), or the panel's background `bg`. */
+function classify(r, g, b, bg) {
+  if (Math.abs(r - bg[0]) + Math.abs(g - bg[1]) + Math.abs(b - bg[2]) < 24) return 'bg';
   const max = Math.max(r, g, b);
   const min = Math.min(r, g, b);
   if (max < 45) return 'bg';
@@ -202,13 +203,17 @@ function classify(r, g, b) {
 function panels(img, capture) {
   return capture.panels.map((p) => {
     const [x0, y0, w, h] = p.rect.map((v) => Math.round(v * 2)); // captured at device scale 2
+    // The panel's background: its bottom corners (the title sits top left).
+    const at = (x, y) => [0, 1, 2].map((k) => img.px[(y * img.width + x) * 3 + k]);
+    const corners = [at(x0 + 2, y0 + h - 3), at(x0 + w - 3, y0 + h - 3)];
+    const bg = [0, 1, 2].map((k) => Math.round((corners[0][k] + corners[1][k]) / 2));
     const counts = { bg: 0, grey: 0, yellow: 0, green: 0, red: 0, other: 0 };
     const cls = [];
     const rgb = [];
     for (let y = y0; y < y0 + h; y++) {
       for (let x = x0; x < x0 + w; x++) {
         const i = (y * img.width + x) * 3;
-        const c = classify(img.px[i], img.px[i + 1], img.px[i + 2]);
+        const c = classify(img.px[i], img.px[i + 1], img.px[i + 2], bg);
         counts[c]++;
         cls.push(c);
         rgb.push((img.px[i] << 16) | (img.px[i + 1] << 8) | img.px[i + 2]);
@@ -528,7 +533,7 @@ try {
   check(r.code === 0 && empty.files.length === 0, `render --list writes an empty result by itself (${empty.files.length} files)`);
   api.pulls.set(42, pull(head3));
   r = await run('action/post.mjs', [], postEnv('pull_request', event(head3), out3));
-  check(r.code === 0 && ours().length === 1 && ours()[0].body.includes('no longer changes any STL, OBJ, glTF or GLB files') && !ours()[0].body.includes('<img'), 'the comment is updated to say there are no model changes any more');
+  check(r.code === 0 && ours().length === 1 && ours()[0].body.includes('no longer changes any 3D model files') && !ours()[0].body.includes('<img'), 'the comment is updated to say there are no model changes any more');
   check(api.unauthorised === 0, 'every API call carried the token');
 
   // ---- GitHub's merge ref, with an out-of-date base.sha in the event ----------------------------------

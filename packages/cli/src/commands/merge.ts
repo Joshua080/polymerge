@@ -26,6 +26,8 @@ export interface MergeCommandOptions {
   quiet?: boolean;
   /** Check the combined edits for collisions (default true; --no-collision-check). */
   collisionCheck?: boolean;
+  /** resolve: show what would be written, write nothing. */
+  dryRun?: boolean;
 }
 
 const RESOLUTIONS: readonly MergeResolution[] = ['ours', 'theirs', 'base'];
@@ -52,6 +54,24 @@ export function outputFormat(file: string, explicit?: string): SourceFormat {
     throw new Error(`cannot write "${f || '(no extension)'}" files yet — supported: ${WRITABLE_FORMATS.join(', ')}`);
   }
   return f as SourceFormat;
+}
+
+/**
+ * What the written file leaves out, for formats that cannot hold everything a merge produces
+ * (one line each; empty when nothing is lost).
+ */
+export function outputNotes(format: SourceFormat, result: IMergeResult, file: string): string[] {
+  const notes: string[] = [];
+  if (result.appearance && format !== 'gltf' && format !== 'glb') {
+    notes.push(
+      format === 'ply' || format === '3mf'
+        ? `${format.toUpperCase()} carries geometry and colours only; the merged UVs and textures are not in ${file}.`
+        : `${format.toUpperCase()} carries geometry only; the merged materials, UVs and textures are not in ${file}.`,
+    );
+  }
+  if (format === '3mf') notes.push(`${file} holds the merged geometry and colours; slicer settings and plates from the inputs are not kept.`);
+  if (format === 'ply' && result.merged.groups.length > 1) notes.push(`PLY has no parts: the ${result.merged.groups.length} groups are written as one mesh.`);
+  return notes;
 }
 
 export function formatMergeReport(r: IMergeResult, names: { base: string; ours: string; theirs: string }): string {
@@ -160,9 +180,7 @@ export async function runMerge(basePath: string, oursPath: string, theirsPath: s
   if (!o.quiet) {
     process.stdout.write(formatMergeReport(result, { base: base.fileName, ours: ours.fileName, theirs: theirs.fileName }) + '\n');
     if (o.output) process.stdout.write(`Wrote ${o.output}\n`);
-    if (o.output && format && result.appearance && format !== 'gltf' && format !== 'glb') {
-      process.stdout.write(`Note: ${format.toUpperCase()} carries geometry only; the merged materials, UVs and textures are not in ${o.output}.\n`);
-    }
+    if (o.output && format) for (const note of outputNotes(format, result, o.output)) process.stdout.write(`Note: ${note}\n`);
   }
   return result.clean ? 0 : 1;
 }
@@ -170,7 +188,7 @@ export async function runMerge(basePath: string, oursPath: string, theirsPath: s
 /**
  * git merge driver (merge.<name>.driver = "polymerge git-merge %O %A %B %P"):
  * merges ancestor %O, current %A and other %B, writes the result over %A in the format of
- * path %P (STL, OBJ, GLB or .gltf; glTF keeps the inputs' nodes), prints a summary to stderr
+ * path %P (STL, OBJ, GLB, .gltf, PLY or 3MF; glTF keeps the inputs' nodes), prints a summary to stderr
  * and exits 0 (clean) or 1 (conflicts left in base state, git marks the file as conflicted).
  * With --resolve, a combination that damages the model (a collision warning) also exits 1:
  * an automatic merge must never commit it unseen.
@@ -201,6 +219,7 @@ export async function runGitMerge(args: string[], o: { resolve?: string; collisi
   });
   await writeFile(current, writeMesh(result.merged, format, { name: path.basename(repoPath) }));
   process.stderr.write(formatMergeReport(result, { base: `${repoPath} (ancestor)`, ours: `${repoPath} (ours)`, theirs: `${repoPath} (theirs)` }) + '\n');
+  for (const note of outputNotes(format, result, repoPath)) process.stderr.write(`Note: ${note}\n`);
   return result.clean && result.warnings.length === 0 ? 0 : 1;
 }
 
@@ -212,10 +231,12 @@ export async function runGitMerge(args: string[], o: { resolve?: string; collisi
  */
 export async function runGitResolve(repoPath: string, o: MergeCommandOptions): Promise<number> {
   const { result, bytes } = await resolveStages((n) => gitStage(n, repoPath), repoPath, o);
-  await writeFile(repoPath, bytes);
+  if (!o.dryRun) await writeFile(repoPath, bytes);
   if (!o.quiet) {
     process.stdout.write(formatMergeReport(result, { base: `${repoPath} :1`, ours: `${repoPath} :2 (ours)`, theirs: `${repoPath} :3 (theirs)` }) + '\n');
-    process.stdout.write(result.clean ? `Wrote ${repoPath} — run "git add ${repoPath}" to mark it resolved.\n` : `Wrote ${repoPath} (still conflicted).\n`);
+    if (o.dryRun) process.stdout.write(`Dry run: ${repoPath} was not written. Pick a side per conflict with --pick <id>=ours|theirs|base, then run again without --dry-run.\n`);
+    else process.stdout.write(result.clean ? `Wrote ${repoPath} — run "git add ${repoPath}" to mark it resolved.\n` : `Wrote ${repoPath} (still conflicted).\n`);
+    for (const note of outputNotes(outputFormat(repoPath, o.format), result, repoPath)) process.stdout.write(`Note: ${note}\n`);
   }
   return result.clean ? 0 : 1;
 }

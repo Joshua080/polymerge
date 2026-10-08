@@ -402,7 +402,8 @@ export function buildPlan(base: IMesh, ours: ISide, theirs: ISide, baseComponent
 
 /** Add atomic conflicts (collisions found on a materialised merge) and rebuild the regions. */
 export function addAtomics(plan: IMergePlan, extra: IAtomic[]): void {
-  plan.atomics.push(...extra);
+  // A loop, not push(...extra): a big model can have more collisions than a call takes arguments.
+  for (const a of extra) plan.atomics.push(a);
   plan.unresolvedMerge = null;
   buildRegions(plan);
 }

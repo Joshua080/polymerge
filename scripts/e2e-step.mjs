@@ -93,6 +93,18 @@ try {
     check(JSON.stringify(tessellation) === JSON.stringify(['0.05 mm', '0.05 mm']), `both versions share one tolerance (${JSON.stringify(tessellation)})`);
     check(foreign.length === 0, `OpenCascade came from the CLI, nothing from another origin (${foreign.slice(0, 2).join(', ')})`);
     check(hook?.view?.up === 'z' && (await page.inputValue('#up-axis')) === 'z', `STEP opens Z up, the CAD convention (${JSON.stringify(hook?.view)})`);
+    // Face-aware: the change in CAD terms, in the hook and in the panel.
+    check(hook?.cad?.changes?.[0]?.text === 'hole Ø8 moved 5 mm (+5, 0, 0)', `the CAD faces say what moved (${JSON.stringify(hook?.cad?.changes?.map((c) => c.text))})`);
+    const cadRows = await bounded(page.$$eval('#cad-faces li', (li) => li.map((x) => x.textContent)), 10_000, 'read the CAD faces');
+    check(cadRows.length === hook?.cad?.changes?.length && /hole Ø8 moved 5 mm/.test(cadRows[0] ?? ''), `the CAD faces panel lists them (${cadRows.length} rows)`);
+    // The section tool: a cut half way up the plate, two Ø8 holes in it.
+    await page.keyboard.press('s');
+    await bounded(page.waitForFunction(() => window.__POLYMERGE__.review?.section?.target, null, { timeout: 15_000 }), 20_000, 'section');
+    const cut = (await readHook(page)).review?.section;
+    check(cut?.axis === 'z' && Math.abs(cut.value - 5) < 1e-6 && cut.target?.outlines === 1 && cut.target?.holes === 2, `the section cuts the plate half way up: 1 outline, 2 holes (${JSON.stringify(cut)})`);
+    const readout = await page.textContent('[data-readout="section"]');
+    check(/holes Ø7\.9\d* mm/.test(readout ?? '') && /cm²/.test(readout ?? ''), `and reads the holes and the area (${readout})`);
+    await page.keyboard.press('s');
     await page.selectOption('#up-axis', 'y');
     const turned = await readHook(page);
     check(turned?.view?.up === 'y' && new URL(page.url()).searchParams.get('up') === 'y', 'switching to Y up turns it and keeps the choice in the address');

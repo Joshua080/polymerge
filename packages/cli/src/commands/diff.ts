@@ -9,6 +9,8 @@ export interface DiffCommandOptions {
   moveEpsilon?: string;
   surfaceTolerance?: string;
   top?: string;
+  /** How many regions of change to list. */
+  regions?: string;
   quiet?: boolean;
   verbose?: boolean;
   exitCode?: boolean;
@@ -46,8 +48,9 @@ export async function runDiff(basePath: string, targetPath: string, o: DiffComma
   }
   if (!jsonToStdout && !quiet) {
     const top = o.top === undefined ? 10 : Math.max(0, Math.floor(Number(o.top)) || 0);
+    const regions = o.regions === undefined ? 5 : Math.max(0, Math.floor(Number(o.regions)) || 0);
     process.stdout.write(
-      formatDiffReport(result, base.mesh, target.mesh, { baseName: base.fileName, targetName: target.fileName, topMoves: top }) + '\n',
+      formatDiffReport(result, base.mesh, target.mesh, { baseName: base.fileName, targetName: target.fileName, topMoves: top, regions }) + '\n',
     );
     if (o.json !== undefined) process.stdout.write(`Wrote ${o.json}\n`);
   }
