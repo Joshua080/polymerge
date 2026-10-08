@@ -1,13 +1,13 @@
 # polymerge PR diff: comments on a pull request with a rendered before / after image and a
-# structural diff summary of every STL, OBJ, glTF, GLB and STEP file it changes. One comment per pull
-# request, updated in place on every push. Setup, permissions and the fork-safe two-workflow
+# structural diff summary of every STL, OBJ, glTF, GLB, 3MF, PLY and STEP file it changes. One
+# comment per pull request, updated in place on every push. Setup, permissions and the fork-safe two-workflow
 # pattern: docs/github-action.md. Implementation: action/ (render.mjs, post.mjs).
 #
 # Self-contained: it builds polymerge from this action's own checkout ($GITHUB_ACTION_PATH), with
 # the build and Playwright's Chromium cached, and needs no published npm package. Every input
 # reaches the scripts through environment variables, never interpolated into shell code.
 name: polymerge 3D model diff
-description: Before / after renders and a structural diff of every STL, OBJ, glTF, GLB and STEP file a pull request changes, in one self-updating comment.
+description: Before / after renders and a structural diff of every STL, OBJ, glTF, GLB, 3MF, PLY and STEP file a pull request changes, in one self-updating comment.
 author: Joshua Hurley
 branding:
   icon: box

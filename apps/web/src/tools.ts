@@ -10,7 +10,7 @@
  * Keys: S, M, C toggle the tools; Esc clears the measurement.
  */
 import * as THREE from 'three';
-import { formatMeasure, formatUnit, sectionMesh, type IDiffResult, type IMesh, type ISection, type ISectionLoop, type MetricUnit, type SectionAxis, type Vec3 } from 'polymerge-core';
+import { formatMeasure, formatUnit, sameMeasure, sectionMesh, type IDiffResult, type IMesh, type ISection, type ISectionLoop, type MetricUnit, type SectionAxis, type Vec3 } from 'polymerge-core';
 import { h, setChildren } from './dom.js';
 import { alignPositions, isIdentityMatrix } from './scene/layers.js';
 import type { DiffViewer, IPickHit, ISectionDrawing } from './scene/viewer.js';
@@ -348,7 +348,7 @@ export class ReviewTools {
     if (target && base) {
       const d = target.area - base.area;
       const pct = base.area !== 0 ? ` (${d >= 0 ? '+' : '−'}${Math.abs((100 * d) / base.area).toFixed(1)}%)` : '';
-      out.push(h('div', null, h('strong', null, 'Change'), Math.abs(d) < 1e-9 * Math.max(1, Math.abs(base.area)) ? ' none in this cut' : ` material ${d > 0 ? '+' : '−'}${area(d)}${pct}`));
+      out.push(h('div', null, h('strong', null, 'Change'), sameMeasure(base.area, target.area) ? ' none in this cut' : ` material ${d > 0 ? '+' : '−'}${area(d)}${pct}`));
     }
     if (out.length > 0 && !unit) out.push(h('div', { class: 'tool-help' }, 'In the file’s own units.'));
     return out;

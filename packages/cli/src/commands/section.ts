@@ -1,5 +1,5 @@
 import { writeFile } from 'node:fs/promises';
-import { formatMeasure, formatUnit, sectionMesh, type IMesh, type ISection, type MetricUnit, type SectionAxis } from 'polymerge-core';
+import { formatMeasure, formatUnit, sameMeasure, sectionMesh, type IMesh, type ISection, type MetricUnit, type SectionAxis } from 'polymerge-core';
 import { loadMeshFile, loadMeshPair, type LoadedFile } from '../io.js';
 import { coord, formatSize, palette } from '../report.js';
 
@@ -108,7 +108,7 @@ export async function runSection(paths: string[], o: SectionOptions): Promise<nu
   if (cuts.length === 2) {
     const [a, b] = cuts;
     const unit = a.unit ?? b.unit;
-    const d = b.section.area - a.section.area;
+    const d = sameMeasure(a.section.area, b.section.area) ? 0 : b.section.area - a.section.area;
     const pct = a.section.area !== 0 ? ` (${d >= 0 ? '+' : '−'}${Math.abs((100 * d) / a.section.area).toFixed(1)}%)` : '';
     lines.push(
       '',

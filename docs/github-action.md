@@ -1,6 +1,6 @@
 # polymerge in pull requests (GitHub Action)
 
-When a pull request changes an STL, OBJ, glTF, GLB or STEP file, this action posts **one comment** on it:
+When a pull request changes an STL, OBJ, glTF, GLB, 3MF, PLY or STEP file, this action posts **one comment** on it:
 a before / after image of every changed model, rendered from the same camera and coloured by what
 changed, with a short structural summary. The comment is updated in place on every push.
 
@@ -175,7 +175,8 @@ PNGs, in `all` / `render` mode) and `comment-url`.
    is drawn in the head's frame (aligned when the model was moved or rescaled as a whole), and
    the view turns to face the side of the model where the changes are. The card is 800 CSS px
    wide, the width of a GitHub comment, captured at 2× so it stays sharp on high-density screens
-   and still reads on a phone; its dark background suits both light and dark themes. The
+   and still reads on a phone; its light card with a soft grey 3D view sits well in both of
+   GitHub's themes. The
    rendering code is shared with the README images (`scripts/viewer-capture.mjs`).
 4. **Publish.** The PNGs are committed to the image branch and the comment links them by
    commit-pinned URLs (below). The comment is found by a hidden marker on its first line and

@@ -174,8 +174,13 @@ export function computeMetrics(mesh: IMesh): IMeshMetrics {
  */
 const ROUNDING = 1e-7;
 
+/** True when `base` and `target` differ by no more than float rounding (1e-7 of the larger). */
+export function sameMeasure(base: number, target: number): boolean {
+  return Math.abs(target - base) <= ROUNDING * Math.max(Math.abs(base), Math.abs(target));
+}
+
 function change(base: number, target: number): IMetricChange {
-  const delta = Math.abs(target - base) <= ROUNDING * Math.max(Math.abs(base), Math.abs(target)) ? 0 : target - base;
+  const delta = sameMeasure(base, target) ? 0 : target - base;
   return { base, target, delta, percent: base !== 0 ? (delta / Math.abs(base)) * 100 : null };
 }
 
