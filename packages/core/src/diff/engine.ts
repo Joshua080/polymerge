@@ -38,6 +38,7 @@ import { DiffContext, pct, resolveOptions, type ITierOutcome } from './context.j
 import { detectGlobalTransform } from './global.js';
 import { mat4ToRigid, rigidToMat4, rotationAngle } from './linalg.js';
 import { analyzeMatchedParts, finalizeParts, recoverPartsTopological } from './parts.js';
+import { matchPiecesByStructure } from './structure.js';
 import { runTier1 } from './tier1.js';
 import { runTier2 } from './tier2.js';
 import { runTier3, tier3Quality } from './tier3.js';
@@ -187,6 +188,12 @@ export const diffMeshes: DiffMeshesFn = (base: IMesh, target: IMesh, options: ID
   }
   const internalParts = result.parts ? [...result.parts] : [];
   if (opts.detectParts && result.tier === 1) {
+    // Tier 2 does this itself, before its own part recovery.
+    const s = matchPiecesByStructure(ctx, result.baseToTarget, result.targetToBase);
+    if (s.pieces > 0) {
+      logger.info(`[polymerge] ↳ ${s.pieces} piece(s), ${s.vertices} vertices, matched by their structure (would read as removed + added)`);
+      internalParts.push(...analyzeMatchedParts(ctx, A, result.baseToTarget, result.targetToBase, new Set(), s.baseComponents));
+    }
     internalParts.push(...recoverPartsTopological(ctx, A, result.baseToTarget, result.targetToBase));
   }
   if (opts.detectParts && result.tier !== 3) {
@@ -195,7 +202,7 @@ export const diffMeshes: DiffMeshesFn = (base: IMesh, target: IMesh, options: ID
   }
   const parts = finalizeParts(ctx, internalParts, A);
   for (const p of parts) {
-    const verb = p.source === 'registration' ? 're-matched by rigid registration (would read as removed + added)' : 'already matched';
+    const verb = p.source === 'registration' ? 're-matched (would read as removed + added)' : 'already matched';
     const name = p.baseName ?? p.targetName;
     logger.info(
       `[polymerge] ↳ moved part${name ? ` "${name}"` : ''}: ${p.baseVertices.length} base / ${p.targetVertices.length} target ` +

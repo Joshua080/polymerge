@@ -141,8 +141,7 @@ export function formatBrepSection(result: IDiffResult, target: IMesh, base: IMes
 }
 
 /** "100 × 60 × 10 mm" (or bare numbers when the unit is unknown). */
-export function formatSize(size: readonly number[], unit: MetricUnit | undefined): string {
-  const magnitude = Math.max(...size.map(Math.abs));
+export function formatSize(size: readonly number[], unit: MetricUnit | undefined, magnitude = Math.max(...size.map(Math.abs))): string {
   const parts = size.map((v) => formatMeasure(v, 1, unit, magnitude));
   // Keep the unit once, at the end: "100 × 60 × 10 mm".
   const suffix = unit ? ` ${parts[0].split(' ')[1]}` : '';

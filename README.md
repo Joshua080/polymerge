@@ -304,12 +304,43 @@ Then:
 
 ```bash
 git diff -- part.stl                              # structural report instead of "Binary files differ"
-git log -p --ext-diff -- part.stl                 # history
+polymerge log part.stl                            # what each commit did to the model (below)
+git log -p --ext-diff -- part.stl                 # git's own history, with the structural report
 git difftool -y -t polymerge HEAD~1 -- part.stl   # visual diff in the browser
 git merge feature                                 # models merged three-way; a real conflict marks the file as conflicted
 polymerge review part.stl                         # see the conflicts in the browser, pick by clicking, "Save to repository"
 git commit                                        # after saving; or: polymerge resolve part.stl --pick 0=theirs && git add part.stl
 ```
+
+### See a model's history
+
+```bash
+polymerge log part.stl              # what each commit did to it, newest first
+polymerge log part.stl --view       # the same in the browser: click a version to see its change
+polymerge log part.stl -o part.html # the whole history as one HTML file, to open anywhere offline
+```
+
+```
+polymerge log  models/base-plate.stl  (5 versions, 4 changes, newest first)
+
+working   2026-10-13  uncommitted changes
+  ~ 10 vertices moved (largest 0.5196) · volume −3.4 (−5.0%) · size z −0.4
+      around (4, 4, 1), 4 × 4 × 0 (+1 more)
+bed74da   2026-10-13  Joshua  Bevel a corner
+  ~ 11 vertices moved (largest 0.5196) · volume −3.6 (−5.1%) · size z −0.4
+      around (4, 4, 1.2), 4 × 4 × 0.4 (+2 more)
+2f149b4   2026-10-13  Joshua  Rename plate  (renamed from models/plate.stl)
+  = no change to the model
+0f7bfe5   2026-10-13  Joshua  Raise the boss
+  ~ 10 vertices moved (largest 0.8) · volume +7 (+11%) · size z +0.8
+      around (4, 4, 1.4), 4 × 4 × 0.8 (+1 more)
+53b4baf   2026-10-13  Joshua  First plate and bracket
+  + added: 320 faces, 8 × 8 × 1, volume 64
+```
+
+Each version is compared with the one before it, so every line reads as "what this commit did". The history follows renames, shows deletions, and puts uncommitted changes on top (`--committed` leaves them out). `--max <n>` shows more than the last 20 commits, `--json` prints it all for scripts. A `.gltf` is read with its `.bin` from the same commit, Git LFS files through `git lfs`, and STEP histories are tessellated with one tolerance throughout, so unchanged faces stay unchanged. Results are cached in the repository's `.git` folder, so the second `log` is instant.
+
+In the browser, the History panel lists the versions; `[` and `]` step older and newer, and **Compare with** compares a version with any older one. **Save as HTML** saves the whole history.
 
 ### Use it in pull requests
 
@@ -447,12 +478,14 @@ polymerge review <path>                          merge review of a conflicted gi
 polymerge resolve <path> [--pick <id>=<side> | --resolve <side>] [--dry-run]
                                                  finish a conflicted git merge of a model (--dry-run: list the conflicts)
 polymerge demo [example]                         the viewer on a built-in example
+polymerge log <file> [--max N] [--committed] [--json] [--view] [-o page.html]
+                                                 what each commit did to a model (follows renames)
 polymerge init [--global] [--dry-run]            set git up: .gitattributes and the drivers
 polymerge git-diff | git-merge | git-setup       git drivers, and the config to use them
 --ascii / --unicode                              plain ASCII output (automatic in the classic Windows console), or not
 ```
 
-STEP files work with `diff`, `view`, `export`, `info`, `section`, `measure` and `git-diff`, given the optional reader ([STEP files](#step-files-cad)).
+STEP files work with `diff`, `view`, `export`, `log`, `info`, `section`, `measure` and `git-diff`, given the optional reader ([STEP files](#step-files-cad)).
 
 `polymerge --help` lists every option.
 
@@ -471,7 +504,7 @@ STEP files work with `diff`, `view`, `export`, `info`, `section`, `measure` and 
    | 2 | Geometric seeds + propagation along the mesh (inspired by MeshGit) | Re-ordered files, local topology edits, holes, new patches |
    | 3 | ICP alignment (rigid or uniform scale) + nearest-surface mapping | Whole-model moves and rotations, unit mismatch, re-meshing |
 
-   After that, parts that moved rigidly on their own are re-registered, so they read as *moved*. A whole-model motion is reported once, e.g. as a unit conversion, instead of every vertex moving.
+   After that, a separate piece left unmatched is matched by its triangles when they are unchanged, however far it was moved or reshaped, and parts that moved rigidly on their own are re-registered, so they read as *moved*. A whole-model motion is reported once, e.g. as a unit conversion, instead of every vertex moving.
 3. **Classify.** Every vertex becomes unchanged, moved, added or removed, and every face unchanged, modified, added or removed.
 4. **Merge.** Each side is diffed against the base and split into frames (whole-model and per-part transforms) and local edits. Frames and edits are merged separately, then the result is checked for combined damage (collisions). Details and rationale: [docs/merge-design.md](docs/merge-design.md).
 
@@ -479,7 +512,7 @@ STEP files work with `diff`, `view`, `export`, `info`, `section`, `measure` and 
 
 **Handles**
 - **Formats.**
-  - Input: STL (ASCII and binary), OBJ, GLB, `.gltf` with embedded buffers, 3MF (build items, components, units, colours) and PLY (ASCII and binary, polygons, face colours). STEP for diff and view, with the optional OpenCascade reader.
+  - Input: STL (ASCII and binary), OBJ, GLB, `.gltf` (with its `.bin` and images beside it, or embedded), 3MF (build items, components, units, colours) and PLY (ASCII and binary, polygons, face colours). STEP for diff and view, with the optional OpenCascade reader.
   - Output for merges: STL, OBJ (keeps groups), GLB and self-contained `.gltf` (keep the base's nodes, names, transforms and meshes; positions round-trip bit for bit), binary PLY and 3MF (geometry and colours, in mm).
 - **Diff.**
   - Direct vertex edits, re-ordered files, and local topology edits (holes, new patches, re-triangulated areas).
@@ -521,8 +554,8 @@ STEP files work with `diff`, `view`, `export`, `info`, `section`, `measure` and 
   - Animations, cameras, lights, `extras` and most extensions are dropped.
   - Node renames or re-parenting in a branch are not merged; the base's names and hierarchy win.
 - **Not supported on input:**
-  - `.gltf` files with external `.bin`/image files;
-  - Draco- or meshopt-compressed glTF;
+  - a `.gltf` whose `.bin` or images are outside its folder (keep them together, or export a `.glb`);
+  - Draco- or meshopt-compressed glTF (export without compression, or convert it with `gltf-transform`);
   - glTF scenes other than the default one;
   - OBJ objects that contain line (`l`) elements (they are skipped with a warning).
 - **Ambiguous geometry:**

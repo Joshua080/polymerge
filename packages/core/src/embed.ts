@@ -1,8 +1,11 @@
 /**
- * SELF-CONTAINED PAGES — a diff packed into one HTML file with the viewer: both models (their
- * welded triangles, groups, materials and CAD faces) and the computed result. The page needs no
+ * SELF-CONTAINED PAGES — a diff (or a model's whole history) packed into one HTML file with the
+ * viewer: the models (their welded triangles, groups, materials and CAD faces) and the computed
+ * results. The page needs no
  * install, no server and no network; it can be mailed or attached to a ticket. `polymerge export`
  * writes one; the viewer's "Save as HTML" writes the same from the browser.
+ *
+ * `polymerge log --view` serves the same payload to the viewer as a file.
  *
  * The payload is one deflated binary blob, base64 in the page:
  *
@@ -41,6 +44,42 @@ export interface IEmbeddedDiff {
   view?: IEmbedView;
 }
 
+/** One version in a model's history (newest first in `IEmbedHistory.versions`). */
+export interface IEmbedVersion {
+  /** Full commit id; "" for uncommitted changes. */
+  commit: string;
+  short: string;
+  author: string;
+  /** ISO 8601. */
+  date: string;
+  subject: string;
+  /** A added, M modified, R renamed, D deleted, W uncommitted (working tree). */
+  status: string;
+  /** Path in this version, and the renamed-from path. */
+  path: string;
+  from?: string;
+  /** What it changed, in words: one or a few lines (`polymerge log`'s). */
+  summary: string[];
+  /** Index into the page's models; null when the version has no model (deleted, unreadable). */
+  model: number | null;
+}
+
+export interface IEmbedHistory {
+  /** Repository-relative path of the file (its newest name). */
+  file: string;
+  versions: IEmbedVersion[];
+}
+
+/** A page's content: any number of models, computed diffs between some of them, and a history. */
+export interface IEmbeddedPage {
+  generator: string;
+  view?: IEmbedView;
+  models: IEmbedModel[];
+  /** Diffs between models (indexes into `models`). */
+  results: { base: number; target: number; result: IDiffResult }[];
+  history?: IEmbedHistory;
+}
+
 type ArrayType = 'f32' | 'f64' | 'u32' | 'i32' | 'utf8';
 type ArrayRef = [offset: number, count: number, type: ArrayType];
 
@@ -52,18 +91,15 @@ interface IHeaderModel {
   arrays: Record<string, ArrayRef>;
 }
 
-interface IHeader {
-  version: 1;
-  generator: string;
-  view?: IEmbedView;
-  models: [IHeaderModel, IHeaderModel];
-  result: ArrayRef;
-}
+/** Version 1: one diff (0.3 pages). Version 2: models, results and an optional history. */
+type IHeader =
+  | { version: 1; generator: string; view?: IEmbedView; models: [IHeaderModel, IHeaderModel]; result: ArrayRef }
+  | { version: 2; generator: string; view?: IEmbedView; models: IHeaderModel[]; results: { base: number; target: number; ref: ArrayRef }[]; history?: IEmbedHistory };
 
 const ELEMENT_BYTES: Record<ArrayType, number> = { f32: 4, f64: 8, u32: 4, i32: 4, utf8: 1 };
 
-/** Pack a diff (models and result) into deflated bytes. */
-export function packDiff(d: IEmbeddedDiff): Uint8Array {
+/** Pack a page (models, results, history) into deflated bytes. */
+export function packPage(page: IEmbeddedPage): Uint8Array {
   const chunks: Uint8Array[] = [];
   let offset = 0;
   const add = (bytes: Uint8Array, count: number, type: ArrayType): ArrayRef => {
@@ -94,10 +130,12 @@ export function packDiff(d: IEmbeddedDiff): Uint8Array {
     }
     return { name: m.name, bytes: m.bytes, mesh, arrays };
   };
-  const models: [IHeaderModel, IHeaderModel] = [model(d.base), model(d.target)];
-  const resultText = new TextEncoder().encode(serializeDiff(d.result));
-  const result = add(resultText, resultText.byteLength, 'utf8');
-  const header: IHeader = { version: 1, generator: d.generator, view: d.view, models, result };
+  const models = page.models.map(model);
+  const results = page.results.map((r) => {
+    const text = new TextEncoder().encode(serializeDiff(r.result));
+    return { base: r.base, target: r.target, ref: add(text, text.byteLength, 'utf8') };
+  });
+  const header: IHeader = { version: 2, generator: page.generator, view: page.view, models, results, history: page.history };
   const headerBytes = new TextEncoder().encode(JSON.stringify(header));
   const headPad = (4 - ((8 + headerBytes.byteLength) % 4)) % 4;
   const raw = new Uint8Array(8 + headerBytes.byteLength + headPad + offset);
@@ -110,17 +148,17 @@ export function packDiff(d: IEmbeddedDiff): Uint8Array {
     at += c.byteLength;
   }
   // f64 arrays need 8-byte alignment when read back: the reader copies every array, so 4 is enough.
-  // Level 6 normally; 1 for big models (pure JavaScript deflate, ≈2× faster, a few % larger).
+  // Level 6 normally; 1 for big payloads (pure JavaScript deflate, ≈2× faster, a few % larger).
   return deflateSync(raw, { level: raw.byteLength > 32 * 2 ** 20 ? 1 : 6 });
 }
 
-/** The inverse of packDiff. Throws on anything that is not a packed diff. */
-export function unpackDiff(packed: Uint8Array): IEmbeddedDiff {
+/** The inverse of packPage (also reads version 1 pages). Throws on anything that is not one. */
+export function unpackPage(packed: Uint8Array): IEmbeddedPage {
   const raw = inflateSync(packed);
   if (raw.byteLength < 8 || new TextDecoder().decode(raw.subarray(0, 4)) !== EMBED_MAGIC) throw new Error('not a polymerge page payload');
   const headerLength = new DataView(raw.buffer, raw.byteOffset, raw.byteLength).getUint32(4, true);
   const header = JSON.parse(new TextDecoder().decode(raw.subarray(8, 8 + headerLength))) as IHeader;
-  if (header.version !== 1) throw new Error(`unsupported page payload version ${String(header.version)}`);
+  if (header.version !== 1 && header.version !== 2) throw new Error(`unsupported page payload version ${String((header as { version: unknown }).version)}`);
   const base = 8 + headerLength + ((4 - ((8 + headerLength) % 4)) % 4);
   const view = ([off, count, type]: ArrayRef): Uint8Array => {
     const start = base + off;
@@ -141,13 +179,30 @@ export function unpackDiff(packed: Uint8Array): IEmbeddedDiff {
     if (m.arrays.brepFaceOf && brepFaces) mesh.brep = { faceOf: i32(m.arrays.brepFaceOf), faces: brepFaces as NonNullable<IMesh['brep']>['faces'] };
     return { name: m.name, bytes: m.bytes, mesh };
   };
+  const result = (r: ArrayRef) => deserializeDiff(new TextDecoder().decode(view(r)));
+  if (header.version === 1) {
+    return { generator: header.generator, view: header.view, models: header.models.map(model), results: [{ base: 0, target: 1, result: result(header.result) }] };
+  }
   return {
     generator: header.generator,
     view: header.view,
-    base: model(header.models[0]),
-    target: model(header.models[1]),
-    result: deserializeDiff(new TextDecoder().decode(view(header.result))),
+    models: header.models.map(model),
+    results: header.results.map((r) => ({ base: r.base, target: r.target, result: result(r.ref) })),
+    history: header.history,
   };
+}
+
+/** Pack one diff (two models and the result). */
+export function packDiff(d: IEmbeddedDiff): Uint8Array {
+  return packPage({ generator: d.generator, view: d.view, models: [d.base, d.target], results: [{ base: 0, target: 1, result: d.result }] });
+}
+
+/** A page's one diff (its first result). Throws when the page has none. */
+export function unpackDiff(packed: Uint8Array): IEmbeddedDiff {
+  const page = unpackPage(packed);
+  const r = page.results[0];
+  if (!r) throw new Error('this page holds no diff');
+  return { generator: page.generator, view: page.view, base: page.models[r.base], target: page.models[r.target], result: r.result };
 }
 
 /** Metadata through JSON: format extras may hold things JSON cannot (typed arrays, cycles): those are dropped. */

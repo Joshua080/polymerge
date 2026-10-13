@@ -7,6 +7,7 @@ import type { AddressInfo } from 'node:net';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { detectFormat, formatFromFileName } from 'polymerge-core';
+import { readModelFile } from '../io.js';
 import { handleReviewApi, REVIEW_API_PREFIX } from '../review-api.js';
 import { hostAllowed, isLoopbackAddress, SECURITY_HEADERS, staticAllowlist, staticFile, urlHost } from '../serve-guard.js';
 import { findOcct, occtMissingMessage, stepNotMergeable, type OcctLocation } from '../step.js';
@@ -125,6 +126,8 @@ export async function startViewServer(
   /** With no files: the query the viewer opens with (a built-in example). */
   landing: Record<string, string> = {},
   writeBack?: ReviewWriteBack,
+  /** More files to serve under the session's model prefix (a packed history); the landing query may point at them as `{models}/<name>`. */
+  extra: { name: string; bytes: Uint8Array; contentType: string }[] = [],
 ): Promise<{ server: http.Server; url: string; writeRoutes: boolean }> {
   if (files.length !== 0 && files.length !== 2 && files.length !== 3) {
     throw new Error(`view needs 2 files (diff) or 3 (merge), got ${files.length}`);
@@ -138,11 +141,12 @@ export async function startViewServer(
     const display = path.basename(o.name ?? (typeof src === 'string' ? src : src.name));
     return {
       urlPath: `${modelPrefix}/${side}/${encodeURIComponent(display)}`,
-      bytes: typeof src === 'string' ? new Uint8Array(await readFile(src)) : src.bytes,
+      bytes: typeof src === 'string' ? await readModelFile(src) : src.bytes,
       contentType: MODEL_TYPES[path.extname(display).toLowerCase()] ?? 'application/octet-stream',
     };
   };
   const models = await Promise.all(files.map((f, i) => model(sides[i], f)));
+  for (const e of extra) models.push({ urlPath: `${modelPrefix}/${encodeURIComponent(e.name)}`, bytes: e.bytes, contentType: e.contentType });
   // STEP: view and diff only (D51), and only with the reader installed.
   const stepSide = models.findIndex((m) => isStep(m.bytes, decodeURIComponent(m.urlPath.split('/').pop() ?? '')));
   if (stepSide >= 0 && files.length === 3) throw stepNotMergeable(displayName(files[stepSide], o));
@@ -230,8 +234,10 @@ export async function startViewServer(
   // Writes only ever on a loopback socket: decided by the address actually bound, not by how
   // --host was spelled, and with no override (docs/write-back-security.md §4.4).
   if (writeBack && isLoopbackAddress(bound.address)) api = writeBack;
-  const query = new URLSearchParams(files.length === 0 ? landing : files.length === 3 ? { mode: 'merge' } : {});
-  models.forEach((m, i) => query.set(sides[i], m.urlPath));
+  const query = new URLSearchParams(
+    files.length === 0 ? Object.fromEntries(Object.entries(landing).map(([k, v]) => [k, v.replace('{models}', modelPrefix)])) : files.length === 3 ? { mode: 'merge' } : {},
+  );
+  files.forEach((_, i) => query.set(sides[i], models[i].urlPath));
   if (files.length === 3 && o.name) query.set('path', o.name);
   for (const [k, v] of Object.entries(viewParams(o))) query.set(k, v);
   // The token travels in the fragment: never sent to a server, logged or put in a Referer (§4.3).
@@ -295,8 +301,14 @@ export async function runDemo(example: string | undefined, o: ViewOptions): Prom
 }
 
 /** `polymerge view <base> <target>` / `polymerge view <base> <ours> <theirs>` — serve until interrupted. */
-export async function runView(files: ModelSource[], o: ViewOptions, landing?: Record<string, string>, writeBack?: ReviewWriteBack): Promise<number> {
-  const { server, url, writeRoutes } = await startViewServer(files, o, landing, writeBack);
+export async function runView(
+  files: ModelSource[],
+  o: ViewOptions,
+  landing?: Record<string, string>,
+  writeBack?: ReviewWriteBack,
+  extra?: { name: string; bytes: Uint8Array; contentType: string }[],
+): Promise<number> {
+  const { server, url, writeRoutes } = await startViewServer(files, o, landing, writeBack, extra);
   process.stdout.write(`polymerge viewer running at ${url}\nPress Ctrl+C to stop.\n`);
   if (writeBack) process.stdout.write(saveNotice(writeBack, writeRoutes, o.host) + '\n');
   if (o.open !== false) openBrowser(url);

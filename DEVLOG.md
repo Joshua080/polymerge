@@ -4,6 +4,51 @@ A living log of milestones, architectural decisions, what works, what is stubbed
 
 ---
 
+## Session 13 — 2026-10-13 — real models, and a model's history (`polymerge log`)
+
+The owner asked for two things: run polymerge over many real downloaded models and fix what breaks, and a model history: what each commit did to a model, in the terminal, in the viewer, and as one HTML file.
+
+**Real-model hardening**
+- **Corpus**: 48 public models: three.js example STL / PLY / 3MF / OBJ (17), Khronos glTF samples (13, GLB and `.gltf`), Alec Jacobson's common-3d-test-models (16, up to the 250k-triangle XYZ RGB dragon) and two OpenCascade STEP samples, plus Suzanne as a `.gltf` folder with its `.bin` and textures. Kept outside the repository (licences vary); the harness is in the session scratchpad, not shipped.
+- **Harness** (through the built CLI, each with a timeout): `info`; self-diff; re-export to the same format; cross-format (→ STL / OBJ / GLB); a local bump; a rigid move; a unit change (mm → in); a two-sided merge of two separate bumps; `section`; `export`. Then a **browser pass** (each pair opened in the real viewer in headless Chromium, compared with the CLI's numbers) and a **shuffle pass**: the model written in another vertex and face order with each face's corners rotated (as another tool's re-export does), alone and with a bump.
+- **What broke, and the fixes:**
+  - A `.gltf` beside its `.bin` and images could not be read at all ("external resources not supported"). They are now read from the `.gltf`'s own folder (never `..`, absolute paths or URLs), in every command and in `view`.
+  - Draco and meshopt files said "not supported in v1"; the message now says how to get a readable file (export without compression, or `gltf-transform`).
+  - **Shuffle + edit** on the Lantern (GLB) and Cerberus (OBJ) left 364 and 138 vertices as removed + added. The bump moved whole sub-pieces (the lantern pole) beyond propagation's reach, and rigid part registration then claimed the deformed pole as a rigid part turned 14°, pairing vertices wrongly. New: **structure matching** (`diff/structure.ts`, D72–D73). Both now read the bumped vertices as moved (1879 / 1879 and 2469 / 2481), with nothing added or removed.
+  - `section` listings mixed units ("0.5 mm" next to "12 cm"); one unit per listing now.
+  - The harness's own merge check put both edits on the same spot on two models (a real conflict, correctly reported); it now uses the farthest vertex for the second edit.
+- **Final run**: every model loads except the three that should not (Draco, a `.gltf` copied without its `.bin`, a volumetric 3MF with no triangles; each with a message saying why). Harness 441 checks, only those 3 fail; the browser pass (46 models) matches the CLI; the shuffle pass is 86 / 86 (43 models, with and without the bump).
+
+**Model history**
+- `polymerge log <file>`: versions from `git log --follow -M --name-status`, newest first, with deletions and the uncommitted version on top (`--committed` leaves it out). Each version is diffed against the one before it, so a line reads as "what this commit did": moved vertices and the largest move, volume and size changes, the CAD faces for STEP, where the change is. `--json`, `--max`, `--no-cache`.
+- Versions are read with `git cat-file`; a `.gltf`'s `.bin` and images come from the same commit; Git LFS pointers go through `git lfs smudge` (tested with git-lfs 3.4).
+- `log --view` serves the packed history to the viewer (`?history=`): a History panel lists the versions; clicking one shows its change from the saved diff; `[` / `]` step; **Compare with** diffs against any older version in the page. `log -o page.html` and **Save as HTML** write the whole history as one offline page.
+- The page payload is now version 2: `models[]`, `results[]` (pairs of model indexes) and an optional `history`. Version 1 pages (session 12) still open; a real one is a test fixture.
+
+**Decisions**
+
+| # | Decision | Why |
+|---|----------|-----|
+| D72 | **Structure matching runs before rigid part registration**: a wholly unmatched piece is matched to an unmatched piece with the same vertex and face counts by walking both meshes triangle by triangle from a few start triangles. A piece matched this way that moved rigidly is still reported as a moved part (`source: 'registration'`). A second step, growing matches across edges into partly matched pieces, was built and removed: no corpus model or test needed it. | A re-ordered file with an edit loses position-based seeds where the edit is, and rigid registration then forces a deformed piece into a rigid fit. Same triangles mean same piece, however far it moved or however it was reshaped; a re-meshed piece has different counts or structure, so it still reads as added / removed. |
+| D73 | **Among several walks (a symmetric piece), the most rigid one wins, then the least movement.** Start triangles: as many as a budget of 4 M triangle steps allows (12–256). | A UV sphere has many topological symmetries; the least total movement picked a mirrored map on the moved-part tests. The rigid-fit residual separates them; movement breaks ties on truly symmetric shapes. With 12 starts, the true partner of a 1000-vertex pole's start triangle was outside the list once the bump shifted its centroid. |
+| D74 | **History steps are cached in `<git dir>/polymerge/log/<engine>-<older blob>-<blob>.json`.** Versions are loaded oldest first, and a STEP history uses the oldest version's tessellation tolerance throughout. | Blob ids make the key exact and stable across rebases and renames; the engine version keeps results from another polymerge out. One tolerance keeps unchanged CAD faces unchanged across versions. |
+| D75 | **`log` compares consecutive versions only; "Compare with" any other pair runs in the page.** The history page carries every readable version's model once and the consecutive diffs. | N versions give N−1 diffs instead of N²/2; an arbitrary pair is one click and a few seconds in the viewer's worker. |
+
+**Checks**
+- `packages/cli/test/history.test.ts`: rename followed, uncommitted on top, `--committed` / `--max`, summary lines, the cache (a planted step is read back; another engine version ignores it), the page payload, delete and re-add, an unreadable version and the one after it, a `.gltf` with its `.bin`, outside git and no history.
+- `scripts/e2e-log.mjs` (in `npm run e2e` and from the packed npm install): text and JSON on a throwaway repository; `log -o` opened from disk with the network refused (versions list, the saved diffs, `[` / `]`); `log --view` with **Compare with** computing in the page.
+- `structure.test.ts`: a piece stretched non-uniformly and carried away in a re-ordered file reads as moved, vertex for vertex (it read as removed + added before).
+- `embed.test.ts`: a session-12 page still unpacks; a history page round-trips. Unit tests 810, perf unchanged (Tier 2 at a million triangles 4.5 s).
+
+**Next steps**
+- A history that branches (merge commits) is shown as git's `--follow` line; a graph view would show both parents.
+- Draco / meshopt decoding (needs a WASM decoder; the message explains the workaround).
+- Owner steps from session 11 still apply.
+
+Next decision number: **D76**.
+
+---
+
 ## Session 12 — 2026-10-07 — new look, terminal for everything, metrics, 3MF / PLY, review tools, HTML export, face-aware STEP, million-triangle models
 
 The owner asked for: a cleaner, more professional look without the navy background; every feature usable from a terminal with plain-text output; geometry metrics; self-contained HTML; 3MF and PLY input; review tools in the viewer; the face-aware STEP diff; and million-triangle meshes. All are built.

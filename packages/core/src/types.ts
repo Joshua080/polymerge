@@ -772,7 +772,8 @@ export interface IRigidTransform {
 /**
  * A part (connected component) that moved rigidly relative to the global alignment.
  *  - source 'registration': the part had lost its correspondence (it would have read as
- *    Removed + Added) and was re-matched by rigidly registering the two components.
+ *    Removed + Added) and was re-matched, by rigidly registering the two components or by
+ *    their mesh structure (same triangles, vertices in another order).
  *  - source 'matched': the part was already matched; its matched vertices are explained by
  *    one rigid motion, which is reported for context (and for merging).
  */
