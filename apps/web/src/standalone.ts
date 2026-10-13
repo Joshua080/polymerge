@@ -1,15 +1,22 @@
 /**
- * Self-contained pages (polymerge-core embed.ts): reading the diff a page carries, and writing a
- * new page from the one that is open — the viewer's own script and style (fetched when they are
+ * Self-contained pages (polymerge-core embed.ts): reading the diff or history a page carries, and
+ * writing a new page from the one that is open — the viewer's own script and style (fetched when they are
  * files, read from the page when they are inline) with the current diff packed in.
  */
-import { fromBase64, inlineFonts, packDiff, standaloneHtml, toBase64, unpackDiff, type IEmbeddedDiff } from 'polymerge-core';
+import { fromBase64, inlineFonts, packPage, standaloneHtml, toBase64, unpackPage, type IEmbeddedPage } from 'polymerge-core';
 
-/** The diff this page carries, if it is a self-contained page; throws when it is damaged. */
-export function readEmbedded(): IEmbeddedDiff | null {
+/** What this page carries (a diff, or a model's history), if it is a self-contained page; throws when it is damaged. */
+export function readEmbedded(): IEmbeddedPage | null {
   const el = document.getElementById('polymerge-embed');
   if (!el) return null;
-  return unpackDiff(fromBase64(el.textContent ?? ''));
+  return unpackPage(fromBase64(el.textContent ?? ''));
+}
+
+/** A packed page from a URL (`polymerge log --view` serves the history this way). */
+export async function fetchPage(url: string): Promise<IEmbeddedPage> {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`could not read ${url} (HTTP ${res.status})`);
+  return unpackPage(new Uint8Array(await res.arrayBuffer()));
 }
 
 export function isStandalonePage(): boolean {
@@ -42,8 +49,8 @@ async function viewerAssets(): Promise<{ script: string; style: string }> {
   return { script, style: styles.join('\n') };
 }
 
-/** A self-contained page of `diff`, as HTML text. */
-export async function standalonePage(diff: IEmbeddedDiff, title: string): Promise<string> {
+/** A self-contained page of `page` (a diff or a history), as HTML text. */
+export async function standalonePage(page: IEmbeddedPage, title: string): Promise<string> {
   const { script, style } = await viewerAssets();
-  return standaloneHtml({ title, script, style, payload: toBase64(packDiff(diff)), generator: diff.generator });
+  return standaloneHtml({ title, script, style, payload: toBase64(packPage(page)), generator: page.generator });
 }

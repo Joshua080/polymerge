@@ -9,6 +9,8 @@ How to add an entry and how releases are made: [CONTRIBUTING.md](CONTRIBUTING.md
 ## Unreleased
 
 ### Added
+- **`polymerge log <file>`: a model's history from git.** What each commit did to the model, newest first: "~ 10 vertices moved (largest 0.8) · volume +7 (+11%)", "= no change", "+ added", "− deleted", and for STEP the CAD faces that changed. It follows renames, shows uncommitted changes on top, reads `.gltf` files with their `.bin` from the same commit and Git LFS files through `git lfs`, and caches its results in `.git`. `--json` for scripts, `--view` for the browser (a History panel: click a version, `[` and `]` to step, **Compare with** any older version) and `-o page.html` for the whole history in one offline file.
+- **`.gltf` files with their `.bin` and images beside them** are read (in every command and in `polymerge view`); files outside the `.gltf`'s folder are not.
 - **3MF and PLY**: read (3MF build items, components, units and colours; PLY ASCII and binary, polygons and face colours) and written as merge output. `init` sets PLY up for diff and merge, and 3MF for diff (a 3MF is merged only when you ask, because the merged file keeps the geometry but not the slicer project).
 - **Geometry in every report**: size, volume (closed models only; an open one says why) and surface area, before and after, in the CLI, the viewer and the pull-request comment ("volume +2.3 cm³ (+4%)"). 3MF and STEP are in mm, glTF in metres; STL, OBJ and PLY in the file's own units.
 - **Face-aware STEP diff**: CAD faces are recognised as planes, cylinders, cones and spheres and compared as surfaces: "hole Ø8 moved 5 mm (+5, 0, 0)", "hole Ø8 → Ø9", "new hole Ø6". Re-triangulation of an unchanged face no longer reads as a change. In `diff`, `info`, the viewer (a CAD faces panel) and the Action's comment.
@@ -42,6 +44,9 @@ How to add an entry and how releases are made: [CONTRIBUTING.md](CONTRIBUTING.md
 - **Million-triangle models**: faster spatial indexes make a million-triangle diff take seconds (about 1.5 s for Tier 1, 10 s for a re-meshed model). The Action renders models up to 2 million triangles and 150 MB by default (was 200,000 and 50 MB).
 - The pull-request images are light, to match the viewer.
 - Changes smaller than float rounding (1e-7 of a value) are reported as no change.
+- **Re-exported models with an edit**: when a file is re-ordered by another tool and also edited, a separate piece whose triangles are unchanged is now matched by them however far it moved or was reshaped, instead of reading as removed + added. Rigidly moved parts are matched the same way when their triangles are unchanged (still reported as moved parts).
+- Clearer messages for compressed glTF (Draco / meshopt: how to export without it) and for a `.gltf` whose `.bin` is missing.
+- `section` lists every size in one unit.
 
 ## 0.2.0 - 2026-10-05
 

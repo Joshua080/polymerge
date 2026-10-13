@@ -868,6 +868,116 @@ table.metrics td {
   padding: 8px 10px;
 }
 
+/* History (polymerge log --view) */
+
+.history-file {
+  margin: 0 0 8px;
+}
+
+.history-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 320px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.history-item {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  padding: 8px 10px;
+  cursor: pointer;
+  border-bottom: 1px solid var(--border);
+}
+
+.history-item:last-child {
+  border-bottom: none;
+}
+
+.history-item:hover {
+  background: var(--panel-2);
+}
+
+.history-item.selected {
+  background: var(--accent-soft);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.history-item.compared {
+  box-shadow: inset 3px 0 0 var(--pm-base);
+}
+
+.history-mark {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 5px;
+  display: grid;
+  place-items: center;
+  font-size: 12px;
+  font-weight: 700;
+  color: #111418;
+  background: var(--pm-modified);
+}
+
+.history-item[data-kind='added'] .history-mark {
+  background: var(--pm-added);
+}
+
+.history-item[data-kind='removed'] .history-mark {
+  background: var(--pm-removed);
+}
+
+.history-item[data-kind='unchanged'] .history-mark,
+.history-item[data-kind='unreadable'] .history-mark {
+  background: var(--panel-3);
+  color: var(--muted);
+}
+
+.history-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 1px;
+}
+
+.history-head {
+  font-size: 12px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.history-head strong {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.history-subject {
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.history-summary {
+  font-size: 12px;
+  color: var(--text-2);
+}
+
+.history-compare {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.history-compare select {
+  flex: 1;
+  min-width: 0;
+}
+
 /* CAD faces (face-aware STEP diff) */
 
 .cad-list {

@@ -91,6 +91,8 @@ export interface IPolymergeHook {
   selection?: ISelectionSnapshot;
   /** The review tools: section plane and its cut, the measurement, the before / after split. */
   review?: IReviewHookState;
+  /** A model's history: which version is shown (index, newest first) and what it is compared with. */
+  history?: { file: string; versions: number; selected: number; compareTo: number | null; shown: string };
   /** Face-aware STEP: the CAD faces that changed, in words, and how many did not. */
   cad?: { unchanged: number; changes: { kind: string; text: string; focus: Vec3 }[] };
   /** How the models are shown: which axis is up, the colour palette and the page theme. */

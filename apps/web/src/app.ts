@@ -10,6 +10,7 @@ import {
   summarizeMesh,
   type IDiffOptions,
   type IDiffResult,
+  type IEmbeddedPage,
   type IFixtureCase,
   type MatchTier,
   type Vec3,
@@ -44,7 +45,8 @@ import {
 import { ReviewTools } from './tools.js';
 import { viewControls } from './view-controls.js';
 import { themeName } from './theme.js';
-import { isStandalonePage, readEmbedded, standalonePage } from './standalone.js';
+import { previousModel, renderHistory, revealSelected, type IHistorySelection } from './history-panel.js';
+import { fetchPage, isStandalonePage, readEmbedded, standalonePage } from './standalone.js';
 import { applyPalette, defaultUpAxis, DIFF_CSS, paletteName, parseUpAxis, rememberPalette, replaceUrl, setUrlParam, type UpAxis } from './view-options.js';
 
 type Side = 'base' | 'target';
@@ -69,6 +71,10 @@ const LAYER_DEFS: { key: keyof ILayerVisibility; label: string; color?: string; 
 export class App {
   private readonly viewer: DiffViewer;
   private readonly tools: ReviewTools;
+  /** A model's history (`polymerge log --view`, or a history page): its versions and which one is shown. */
+  private history: { page: IEmbeddedPage; sel: IHistorySelection } | null = null;
+  /** The shown result was computed here (not read from a saved page or history). */
+  private computedHere = false;
   private base: ILoadedMesh | null = null;
   private target: ILoadedMesh | null = null;
   private result: IDiffResult | null = null;
@@ -116,6 +122,7 @@ export class App {
       'Save as HTML',
     ),
     summary: h('div', { class: 'summary' }),
+    history: h('section', { class: 'sec hidden', id: 'history' }),
     cad: h('section', { class: 'sec hidden', id: 'cad-faces' }),
     attempts: h('div', { class: 'attempts-wrap' }),
     engineLog: h('pre', { class: 'engine-log' }),
@@ -257,6 +264,7 @@ export class App {
       'aside',
       { class: 'panel' },
       brandHeader('3D diff', h('a', { class: 'mode-link', href: '?mode=merge', title: 'Review a three-way merge (base, ours, theirs)' }, 'Merge review')),
+      el.history,
       h(
         'section',
         { class: 'sec' },
@@ -315,6 +323,12 @@ export class App {
     });
     window.addEventListener('keydown', (e) => {
       if (e.key === 'Escape' && !this.tools?.escape()) this.clearSelection();
+      // History: [ older, ] newer.
+      const t = e.target as HTMLElement | null;
+      if (this.history && (e.key === '[' || e.key === ']') && !(t && ['INPUT', 'SELECT', 'TEXTAREA'].includes(t.tagName))) {
+        const next = this.history.sel.selected + (e.key === '[' ? 1 : -1);
+        if (next >= 0 && next < this.history.page.history!.versions.length) void this.showVersion(next);
+      }
     });
 
     root.append(h('div', { class: 'app' }, panel, stage));
@@ -336,6 +350,15 @@ export class App {
     if (tier && ['1', '2', '3'].includes(tier)) this.el.tierSelect.value = tier;
     const up = parseUpAxis(params.get('up'));
     if (up) this.setUp(up);
+    const historyUrl = params.get('history');
+    if (historyUrl) {
+      this.setLoading('Opening the history…');
+      try {
+        return await this.startHistory(await fetchPage(historyUrl), params);
+      } catch (err) {
+        return this.fail('The history could not be read', err);
+      }
+    }
     if (mock !== null && mock !== '0' && mock !== 'false') return this.loadMock(mock === '3' || mock === 'tier3' ? 'tier3' : 'tier2');
     if (caseId) return this.loadCase(caseId);
     if (baseUrl && targetUrl) {
@@ -358,25 +381,98 @@ export class App {
     const seq = ++this.seq;
     this.setLoading('Opening the saved diff…');
     await nextFrame();
-    let saved;
+    let page;
     try {
-      saved = readEmbedded();
-      if (!saved) throw new Error('this page carries no diff');
+      page = readEmbedded();
+      if (!page) throw new Error('this page carries no diff');
     } catch (err) {
       this.fail('The diff saved in this page could not be read', err);
       return;
     }
     if (seq !== this.seq) return;
-    const up = parseUpAxis(params.get('up')) ?? saved.view?.up ?? null;
+    if (page.history) return this.startHistory(page, params);
+    const saved = page.results[0];
+    if (!saved) return this.fail('The diff saved in this page could not be read', new Error('it holds no diff'));
+    const up = parseUpAxis(params.get('up')) ?? page.view?.up ?? null;
     if (up) this.setUp(up);
-    this.base = { mesh: saved.base.mesh, name: saved.base.name, bytes: saved.base.bytes, origin: 'embedded' };
-    this.target = { mesh: saved.target.mesh, name: saved.target.name, bytes: saved.target.bytes, origin: 'embedded' };
+    const [b, t] = [page.models[saved.base], page.models[saved.target]];
+    this.base = { mesh: b.mesh, name: b.name, bytes: b.bytes, origin: 'embedded' };
+    this.target = { mesh: t.mesh, name: t.name, bytes: t.bytes, origin: 'embedded' };
     this.source = 'embedded';
     this.markDrop('base', 'ok');
     this.markDrop('target', 'ok');
-    this.engineLog = [`[polymerge] diff saved in this page by ${saved.generator}`];
+    this.engineLog = [`[polymerge] diff saved in this page by ${page.generator}`];
     this.renderMeshes();
     await this.showResult(saved.result, seq);
+  }
+
+  // -------------------------------------------------------------------------
+  // History
+  // -------------------------------------------------------------------------
+
+  /** A model's history: the versions list, and the newest version's change shown. */
+  private async startHistory(page: IEmbeddedPage, params: URLSearchParams): Promise<void> {
+    const versions = page.history?.versions ?? [];
+    if (versions.length === 0) return this.fail('The history could not be read', new Error('it lists no versions'));
+    this.history = { page, sel: { selected: 0, compareTo: null } };
+    this.source = 'history';
+    this.el.examples.parentElement?.classList.add('hidden');
+    const up = parseUpAxis(params.get('up')) ?? page.view?.up ?? null;
+    if (up) this.setUp(up);
+    this.engineLog = [`[polymerge] history of ${page.history!.file} by ${page.generator}: ${versions.length} versions`];
+    await this.showVersion(0);
+  }
+
+  /** Show what version `i` changed (against the previous version, or the chosen one). */
+  async showVersion(i: number, compareTo: number | null = null): Promise<void> {
+    const hist = this.history;
+    if (!hist?.page.history) return;
+    const seq = ++this.seq;
+    const versions = hist.page.history.versions;
+    hist.sel = { selected: i, compareTo: compareTo !== null && compareTo > i ? compareTo : null };
+    this.renderHistory();
+    const v = versions[i];
+    const baseVersion = hist.sel.compareTo ?? previousModel(hist.page.history, i);
+    const loaded = (j: number | null): ILoadedMesh | null => {
+      const m = j === null ? null : versions[j].model;
+      if (m === null || m === undefined) return null;
+      const model = hist.page.models[m];
+      return { mesh: model.mesh, name: `${model.name} @ ${versions[j!].short}`, bytes: model.bytes, origin: 'embedded' };
+    };
+    this.currentCase = null;
+    this.base = loaded(baseVersion);
+    // A deletion has no model of its own: the base alone shows what was deleted.
+    this.target = loaded(i);
+    for (const side of ['base', 'target'] as const) if (this[side]) this.markDrop(side, 'ok');
+    this.renderMeshes();
+    if (this.base && this.target) {
+      const pre = hist.page.results.find((r) => r.base === versions[baseVersion!].model && r.target === v.model);
+      if (pre) {
+        this.engineLog = [`[polymerge] ${versions[baseVersion!].short} → ${v.short}: computed by polymerge log`];
+        await this.showResult(pre.result, seq);
+      } else await this.runDiff(seq);
+    } else {
+      await this.showPartial();
+      if (seq === this.seq) {
+        this.hideLoading();
+        this.publishState('ready');
+      }
+    }
+  }
+
+  private renderHistory(): void {
+    const hist = this.history;
+    this.el.history.classList.toggle('hidden', !hist);
+    if (!hist?.page.history) return;
+    setChildren(
+      this.el.history,
+      h('h2', null, 'History'),
+      renderHistory(hist.page.history, hist.sel, {
+        select: (i) => void this.showVersion(i),
+        compare: (j) => void this.showVersion(hist.sel.selected, j),
+      }),
+    );
+    revealSelected(this.el.history);
   }
 
   // -------------------------------------------------------------------------
@@ -592,7 +688,9 @@ export class App {
     }
     if (seq !== this.seq) return;
     this.engineLog = log;
+    this.computedHere = true;
     await this.showResult(result, seq);
+    this.computedHere = false;
   }
 
   private async showResult(result: IDiffResult, seq: number): Promise<void> {
@@ -716,34 +814,43 @@ export class App {
   /** One HTML file with this diff and the viewer, to open anywhere offline. */
   private async saveHtml(): Promise<void> {
     const { base, target, result } = this;
-    if (!base || !target || !result) return;
+    if (!this.history && (!base || !target || !result)) return;
     const button = this.el.saveHtml;
     button.disabled = true;
     button.textContent = 'Saving…';
     try {
       const version = typeof __POLYMERGE_VERSION__ === 'string' ? __POLYMERGE_VERSION__ : 'dev';
+      if (this.history?.page.history) {
+        // The whole history, as it was opened.
+        const file = this.history.page.history.file.split('/').pop() ?? 'model';
+        const html = await standalonePage({ ...this.history.page, view: { up: this.viewer.upAxis } }, `${file} history · polymerge`);
+        saveFile(new Blob([html], { type: 'text/html' }), `${file.replace(/\.[^.]+$/, '')}-history.html`);
+        return;
+      }
       const html = await standalonePage(
         {
           generator: `polymerge ${version}`,
-          base: { name: base.name, bytes: base.bytes, mesh: base.mesh },
-          target: { name: target.name, bytes: target.bytes, mesh: target.mesh },
-          result,
+          models: [
+            { name: base!.name, bytes: base!.bytes, mesh: base!.mesh },
+            { name: target!.name, bytes: target!.bytes, mesh: target!.mesh },
+          ],
+          results: [{ base: 0, target: 1, result: result! }],
           view: { up: this.viewer.upAxis },
         },
-        `${base.name} → ${target.name} · polymerge`,
+        `${base!.name} → ${target!.name} · polymerge`,
       );
       saveFile(new Blob([html], { type: 'text/html' }), `${this.fileStem()}.html`);
     } catch (err) {
       this.fail('Could not save the page', err);
     } finally {
-      button.disabled = !this.result;
+      button.disabled = !this.result && !this.history;
       button.textContent = 'Save as HTML';
     }
   }
 
   private renderSummary(): void {
     this.el.download.disabled = !this.result;
-    this.el.saveHtml.disabled = !this.result;
+    this.el.saveHtml.disabled = !this.result && !this.history;
     if (this.result) setChildren(this.el.summary, renderSummary(this.result));
     else {
       const only = this.base ? { label: 'Base', m: this.base } : this.target ? { label: 'Target', m: this.target } : null;
@@ -925,7 +1032,7 @@ export class App {
       hook.attempts = r.attempts;
       hook.base = r.base;
       hook.target = r.target;
-      if (this.source !== 'embedded') hook.engine = this.engine.mode; // a saved page computed nothing
+      if (this.computedHere) hook.engine = this.engine.mode; // a saved page or history computed nothing
       if (this.engine.lastWindow) hook.diffWindow = this.engine.lastWindow;
       hook.parts = r.parts?.length ?? 0;
       if (r.metrics) hook.metrics = r.metrics;
@@ -937,6 +1044,10 @@ export class App {
     const sel = snapshot().selection;
     if (sel && this.selection && state === 'ready') hook.selection = sel;
     hook.review = this.tools.state();
+    if (this.history?.page.history) {
+      const hv = this.history.page.history;
+      hook.history = { file: hv.file, versions: hv.versions.length, selected: this.history.sel.selected, compareTo: this.history.sel.compareTo, shown: hv.versions[this.history.sel.selected].short };
+    }
     publish(hook);
   }
 

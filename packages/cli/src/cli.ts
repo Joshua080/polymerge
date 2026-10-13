@@ -25,6 +25,7 @@ import { runExport } from './commands/export.js';
 import { gitSetupText, runGitDiff } from './commands/git.js';
 import { runInfo } from './commands/info.js';
 import { runInit } from './commands/init.js';
+import { runLog } from './commands/log.js';
 import { runMeasure } from './commands/measure.js';
 import { runSection } from './commands/section.js';
 import { runGitMerge, runGitResolve, runMerge } from './commands/merge.js';
@@ -95,6 +96,11 @@ See it in the browser
       --web-dist <dir>       Path to a built viewer (default: the one bundled with polymerge)
 
 Git
+  polymerge log <file> [--max <n>] [--json] [--committed] [--view] [-o <page.html>]
+                                             The model's history: what each commit did to it
+                                             (follows renames; includes uncommitted changes);
+                                             --view: step through it in the browser; -o: as
+                                             one offline HTML file
   polymerge init [--global] [--dry-run]      Set git up for polymerge: .gitattributes and drivers
   polymerge git-setup                        Print the git configuration instead
   polymerge git-diff <7 git args>            git external diff driver (diff.<name>.command)
@@ -223,6 +229,37 @@ async function main(args: string[]): Promise<number> {
         quiet: values.quiet,
         verbose: values.verbose,
         version: VERSION,
+      });
+    }
+    case 'log': {
+      const { values, positionals } = parseArgs({
+        args: rest,
+        allowPositionals: true,
+        options: {
+          max: { type: 'string', short: 'n' },
+          json: { type: 'boolean' },
+          committed: { type: 'boolean' },
+          'no-cache': { type: 'boolean' },
+          view: { type: 'boolean' },
+          output: { type: 'string', short: 'o' },
+          port: { type: 'string' },
+          host: { type: 'string' },
+          'no-open': { type: 'boolean' },
+          up: { type: 'string' },
+          palette: { type: 'string' },
+          'web-dist': { type: 'string' },
+        },
+      });
+      requirePositionals('log', positionals, 1);
+      return runLog(positionals[0], {
+        max: values.max,
+        json: values.json,
+        committed: values.committed,
+        noCache: values['no-cache'],
+        version: VERSION,
+        view: values.view,
+        output: values.output,
+        viewer: { port: values.port, host: values.host, open: !values['no-open'], up: values.up, palette: values.palette, webDist: values['web-dist'] },
       });
     }
     case 'info': {

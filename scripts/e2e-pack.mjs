@@ -18,7 +18,7 @@ import { fileURLToPath } from 'node:url';
 import { watchdog } from './watchdog.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const dog = watchdog('e2e-pack', 5 * 60_000);
+const dog = watchdog('e2e-pack', 8 * 60_000);
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'polymerge-pack-'));
 const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
 const env = { ...process.env };
@@ -166,7 +166,18 @@ await writeFile('merged.stl', writeStl(resolved.merged));
   } catch {
     fail('the installed package failed e2e-export');
   }
-  console.log('e2e-pack: PASS — installed from tarballs: --version, diff, STEP (without and with its optional reader), merge, library import, demo, view, export');
+  dog.mark('log');
+  // The installed package reads a model's history from git, and shows it.
+  try {
+    execFileSync(process.execPath, [path.join(root, 'scripts/e2e-log.mjs')], {
+      cwd: root,
+      env: { ...env, POLYMERGE_CLI: cliJs },
+      stdio: 'inherit',
+    });
+  } catch {
+    fail('the installed package failed e2e-log');
+  }
+  console.log('e2e-pack: PASS — installed from tarballs: --version, diff, STEP (without and with its optional reader), merge, library import, demo, view, export, log');
 } finally {
   fs.rmSync(tmp, { recursive: true, force: true });
 }
