@@ -318,7 +318,7 @@ function refitPart(ctx: DiffContext, A: IRigid, pairs: Array<[number, number]>, 
 }
 
 /** Deviation tolerance for rigid part fits: moveEpsilon, widened by float32 storage noise. */
-function fitTolerance(ctx: DiffContext, metric = 0): number {
+export function fitTolerance(ctx: DiffContext, metric = 0): number {
   const b = ctx.targetBounds;
   const maxAbs = Math.max(...b.min.map(Math.abs), ...b.max.map(Math.abs));
   return Math.max(ctx.options.moveEpsilon, 4 * metric, 8 * 2 ** -24 * maxAbs);
@@ -563,7 +563,11 @@ export function recoverPartsSurface(
 // Matched-part analysis (Tiers 1/2)
 // ---------------------------------------------------------------------------------------
 
-export function analyzeMatchedParts(ctx: DiffContext, A: IRigid, b2t: Int32Array, t2b: Int32Array, skip: Set<number>): IPartInternal[] {
+/**
+ * `only`: look at just these base components — pieces re-matched by their structure
+ * (structure.ts), reported as source 'registration' since they would have read as removed + added.
+ */
+export function analyzeMatchedParts(ctx: DiffContext, A: IRigid, b2t: Int32Array, t2b: Int32Array, skip: Set<number>, only?: Set<number>): IPartInternal[] {
   const ccB = ctx.baseComponents;
   const ccT = ctx.targetComponents;
   const lB = linkInfo(ccB, b2t, ccT.id);
@@ -575,7 +579,7 @@ export function analyzeMatchedParts(ctx: DiffContext, A: IRigid, b2t: Int32Array
   const q = new Float64Array(3);
   const out: IPartInternal[] = [];
   for (let c = 0; c < ccB.count; c++) {
-    if (skip.has(c)) continue;
+    if (skip.has(c) || (only && !only.has(c))) continue;
     const d = lB.link[c];
     if (d < 0 || lT.link[d] !== c) continue;
     const vB = componentVertices(ccB, c);
@@ -630,7 +634,7 @@ export function analyzeMatchedParts(ctx: DiffContext, A: IRigid, b2t: Int32Array
     const pts = boxCorners(cornersOf(bp, vB, A));
     if (maxMotion(g, identityRigid(), pts) <= eps) continue;
     out.push({
-      source: 'matched',
+      source: only ? 'registration' : 'matched',
       baseComponent: c,
       targetComponent: d,
       baseVertices: Uint32Array.from(vB),

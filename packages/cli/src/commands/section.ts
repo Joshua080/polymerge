@@ -26,12 +26,9 @@ export function parsePlane(o: SectionOptions, mesh: IMesh): { axis: SectionAxis;
   return { axis, value };
 }
 
-const u = (unit: MetricUnit | undefined) => (x: number) => formatMeasure(x, 1, unit);
-
 /** The loops of a cut, one line each, largest first. */
 export function formatSection(s: ISection, name: string, unit: MetricUnit | undefined, limit = 12): string[] {
   const c = palette();
-  const len = u(unit);
   const out = [`${c.bold(name)}  ${c.dim(`${s.axis} = ${coord(s.value)}`)}`];
   if (s.loops.length === 0) {
     out.push(c.dim('  the plane does not cut the model here'));
@@ -39,22 +36,25 @@ export function formatSection(s: ISection, name: string, unit: MetricUnit | unde
   }
   let outlines = 0;
   let holes = 0;
+  // One unit for the whole listing, chosen by its largest loop (not "21 m" next to "4631 mm").
+  const span = Math.max(...s.loops.map((l) => Math.max(l.max[0] - l.min[0], l.max[1] - l.min[1], l.perimeter / Math.PI)));
+  const largest = Math.max(...s.loops.map((l) => Math.abs(l.area)), Math.abs(s.area));
   for (const l of s.loops.slice(0, limit)) {
     const w = l.max[0] - l.min[0];
     const h = l.max[1] - l.min[1];
     const centre = `(${coord(l.center[{ x: 0, y: 1, z: 2 }[s.uAxis]])}, ${coord(l.center[{ x: 0, y: 1, z: 2 }[s.vAxis]])})`;
-    const shape = l.circleDiameter !== null ? `circle Ø${len(l.circleDiameter)}` : formatSize([w, h], unit);
+    const shape = l.circleDiameter !== null ? `circle Ø${formatMeasure(l.circleDiameter, 1, unit, span)}` : formatSize([w, h], unit, span);
     let label: string;
     if (!l.closed) label = c.modified('open line');
     else if (l.area >= 0) label = `outline ${++outlines}`;
     else label = `hole ${++holes}`;
     out.push(
-      `  ${label.padEnd(10)} ${shape.padEnd(22)} at ${centre.padEnd(18)} perimeter ${len(l.perimeter).padEnd(10)}` +
-        (l.closed ? ` area ${formatMeasure(Math.abs(l.area), 2, unit)}` : ''),
+      `  ${label.padEnd(10)} ${shape.padEnd(22)} at ${centre.padEnd(18)} perimeter ${formatMeasure(l.perimeter, 1, unit, span).padEnd(10)}` +
+        (l.closed ? ` area ${formatMeasure(Math.abs(l.area), 2, unit, largest)}` : ''),
     );
   }
   if (s.loops.length > limit) out.push(c.dim(`  … ${s.loops.length - limit} more loop(s) (--json lists them all)`));
-  out.push(`  ${c.bold('material in the cut')} ${formatMeasure(s.area, 2, unit)}${unit ? '' : c.dim(" (in the file's units)")}`);
+  out.push(`  ${c.bold('material in the cut')} ${formatMeasure(s.area, 2, unit, largest)}${unit ? '' : c.dim(" (in the file's units)")}`);
   return out;
 }
 

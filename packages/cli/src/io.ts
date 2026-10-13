@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { detectFormat, loadMesh, stepInfo, type ILoadOptions, type IMesh, type SourceFormat } from 'polymerge-core';
+import { diskSiblings, inlineGltfResources } from './gltf-resources.js';
 import { stepImporter, stepNotMergeable } from './step.js';
 
 export interface LoadedFile {
@@ -36,10 +37,16 @@ export async function loadModel(bytes: Uint8Array, fileName: string, options: Lo
  * format detection (git hands us temp files whose names may not end in the real extension).
  */
 export async function loadMeshFile(filePath: string, nameHint?: string, options: LoadModelOptions = {}): Promise<LoadedFile> {
-  const bytes = new Uint8Array(await readFile(filePath));
   const fileName = path.basename(nameHint ?? filePath);
+  const bytes = await readModelFile(filePath, fileName);
   const mesh = await loadModel(bytes, fileName, options);
   return { filePath, fileName, bytes, mesh };
+}
+
+/** A model file's bytes; a `.gltf` with its buffers and images (the files beside it) inlined. */
+export async function readModelFile(filePath: string, fileName = path.basename(filePath)): Promise<Uint8Array> {
+  const bytes = new Uint8Array(await readFile(filePath));
+  return path.extname(fileName).toLowerCase() === '.gltf' ? inlineGltfResources(bytes, diskSiblings(filePath)) : bytes;
 }
 
 /**
@@ -51,8 +58,8 @@ export async function loadMeshPair(
   base: { path: string; name?: string },
   target: { path: string; name?: string },
 ): Promise<[LoadedFile, LoadedFile]> {
-  const baseBytes = new Uint8Array(await readFile(base.path));
   const baseName = path.basename(base.name ?? base.path);
+  const baseBytes = await readModelFile(base.path, baseName);
   if (modelFormatOrNull(baseBytes, baseName) !== 'step') {
     return Promise.all([loadMeshFile(base.path, base.name), loadMeshFile(target.path, target.name)]);
   }

@@ -402,7 +402,7 @@ describe('glTF — resources, extensions, errors', () => {
     const json = structuredClone(gltf.json);
     json.buffers[0].uri = 'cube.bin';
     await expect(loadMesh(utf8(JSON.stringify(json)), { fileName: 'ext.gltf' })).rejects.toThrow(
-      /external resources not supported in v1/,
+      /buffer 0 is a separate file, "cube.bin", which was not found beside the .gltf.*export it as .glb/,
     );
   });
 
@@ -414,7 +414,7 @@ describe('glTF — resources, extensions, errors', () => {
         extra: { extensionsUsed: [ext], extensionsRequired: [ext] },
       });
       await expect(loadMesh(glbBytes(gltf), { fileName: 'c.glb' })).rejects.toThrow(
-        new RegExp(`requires ${ext}; compressed geometry is not supported in v1`),
+        new RegExp(`requires ${ext}: compressed geometry is not supported yet. Export it again without compression`),
       );
     }
     const optional = buildGltf({

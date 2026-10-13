@@ -206,7 +206,7 @@ export function prepareGltf(container: GltfContainer, warnings: string[]): Prepa
   // 2. Geometry compression.
   for (const ext of UNSUPPORTED_COMPRESSION) {
     if (required.includes(ext)) {
-      fail(`the file requires ${ext}; compressed geometry is not supported in v1`, format);
+      fail(`the file requires ${ext}: compressed geometry is not supported yet. Export it again without compression (Draco / meshopt off), or convert it with gltf-transform`, format);
     }
     if (!used.includes(ext)) continue;
     let dropped = 0;
@@ -247,7 +247,10 @@ export function prepareGltf(container: GltfContainer, warnings: string[]): Prepa
     } else if (typeof buf.uri === 'string' && buf.uri.startsWith('data:')) {
       data = decodeDataUri(buf.uri, format);
     } else {
-      fail(`buffer ${i} references "${String(buf.uri)}": external resources not supported in v1`, format);
+      fail(
+        `buffer ${i} is a separate file, "${String(buf.uri)}", which was not found beside the .gltf (or is outside its folder). Keep the .gltf with its files, or export it as .glb (one self-contained file)`,
+        format,
+      );
     }
     if (data.length < byteLength) {
       fail(`buffer ${i} is truncated: ${data.length} bytes available, byteLength is ${byteLength}`, format);

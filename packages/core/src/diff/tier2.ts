@@ -62,9 +62,10 @@
  * Tier 3 takes over. Disconnected components are handled naturally: seeds are global.
  */
 import { hasNeighbor, type IAdjacency } from './adjacency.js';
-import { pct, identityAlignment, type DiffContext, type ITierOutcome } from './context.js';
+import { pct, identityAlignment, type DiffContext, type IPartInternal, type ITierOutcome } from './context.js';
 import { identityRigid } from './linalg.js';
-import { recoverPartsTopological } from './parts.js';
+import { analyzeMatchedParts, recoverPartsTopological } from './parts.js';
+import { matchPiecesByStructure } from './structure.js';
 import { PROPAGATION_ADJACENCY_WEIGHT, PROPAGATION_COST_CUTOFF, Propagator } from './propagate.js';
 import { closestPointOnTriangle, type KdTree } from './spatial.js';
 
@@ -180,7 +181,14 @@ export function runTier2(ctx: DiffContext): ITierOutcome {
   // Positional seeds cannot exist inside a part that moved away from where it was; rigid
   // registration of the still-unmatched components re-matches it (parts.ts), so it reads as
   // Moved instead of Removed + Added — and counts towards coverage below.
-  const parts = ctx.options.detectParts ? recoverPartsTopological(ctx, identityRigid(), b2t, t2b) : [];
+  // Structure first: a piece reshaped or moved but not re-meshed keeps its triangles, so it is
+  // matched by them (structure.ts) — and rigid registration only sees what is truly loose.
+  const parts: IPartInternal[] = [];
+  if (ctx.options.detectParts) {
+    const s = matchPiecesByStructure(ctx, b2t, t2b);
+    if (s.pieces > 0) parts.push(...analyzeMatchedParts(ctx, identityRigid(), b2t, t2b, new Set(), s.baseComponents));
+    parts.push(...recoverPartsTopological(ctx, identityRigid(), b2t, t2b));
+  }
   const inPart = new Uint8Array(nT);
   let partMatched = 0;
   for (const p of parts) {
